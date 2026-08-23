@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GASCAR Race Control</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>🏁 GASCAR <span>Race Control</span></h1>
+  <nav>
+    <button class="tabbtn active" data-tab="shipyard">Shipyard</button>
+    <button class="tabbtn" data-tab="cantina">Cantina</button>
+    <button class="tabbtn" data-tab="hangar">Hangar Bay</button>
+    <button class="tabbtn" data-tab="course">Racecourse</button>
+    <button class="tabbtn" data-tab="race">Race</button>
+    <button class="tabbtn" data-tab="reference">Reference</button>
+    <button class="tabbtn" data-tab="instructions">Instructions</button>
+  </nav>
+</header>
+<main id="view"></main>
+<footer>
+  Companion tool for <em>Warp Space: GASCAR</em>. All data stays on this computer (localStorage) — nothing is uploaded anywhere.
+</footer>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

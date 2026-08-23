@@ -1,0 +1,268 @@
+:root {
+  --bg: #0a0e1a;
+  --panel: #131a2b;
+  --panel2: #1a2338;
+  --border: #2a3654;
+  --gold: #f5c518;
+  --gold-dim: #b89416;
+  --text: #e7ecf5;
+  --muted: #8b97b3;
+  --danger: #e0524d;
+  --success: #4caf7d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at top, #101830 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+  padding: 14px 22px;
+  background: linear-gradient(180deg, #0d1424, #0a0e1a);
+  border-bottom: 2px solid var(--gold-dim);
+}
+.topbar h1 { margin: 0; font-size: 1.3rem; color: var(--gold); letter-spacing: 0.5px; }
+.topbar h1 span { color: var(--text); font-weight: 400; font-size: 1rem; }
+nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabbtn {
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+}
+.tabbtn:hover { background: var(--gold); color: #000; border-color: var(--gold); }
+.tabbtn.active { background: var(--gold); color: #1a1300; border-color: var(--gold); font-weight: 600; }
+main { padding: 18px 22px 60px; max-width: 1400px; margin: 0 auto; }
+footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 20px; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 18px; margin-bottom: 16px;
+}
+.card h2 { margin-top: 0; color: var(--gold); font-size: 1.1rem; }
+.card h3 { color: var(--gold); font-size: 1rem; margin: 0 0 10px; }
+.card h4 { color: var(--muted); margin: 12px 0 4px; }
+.subcard {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 12px;
+}
+.shippanel.outleg { opacity: 0.55; }
+
+/* Division tree grouping (Shipyard + Hangar Bay). */
+.divgroup { margin: 4px 0 8px; }
+.divhead {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 7px 8px; border-radius: 6px; user-select: none;
+  background: var(--panel2); border: 1px solid var(--border);
+}
+.divhead:hover { background: rgba(255,255,255,0.05); }
+.divhead b { font-size: 1.02rem; letter-spacing: 0.3px; }
+.divbody { margin: 8px 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); }
+.divbody > .subcard:last-child { margin-bottom: 0; }
+
+/* Crew skill summary in the Cantina card header -- fixed-width cells so the
+   columns line up across crewmen; the highest score is highlighted. */
+.crewskills { margin-left: 16px; display: flex; gap: 8px; align-items: flex-end; }
+.crewskill { display: inline-flex; flex-direction: column; align-items: center; min-width: 62px; line-height: 1.15; }
+.crewskill .lbl { font-size: 0.62rem; color: var(--muted); }
+.crewskill .val { font-weight: 600; font-size: 0.95rem; }
+.crewskill.hi .lbl,
+.crewskill.hi .val { color: var(--gold); }
+/* Total Points shown as one more matching cell, same size as the skills. */
+.crewskill.total .lbl,
+.crewskill.total .val { color: var(--text); }
+
+/* Custom crew-assignment dropdown (Hangar Bay) -- a native <select> can't
+   colour-highlight options, so this hand-rolled listbox shows the same
+   gold-highlighted skill columns as the Cantina header when open. */
+.crewdd { position: relative; display: inline-block; min-width: 150px; text-align: left; }
+.crewdd-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: #0d1526; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: 0.9rem; font-weight: 400; cursor: pointer;
+}
+.crewdd-btn:hover { background: var(--gold); color: #000; border-color: var(--gold); }
+.crewdd-btn:hover .crewdd-caret { color: #000; }
+.crewdd.open .crewdd-btn { border-color: var(--gold); outline: 1px solid var(--gold); }
+.crewdd-caret { color: var(--muted); font-size: 0.7rem; }
+.crewdd-menu {
+  display: none; position: absolute; z-index: 50; left: 0; top: calc(100% + 4px);
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.55); padding: 4px; min-width: max-content;
+  max-height: 340px; overflow-y: auto;
+}
+.crewdd.open .crewdd-menu { display: block; }
+.crewdd-opt {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.crewdd-opt:hover { background: var(--gold); }
+/* On the gold hover highlight, force all text (incl. the gold "best skill" and
+   muted labels) to black so it stays readable. */
+.crewdd-opt:hover .crewdd-name,
+.crewdd-opt:hover .ddskill,
+.crewdd-opt:hover .ddskill.hi { color: #000; }
+.crewdd-opt.chosen { background: rgba(245,197,24,0.12); }
+.crewdd-name { min-width: 130px; font-weight: 600; }
+/* Inline skill labels in the dropdown: "Pil-7" so it's clear which is which;
+   fixed-width cells keep the columns aligned across crewmen, best in gold. */
+.ddskills { display: flex; gap: 14px; }
+.ddskill { min-width: 54px; color: var(--muted); font-size: 0.88rem; }
+.ddskill.hi { color: var(--gold); font-weight: 600; }
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.row.spread { justify-content: space-between; }
+.formrow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.formrow label { min-width: 130px; color: var(--muted); }
+
+input, select, button {
+  background: #0d1526; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: 0.9rem;
+}
+input:focus, select:focus { outline: 1px solid var(--gold); }
+/* Monospace so the nbsp-padded Maneuver columns (name / target / Ds) line up. */
+.monoselect { font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace; }
+.name-input { font-weight: 600; min-width: 160px; }
+
+button { cursor: pointer; background: var(--gold-dim); color: #1a1300; border: none; font-weight: 600; }
+button:hover { background: var(--gold); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); font-weight: 400; }
+button.ghost:hover { border-color: var(--gold); color: var(--gold); }
+button.danger { background: var(--danger); color: white; }
+button.danger:hover { background: #ff6b66; }
+.filebtn { position: relative; overflow: hidden; display: inline-block; }
+.filebtn input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.collapse-btn { width: 2em; padding: 0; flex: 0 0 auto; }
+
+.iconthumb { width: 42px; height: 42px; object-fit: contain; flex: 0 0 auto; position: relative; transition: transform 0.15s ease; }
+.iconthumb:hover { transform: scale(2); z-index: 5; }
+.iconpicker { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.iconpicker .iconbtn {
+  width: 56px; height: 56px; padding: 5px; flex: 0 0 auto; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  background: #0d1526; border: 2px solid var(--border); border-radius: 6px;
+}
+.iconpicker .iconbtn img { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform 0.15s ease; }
+.iconpicker .iconbtn:hover { z-index: 5; }
+.iconpicker .iconbtn:not(.used):hover img { transform: scale(2); }
+.iconpicker .iconbtn.selected { border-color: var(--gold); box-shadow: 0 0 6px rgba(245,197,24,0.5); }
+.iconpicker .iconbtn.used { opacity: 0.25; filter: grayscale(1); cursor: not-allowed; }
+.colorlabel { color: var(--muted); font-size: 0.8rem; margin: 2px 0; width: 100%; }
+
+.tag {
+  display: inline-block; background: #0d1526; border: 1px solid var(--border);
+  border-radius: 20px; padding: 2px 10px; font-size: 0.78rem; color: var(--muted);
+}
+.tag.danger { border-color: var(--danger); color: var(--danger); }
+.tag.success { border-color: var(--success); color: var(--success); }
+.danger-text { color: var(--danger); }
+.muted { color: var(--muted); font-size: 0.85rem; }
+
+table.skilltable th:nth-child(2), table.skilltable th:nth-child(3), table.skilltable th:nth-child(4), table.skilltable th:nth-child(5),
+table.skilltable td:nth-child(2), table.skilltable td:nth-child(3), table.skilltable td:nth-child(4), table.skilltable td:nth-child(5) { text-align: center; }
+table.skilltable input[type=number] { text-align: center; }
+
+table.shiptable th:nth-child(n+2), table.shiptable td:nth-child(n+2) { text-align: center; }
+table.shiptable select { text-align: center; text-align-last: center; }
+
+table.mktable { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.85rem; }
+table.mktable th, table.mktable td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+table.mktable th { background: #0d1526; color: var(--gold); font-weight: 600; }
+
+details { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding: 4px 0; }
+
+.chkline { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem; margin-right: 10px; }
+/* Per-crewman condition checkboxes (Phase I) wrap within the table cell. */
+.condgrid { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.condgrid .chkline { margin-right: 0; }
+/* Per-crewman Resistance blocks (Phase II). */
+.resistrow { padding: 6px 0; }
+.resistrow + .resistrow { border-top: 1px solid var(--border); }
+/* Fixed-column grid so checkbox columns line up regardless of name length. */
+.chkgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 16px; align-items: center; }
+.chkgrid .chkline { margin-right: 0; }
+/* Per-position Racing Maneuver rows in the Declaration modal. */
+.manrow { padding: 8px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.manrow:last-child { border-bottom: none; padding-bottom: 0; }
+.manhead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.manpos { min-width: 84px; flex: 0 0 auto; font-weight: 600; color: var(--gold); }
+.manhead select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+/* Targets sit full-width under the Maneuver row (a light rail marks the indent)
+   so none of the checkboxes get clipped at the modal edge. */
+.mantargets { margin: 6px 0 0; padding-left: 12px; border-left: 2px solid var(--border); }
+.mantargets .chkgrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.mantargets .chkline { white-space: normal; }
+
+/* Table layout, not flex: every row's name/bar/points share one real column
+   each, sized to the widest content in that column -- so every bar starts
+   at the same x position with no truncation, regardless of name length. */
+.board { display: table; width: 100%; border-spacing: 0 8px; }
+.boardrow { display: table-row; }
+.boardname { display: table-cell; vertical-align: middle; white-space: nowrap; padding-right: 12px; font-size: 0.88rem; }
+.boardname-inner { display: flex; align-items: center; gap: 8px; }
+/* Fixed-width icon slot so every ship name starts at the same x, whether or not
+   the ship has an icon and regardless of the icon art's own width. */
+.boardname-inner .thumbslot { flex: 0 0 42px; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; }
+.boardname-inner .boardlabel { white-space: nowrap; }
+.boardtrack { display: table-cell; position: relative; width: 100%; vertical-align: middle; padding-right: 10px; }
+/* Inset the bar + moving icon by half an icon width at each end so the icon,
+   which is centred on its position, never spills left over the ship name (at
+   0%) or off the right end (at 100%). */
+.boardtrack-inner { position: relative; margin: 0 22px; }
+.boardbar { width: 100%; background: #0d1526; border-radius: 5px; height: 8px; overflow: hidden; border: 1px solid var(--border); }
+.boardfill { height: 100%; background: linear-gradient(90deg, var(--gold-dim), var(--gold)); transition: width 1.2s ease-out; }
+.boardfill.dead { background: linear-gradient(90deg, #7a1f1c, var(--danger)); }
+.boardicon {
+  position: absolute; top: 50%; width: 42px; height: 42px; object-fit: contain;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transition: left 1.2s ease-out, transform 0.15s ease; pointer-events: auto; z-index: 2;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9));
+}
+.boardicon:hover { transform: translate(-50%, -50%) rotate(90deg) scale(2); z-index: 5; }
+.boardpts { display: table-cell; vertical-align: middle; min-width: 30px; text-align: right; color: var(--gold); font-weight: 600; white-space: nowrap; }
+
+/* Circular Track standings -- oblong square-tiled track (see RULE_CHANGES.md / APP_CHANGES.md). */
+.circtrack-wrap { display: flex; justify-content: center; margin: 6px 0 16px; }
+.circtrack { width: 100%; max-width: 1020px; height: auto; }
+.circcell { fill: var(--panel2); stroke: var(--border); stroke-width: 1; }
+.circfinish { stroke: var(--gold); stroke-width: 2; stroke-dasharray: 4 3; }
+.circdot { fill: var(--gold); stroke: #111; stroke-width: 1.5; }
+.circracer.dead .circdot, .circracer.dead image { opacity: 0.4; }
+.circracer image, .circracer .circdot { cursor: default; }
+/* Only animates when something updates an EXISTING racer <g>'s transform
+   attribute in place (see App.playRaceReplay()) -- a normal render() rebuilds
+   the whole SVG from scratch, which gives the browser a brand new element
+   with nothing to transition from. Duration matches squareStepDelay in
+   App.playRaceReplay() exactly (a single square-to-square hop, not a whole
+   Leg's move -- see RULE_CHANGES.md/APP_CHANGES.md), so consecutive hops
+   never pause waiting on each other. Half speed of the original cadence
+   (see APP_CHANGES.md). */
+.circracer { transition: transform 0.2s ease-out; }
+
+.winner { border-color: var(--gold); box-shadow: 0 0 20px rgba(245,197,24,0.15); }
+.finallist { font-size: 1.05rem; line-height: 1.9; }
+
+.fumbletext { background: #200f0f; border: 1px solid var(--danger); border-radius: 6px; padding: 8px 12px; font-style: italic; font-size: 0.85rem; }
+.logfumbles { margin: 6px 0 16px; }
+.logfumbles .fumbletext { margin: 6px 0; }
+
+.mkline { margin: 4px 0 10px; font-size: 0.88rem; color: var(--muted); }
+.mkline b { color: var(--gold); }
+
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 20px;
+}
+.modal-box {
+  background: var(--panel); border: 2px solid var(--gold); border-radius: 10px;
+  padding: 20px 22px; max-width: 600px; width: 100%; max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+}
+.modal-box h3 { margin: 0; color: var(--gold); }
