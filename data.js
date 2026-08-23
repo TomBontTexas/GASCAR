@@ -1,4 +1,4 @@
-/* GASCAR Race Control — static game data transcribed from
+/* GASCAR — static game data transcribed from
    "Warp Space: The Hangar Bay — GASCAR".
    All tables live here so app.js stays pure logic. */
 

@@ -1,4 +1,4 @@
-# GASCAR Race Control — App Changes & Bug Fixes
+# GASCAR — App Changes & Bug Fixes
 
 This file tracks changes to the **software** — UI, architecture, workflow
 features, and bug fixes — as opposed to changes to the **game's rules**.
@@ -15,6 +15,28 @@ here.
 Newest entries at the top.
 
 ---
+
+### 2026-08-23 — Added an app version number, starting at 0.02.01
+- **Feature:** a small `v0.02.01` line now shows at the top of the
+  Instructions tab. Tracked in a single `APP_VERSION` constant near the top
+  of `app.js`.
+- **Versioning scheme:** bump the middle number for a change that adds a new
+  feature or features; otherwise bump the last number for a bug fix.
+
+### 2026-08-23 — Phase 0 Declare modal's "Current Leg Pilot Mk" omitted Crowded Field
+- **Bug:** the Declare Intentions modal's Pilot Mk preview (added so a Pilot
+  could see carried-in Advantage/Disadvantage before choosing Acceleration)
+  called `netForPosition(ps, disp, "pilot", 0)` — passing `extra: 0` instead
+  of the ship's `ps.crowdedFieldD`. Phase VI's actual resolution always
+  included Crowded Field correctly; only this earlier preview was wrong, so
+  a Pilot declaring Accel while sharing a square could see a Mk that didn't
+  match what Phase VI would use.
+- **Fix:** pass `ps.crowdedFieldD` as the `extra` term. It's safe to include
+  here (unlike `netLegAcc`/`slipAdvantage`, which stay at 0 until
+  `lockDeclarations()` because they depend on choices made in this same
+  modal) because `crowdedFieldD` is already fully known — set once in
+  `initLegState()` before Phase 0 even starts, from how the previous Leg
+  ended.
 
 ### 2026-08-21 — Fixed `resolveSlipPath()` locking in a suboptimal Slip path (greedy → longest-path DP)
 - **Bug (no rule changed — this is about correctly computing the existing

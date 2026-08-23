@@ -1,4 +1,11 @@
-/* GASCAR Race Control — application logic (vanilla JS, no build step). */
+/* GASCAR — application logic (vanilla JS, no build step).
+   GASCAR = Galactic Association for Spaceship Competitive Astro-Racing,
+   the in-world racing league depicted in the tabletop game Warp Space: GASCAR. */
+
+// App version (see APP_CHANGES.md): bump the middle number for a new feature
+// or features, the last number for a bug fix. Shown at the top of the
+// Instructions tab.
+const APP_VERSION = "0.02.01";
 
 /* ============================== Utilities ============================== */
 let _uidN = 1;
@@ -2441,11 +2448,14 @@ function renderDeclModal(race, pid) {
   const slipMax = ps.slip === "left" ? Math.min(slipMaxLeft, ps.accel) : ps.slip === "right" ? Math.min(slipMaxRight, ps.accel) : 0;
   // Current effective Pilot Mk (see APP_CHANGES.md/user request): shown here so
   // the Pilot can see any Disadvantage/Advantage already carried into this Leg
-  // (e.g. from a prior Leg's Fumble) BEFORE deciding what Acceleration to
-  // declare. Resistance/grants/Maneuvers-received aren't rolled/chosen yet at
-  // Declare time, so netForPosition() only picks up carried Conditions here.
+  // (e.g. from a prior Leg's Fumble, or Crowded Field from how the last Leg
+  // ended) BEFORE deciding what Acceleration to declare. Resistance/grants/
+  // Maneuvers-received aren't rolled/chosen yet at Declare time, and
+  // netLegAcc/slipAdvantage aren't computed until lockDeclarations() (they
+  // depend on the Accel/Slip being chosen in this very modal), so only
+  // carried Conditions plus the already-known crowdedFieldD go in here.
   const disp = computeShipDisplay(ship);
-  const pilotNet = netForPosition(ps, disp, "pilot", 0);
+  const pilotNet = netForPosition(ps, disp, "pilot", ps.crowdedFieldD || 0);
   return `<div class="modal-overlay" onclick="if(event.target===this) App.closeDeclModal()">
     <div class="modal-box">
       <div class="row spread"><h3>${iconThumbImg(ship)} ${esc(ship.name)} — Declare Intentions</h3><button class="ghost" onclick="App.closeDeclModal()">✕</button></div>
@@ -2869,6 +2879,7 @@ function renderLog(race) {
 /* ---------- Reference ---------- */
 function renderInstructions() {
   return `<section class="card"><h2>How to Use This App</h2>
+    <p class="muted" style="margin-top:-6px">v${APP_VERSION}</p>
     <p class="muted">Build things in this order, then run the race. Each tab only shows what's relevant once earlier steps are done — for example, Hangar Bay is empty until you have at least one Ship Class, and Race won't let you start until a Racecourse and its Ships exist.</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>

@@ -1,4 +1,4 @@
-# GASCAR Race Control — House Rule Changes
+# GASCAR — House Rule Changes
 
 This file tracks every place this app's **game rules** deviate from the
 printed *Warp Space: GASCAR* rulebook — new house rules, changed numbers, or
