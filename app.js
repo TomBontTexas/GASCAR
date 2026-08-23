@@ -3701,4 +3701,30 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   render();
+  startUpdateCheck();
 });
+/* New-version banner (see APP_CHANGES.md): re-fetches the deployed app.js
+   (bypassing cache) and compares its APP_VERSION against the one already
+   running in this tab. A stale tab left open across a deploy has no other
+   way to learn a new version exists -- GitHub Pages just keeps serving the
+   old cached copy until something forces a reload. Skipped entirely when
+   run from a local file:// (no server to poll, and cross-origin fetch of a
+   file:// URL throws anyway). */
+function startUpdateCheck() {
+  if (location.protocol === "file:") return;
+  const check = () => {
+    fetch("app.js", { cache: "no-store" }).then(r => r.text()).then(text => {
+      const m = text.match(/const APP_VERSION = "([^"]+)"/);
+      if (m && m[1] !== APP_VERSION) {
+        document.getElementById("updateBannerText").textContent = `A new version (v${m[1]}) is available -- your open tab is still running v${APP_VERSION}.`;
+        document.getElementById("updateBanner").hidden = false;
+        clearInterval(intervalId);
+        document.removeEventListener("visibilitychange", onVisible);
+      }
+    }).catch(() => {}); // offline or blocked -- just skip this check, try again next tick
+  };
+  const onVisible = () => { if (!document.hidden) check(); };
+  const intervalId = setInterval(check, 5 * 60 * 1000); // every 5 minutes
+  document.addEventListener("visibilitychange", onVisible);
+  setTimeout(check, 5000); // first check shortly after load, not competing with initial render
+}

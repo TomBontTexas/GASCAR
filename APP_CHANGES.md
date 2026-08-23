@@ -16,6 +16,21 @@ Newest entries at the top.
 
 ---
 
+### 2026-08-23 — New-version banner for tabs left open across a deploy
+- **Feature:** a gold banner now appears at the top of the page ("A new
+  version (vX.Y.Z) is available...") with a Refresh Now button, if this
+  browser tab is still running an older `APP_VERSION` than what's currently
+  deployed. Without this, a tab left open across a GitHub Pages deploy had
+  no way to learn a newer version existed short of a manual hard refresh.
+- **How it works:** `startUpdateCheck()` (app.js) re-fetches the deployed
+  `app.js` itself with `cache: "no-store"` (bypassing the browser/CDN
+  cache), regexes out its `APP_VERSION`, and compares it to the version
+  already running. First check 5 seconds after load, then every 5 minutes,
+  plus once whenever the tab regains focus (`visibilitychange`) — covers a
+  tab left backgrounded for a long stretch without waiting for the next
+  timer tick. Skipped entirely under `file://` (no server to poll against).
+  Network errors are swallowed silently and just retried next tick.
+
 ### 2026-08-23 — Added an app version number, starting at 0.02.01
 - **Feature:** a small `v0.02.01` line now shows at the top of the
   Instructions tab. Tracked in a single `APP_VERSION` constant near the top
