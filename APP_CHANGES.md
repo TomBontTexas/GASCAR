@@ -16,6 +16,35 @@ Newest entries at the top.
 
 ---
 
+### 2026-08-23 — v0.02.04 — Made the new-version banner check work under local file://, too
+- **Bug:** `startUpdateCheck()` used `fetch("app.js")` to re-check for a
+  newer deploy, but `fetch()` is blocked for local `file://` pages (Chrome
+  treats it as a cross-origin request and refuses it), so the check silently
+  never ran when testing against the local copy — needed for verifying a fix
+  before pushing.
+- **Fix:** split the version number out into its own tiny `version.js`
+  (`var LATEST_APP_VERSION = "..."`, not `const`, so it can be safely
+  re-injected) and switched the check from `fetch()` to dynamically creating
+  a `<script src="version.js?<cachebust>">` tag — the same loading mechanism
+  index.html already uses for app.js itself, which isn't subject to the
+  file:// CORS restriction. `app.js`'s `APP_VERSION` constant now reads
+  `LATEST_APP_VERSION` from that file instead of hardcoding its own copy, so
+  there's still only one place to bump the version. Bonus: the live site now
+  re-checks a one-line file instead of re-downloading all of app.js.
+
+### 2026-08-23 — v0.02.02 — Fixed the new-version banner showing permanently, even locally
+- **Bug (supersedes the "New-version banner" entry below — that feature
+  never actually worked as shipped):** `.update-banner { display: flex; ... }`
+  in style.css had no `[hidden]` override. An author stylesheet rule beats
+  the browser's own default `[hidden] { display: none }` rule whenever both
+  apply to the same element, so the `hidden` attribute `startUpdateCheck()`
+  toggles in app.js was silently ineffective — the banner rendered
+  unconditionally from page load, even on the local `file://` copy where the
+  version-check code returns immediately and never runs at all.
+- **Fix:** added `.update-banner[hidden] { display: none; }` before the
+  unconditional rule -- two selectors beats one, so it wins regardless of
+  source order, and `hidden` now actually hides the element again.
+
 ### 2026-08-23 — New-version banner for tabs left open across a deploy
 - **Feature:** a gold banner now appears at the top of the page ("A new
   version (vX.Y.Z) is available...") with a Refresh Now button, if this

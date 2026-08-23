@@ -18,6 +18,7 @@ body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   min-height: 100vh;
 }
+.update-banner[hidden] { display: none; }
 .update-banner {
   position: sticky; top: 0; z-index: 100;
   display: flex; align-items: center; justify-content: center; gap: 14px;

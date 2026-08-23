@@ -4,8 +4,9 @@
 
 // App version (see APP_CHANGES.md): bump the middle number for a new feature
 // or features, the last number for a bug fix. Shown at the top of the
-// Instructions tab.
-const APP_VERSION = "0.02.01";
+// Instructions tab. Source of truth lives in version.js (loaded before this
+// file in index.html) so startUpdateCheck() can re-check it cheaply.
+const APP_VERSION = LATEST_APP_VERSION;
 
 /* ============================== Utilities ============================== */
 let _uidN = 1;
@@ -3703,25 +3704,30 @@ document.addEventListener("DOMContentLoaded", () => {
   render();
   startUpdateCheck();
 });
-/* New-version banner (see APP_CHANGES.md): re-fetches the deployed app.js
-   (bypassing cache) and compares its APP_VERSION against the one already
-   running in this tab. A stale tab left open across a deploy has no other
-   way to learn a new version exists -- GitHub Pages just keeps serving the
-   old cached copy until something forces a reload. Skipped entirely when
-   run from a local file:// (no server to poll, and cross-origin fetch of a
-   file:// URL throws anyway). */
+/* New-version banner (see APP_CHANGES.md): re-loads version.js (a fresh
+   <script> tag, not fetch()) and compares its LATEST_APP_VERSION against
+   this tab's own APP_VERSION. A stale tab left open across a deploy has no
+   other way to learn a new version exists -- GitHub Pages just keeps
+   serving the old cached copy until something forces a reload. A <script>
+   tag (not fetch, which is blocked cross-origin under file://) is what lets
+   this also work when testing against the local file:// copy -- the same
+   mechanism index.html already uses to load app.js itself. The cache-busting
+   query string forces a real re-read every time either way. */
 function startUpdateCheck() {
-  if (location.protocol === "file:") return;
   const check = () => {
-    fetch("app.js", { cache: "no-store" }).then(r => r.text()).then(text => {
-      const m = text.match(/const APP_VERSION = "([^"]+)"/);
-      if (m && m[1] !== APP_VERSION) {
-        document.getElementById("updateBannerText").textContent = `A new version (v${m[1]}) is available -- your open tab is still running v${APP_VERSION}.`;
+    const s = document.createElement("script");
+    s.src = "version.js?" + Date.now();
+    s.onload = () => {
+      if (typeof LATEST_APP_VERSION !== "undefined" && LATEST_APP_VERSION !== APP_VERSION) {
+        document.getElementById("updateBannerText").textContent = `A new version (v${LATEST_APP_VERSION}) is available -- your open tab is still running v${APP_VERSION}.`;
         document.getElementById("updateBanner").hidden = false;
         clearInterval(intervalId);
         document.removeEventListener("visibilitychange", onVisible);
       }
-    }).catch(() => {}); // offline or blocked -- just skip this check, try again next tick
+      s.remove();
+    };
+    s.onerror = () => s.remove(); // offline or blocked -- just skip this check, try again next tick
+    document.head.appendChild(s);
   };
   const onVisible = () => { if (!document.hidden) check(); };
   const intervalId = setInterval(check, 5 * 60 * 1000); // every 5 minutes
