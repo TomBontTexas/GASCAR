@@ -16,6 +16,34 @@ Newest entries at the top.
 
 ---
 
+### 2026-08-23 — Instructions tab updated for this session's rule/feature changes
+- **Fix/update:** the Circular Track paragraph had fallen behind several
+  house rules added this session — it still said flat "1 Level of
+  Disadvantage" for Crowded Field (now scales per ship sharing the square),
+  used the stale term "Leg Finishing Score" (the actual UI term is "Leg
+  Ranking Score"), and never mentioned the Pilot Fail/Fumble Movement-halving
+  or the Slingshot bonus Movement rule at all. Rewrote that paragraph to
+  cover all of it, and added a line under "Race — run it" documenting the
+  "Show Last Leg"/"Show Entire Race" replay and its path-trail dots (also
+  new this session, never previously mentioned in-app). Also dropped a
+  leftover "(see RULE_CHANGES.md)" citation from the Circular Track
+  paragraph — the Instructions tab is user-facing; pointers to the dev
+  changelog files don't belong there.
+
+### 2026-08-23 — Race replay path trail: dot at square center instead of outlined square
+- **Feature:** on the Circular Track's "Show Last Leg"/"Show Entire Race"
+  replay, each ship's path trail now drops a small colored dot at the center
+  of every square it passes through, instead of recoloring that square's
+  whole outline. Reads more like a breadcrumb trail and less like it's
+  flagging/selecting the square itself.
+- **How:** `paintReplayTrailCell()` (recolored a `.circcell` polygon's
+  stroke) replaced with `paintReplayTrailDot()`, which computes the square's
+  center via the same `squarePosToQ()`/`stadiumPoint()` math
+  `circRacerTransform()` already uses to place the ship icon itself, and
+  appends an SVG `<circle>` there instead. `REPLAY_TRAIL_CELLS` ->
+  `REPLAY_TRAIL_DOTS`; clearing on click now just removes the dot elements
+  rather than resetting inline stroke styles.
+
 ### 2026-08-23 — v0.02.04 — Made the new-version banner check work under local file://, too
 - **Bug:** `startUpdateCheck()` used `fetch("app.js")` to re-check for a
   newer deploy, but `fetch()` is blocked for local `file://` pages (Chrome

@@ -2894,7 +2894,7 @@ function renderInstructions() {
 
     <h3>4. Racecourse — design a race</h3>
     <p>Set the course's Division (which Ships are eligible to enter) and pick a Track. <b>Straight — Legs</b> also asks for a Type — Drag Race is always 1 Leg; Short, Medium, and Long roll dice (2d5 / 2d10 / 2d20) to determine how many Legs the race has. Generate or hand-edit each Leg's Tier and TN; a course feature/modifier can nudge the TN up or down from the Tier-based baseline.</p>
-    <p><b>Circular — Distance Tracking</b> is an alternate way to run the race (see RULE_CHANGES.md): the course has 6 lanes, each 4 squares longer per lap than the one inside it (inner lane defaults to 50 squares), and you set how many laps finish the race. Each Leg, a ship moves squares equal to its Leg Finishing Score, wrapping around its lane; the race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip squares are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per square slipped outward or costs −1 Disadvantage per square slipped inward. Ships can only Slip into a square that shares a corner or partial side with their current one. If two or more ships end a Leg sharing the same square (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage.</p>
+    <p><b>Circular — Distance Tracking</b> is an alternate way to run the race: the course has 6 lanes, each 4 squares longer per lap than the one inside it (inner lane defaults to 50 squares), and you set how many laps finish the race. Each Leg, a Hero moves squares equal to their own <b>Leg Ranking Score</b> (Speed Bonus, +1 per Critical Success Level, -1 per Fumble Level) — but a <b>Failed or Fumbled Pilot Task Check halves that Leg's Movement, rounded up</b>, applied before Slip is worked out (stacks with, doesn't replace, the usual -1/level Fumble hit to the Leg Ranking Score itself). NPCs move off the Base Leg Result (the Heroes' average Speed Bonus alone) instead and are never halved. The race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip squares are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble/halving that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per square slipped outward or costs −1 Disadvantage per square slipped inward. An inward Slip that touches a curve <b>also</b> grants <b>+1 bonus Movement per square actually Slipped</b> (Slingshot), on top of ordinary movement, pure free speed for cutting the inside line — this only fires for a Slip actually declared and executed that Leg, not just for sitting in the inside lane. Ships can only Slip into a square that shares a corner or partial side with their current one. If two or more ships end a Leg sharing the same square (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage per ship sharing that square (2 ships sharing costs 2 D each, 3 ships costs 3 D each, and so on).</p>
 
     <h3>5. Race — run it</h3>
     <p>Race Setup filters selectable Ships to the chosen course's Division, and you can add NPC racers alongside your Heroes. Each Leg then walks through, in order:</p>
@@ -2906,6 +2906,7 @@ function renderInstructions() {
       <li><b>Pilot</b> — rolls last. The Pilot's TN check (Score + accumulated Advantage/Disadvantage) determines pass/fail and Critical/Fumble, but who actually <i>wins</i> the Leg is decided separately: Speed Bonus (= declared Acceleration) plus 1 per Critical Success level, minus 1 per Fumble level.</li>
       <li><b>NPCs</b> auto-roll off the Base Leg Result once every Hero has finished. <b>Standings</b> then shows finishing order for the Leg; a Ship reduced to 0 HP is marked OOC (Out of Commission) and stays frozen at its crash position for the rest of the race.</li>
     </ol>
+    <p>On a Circular Track, <b>Show Last Leg</b>/<b>Show Entire Race</b> (above the Standings track) replay each Ship's movement at half speed, dropping a small colored dot at the center of every square it passes through so its path stays visible on the track. Click anywhere to clear the trail.</p>
 
     <p class="muted">The <b>Reference</b> tab has Division stat tables, the full Racing Maneuvers list, NPC Performance, both Fumble Charts, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
   </section>`;
@@ -2956,32 +2957,39 @@ function renderReference() {
 }
 
 // Replay path trail (see APP_CHANGES.md): as App.playRaceReplay() steps a
-// ship through a Leg, each square it passes through gets its .circcell
-// outline recolored to a per-ship color from this palette (cycling by
+// ship through a Leg, a dot is dropped at the center of each square it
+// passes through, in a per-ship color from this palette (cycling by
 // participant index, so it stays stable across different Legs/replays for
 // the same ship). Colors chosen to read clearly against the dark track
 // background (--panel2/--border in style.css) and stay distinct from the
 // gold used elsewhere for the finish line/UI accents.
 const REPLAY_TRAIL_COLORS = ["#ff5a5a", "#5ad1ff", "#7dff5a", "#ffb84d", "#c77dff", "#ff5ac7", "#5affea", "#ffe45a"];
 function replayTrailColorFor(participantIdx) { return REPLAY_TRAIL_COLORS[participantIdx % REPLAY_TRAIL_COLORS.length]; }
-// Cells colored by the CURRENTLY-running (or most recently finished) replay,
+// Dots dropped by the CURRENTLY-running (or most recently finished) replay,
 // so a later click anywhere on the page can clear them. A normal render()
 // rebuilds the whole circtrack SVG from scratch anyway (see
-// renderCircularTrackSvg()'s own comment), which already drops any inline
-// stroke color along with the old DOM nodes -- this array only needs to
-// handle the case where the SAME SVG is still on screen and the user clicks
-// to explicitly clear the trail without triggering a re-render.
-let REPLAY_TRAIL_CELLS = [];
-function paintReplayTrailCell(cellId, color) {
-  const el = document.getElementById(cellId);
-  if (!el) return;
-  el.style.stroke = color;
-  el.style.strokeWidth = "3";
-  REPLAY_TRAIL_CELLS.push(el);
+// renderCircularTrackSvg()'s own comment), which already drops these dots
+// along with the old DOM nodes -- this array only needs to handle the case
+// where the SAME SVG is still on screen and the user clicks to explicitly
+// clear the trail without triggering a re-render.
+let REPLAY_TRAIL_DOTS = [];
+function paintReplayTrailDot(geom, laneIdx0, squarePos, color) {
+  const svg = document.querySelector(".circtrack");
+  if (!svg) return;
+  const Q = squarePosToQ(geom, laneIdx0, squarePos);
+  const { x, y } = stadiumPoint(geom.cx, geom.cy, geom.radii[laneIdx0], Q);
+  const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  dot.setAttribute("cx", x.toFixed(1));
+  dot.setAttribute("cy", y.toFixed(1));
+  dot.setAttribute("r", (geom.rowGap * 0.16).toFixed(1));
+  dot.setAttribute("class", "replaytraildot");
+  dot.style.fill = color;
+  svg.appendChild(dot);
+  REPLAY_TRAIL_DOTS.push(dot);
 }
 function clearReplayTrail() {
-  REPLAY_TRAIL_CELLS.forEach(el => { el.style.stroke = ""; el.style.strokeWidth = ""; });
-  REPLAY_TRAIL_CELLS = [];
+  REPLAY_TRAIL_DOTS.forEach(el => el.remove());
+  REPLAY_TRAIL_DOTS = [];
 }
 let replayTrailClickListenerBound = false;
 function ensureReplayTrailClickListener() {
@@ -3451,10 +3459,11 @@ const App = {
           const m = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
           const prevRotDeg = m ? parseFloat(m[1]) : null;
           g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
-          // Path trail (see APP_CHANGES.md): outline the square this ship
-          // just moved into in its own color, so each racer's path through
-          // the Leg stays visible on the track. Cleared by clicking anywhere.
-          paintReplayTrailCell(`circcell-${(point.lane || 1) - 1}-${point.squarePos || 0}`, replayTrailColorFor(i));
+          // Path trail (see APP_CHANGES.md): drop a dot at the center of the
+          // square this ship just moved into, in its own color, so each
+          // racer's path through the Leg stays visible on the track. Cleared
+          // by clicking anywhere.
+          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.squarePos || 0, replayTrailColorFor(i));
         });
         sub += 1;
         if (sub < maxSteps) setTimeout(tick, squareStepDelay);

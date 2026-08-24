@@ -243,6 +243,7 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .circtrack-wrap { display: flex; justify-content: center; margin: 6px 0 16px; }
 .circtrack { width: 100%; max-width: 1020px; height: auto; }
 .circcell { fill: var(--panel2); stroke: var(--border); stroke-width: 1; }
+.replaytraildot { pointer-events: none; }
 .circfinish { stroke: var(--gold); stroke-width: 2; stroke-dasharray: 4 3; }
 .circdot { fill: var(--gold); stroke: #111; stroke-width: 1.5; }
 .circracer.dead .circdot, .circracer.dead image { opacity: 0.4; }
