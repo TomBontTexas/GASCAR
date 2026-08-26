@@ -2,9 +2,8 @@
 
 This file tracks changes to the **software** — UI, architecture, workflow
 features, and bug fixes — as opposed to changes to the **game's rules**.
-Game-rule deviations from the printed *Warp Space: GASCAR* rulebook (new
-house rules, changed numbers, automation of a book rule) belong in
-`RULE_CHANGES.md`, not here.
+Changes to *Warp Space: GASCAR*'s rules (revised numbers, new mechanics,
+automation of a rule) belong in `RULE_CHANGES.md`, not here.
 
 The test: does this entry change something a player or Racemaster needs to
 know to run/play the race correctly? If yes, it belongs in `RULE_CHANGES.md`
@@ -16,9 +15,169 @@ Newest entries at the top.
 
 ---
 
+### 2026-08-25 — Fixed three more hex Slip bugs: wrong distance metric, a wrap-seam exploit, wrong scoring through curves
+- **Bug #1, found via a user-annotated screenshot (numbered 1-7 showing the
+  ship should have ended much farther along than it did):** the previous
+  day's fix (below) scored Slip candidates via `hexLoopQ()`, a fraction of
+  each lane's own total hex count. At most positions along a straight, a
+  Slip's landing hex in the next lane has TWO valid choices — the
+  structurally-same hex, or the one just past it — and the second carries a
+  real extra hex of forward progress. But going to a LONGER lane makes that
+  fraction slightly SMALLER even for the "no progress" choice (same
+  numerator, bigger denominator), and the modular wraparound needed to
+  handle genuine lap completions misread that tiny decrease as "advanced
+  almost a full lap" — an artifact worth close to 1.0, dwarfing the
+  genuinely-better candidate's small real advance. The DP, maximizing that
+  broken score, picked the do-nothing candidate every time. Traced and
+  confirmed directly against the user's own JSON export (movement=7,
+  slipHexes=5): the fix now reaches hexPos 7, exactly matching the user's
+  hand-numbered correct path.
+- **Fix for #1:** replaced `hexLoopQ()`/`hexQAdvance()` with
+  `hexStepAdvance()` — scores each atomic step directly (forward = always
+  +1; a Slip step = the real hex-index delta between the hex it leaves and
+  the hex it lands on) instead of subtracting two lane-relative fractions.
+  No per-lane normalization needed; it's a direct hex-adjacency fact, not a
+  cross-lane comparison. (This specific "raw index delta" scoring choice
+  turned out to have its own bug once a Leg's Slip crossed a curve — see
+  Bug #3 below, found the same day.)
+- **Bug #2, found while verifying #1's fix:** with the new metric, the DP
+  started reporting `lapsGained: 5` from a single 7-hex Leg — impossible
+  (a lap is 60-90 hexes). Root cause: the ring closing back on itself makes
+  a hex right at the START of one lane's walk also true-hex-adjacent to a
+  hex right at the END of the neighboring lane's ring (confirmed directly —
+  both are exactly one hex-width apart in real pixel coordinates). That's
+  genuine (q,r) adjacency, but not "the same real position one lane over" —
+  taking it let the DP chain through several lanes' own wrap points,
+  collecting a huge fake score for barely moving at all.
+- **Fix for #2:** `circTrackGeometry()`'s `slipNeighbors` construction now
+  excludes any candidate whose structural leg-position (completed legs +
+  fraction through the current leg — computed once per hex, not used for
+  scoring) differs from the source hex's by more than 1.5. A real corner
+  candidate never drifts by more than a fraction of 1; the wrap-seam
+  artifact drifts by nearly a full 6-leg lap, so the threshold cleanly
+  separates them without touching any of the proven ring geometry.
+- **Bug #3, found via a user-flagged race where a heavy INWARD Slip through
+  a curve landed far short of a demonstrably better path the user worked
+  out by hand (hugging the inside line through the curve, gaining ground
+  exiting it):** `hexStepAdvance()`'s raw hex-index delta (Fix for #1,
+  above) is correct on the straights, where the two lanes' indices track
+  closely (deltas of 0/1) — but wrong on the curves. A curve leg's length
+  scales with the lane's own ring level directly (`k`, not `k+straightLen`
+  the way a straight does), so the exact same real structural position can
+  be several raw index numbers apart between adjacent lanes partway
+  through a curve. Confirmed directly: lane 6 hexPos 68's only real
+  neighbor in lane 5 is hexPos 64 — a structurally-neutral lane change
+  (`hexLegOffset` identical on both ends, 4.0000 = 4.0000) that the raw
+  index math nonetheless scored as **−4**, a fake heavy penalty pushing the
+  DP away from exactly the inside-line move that should have been free (or
+  better) — the opposite of the real Slingshot-style advantage of hugging
+  a turn's inside line.
+- **Fix for #3:** `hexStepAdvance()` now scores every step — forward and
+  diagonal alike — as the change in `hexLegOffset()` (completed legs +
+  fraction through the current leg, the same structural measure already
+  used to filter `slipNeighbors` for Bug #2) instead of a flat +1 for
+  forward and a raw index delta for diagonal. `resolveSlipPath()`'s forward
+  step now scores against the *unwrapped* `hexPos + 1` rather than the
+  wrapped result of `stepForward()`, so a lap-completing step reads as a
+  clean +1 full lap instead of a huge fake regression back to hexPos 0.
+  Re-verified against the user's own JSON export (movement=19 — a 14 base
+  + 5 Slingshot bonus, inward Slip 5, through a full curve): the fix now
+  lands exactly 2 hexes further than before, matching the user's own count
+  ("moved an extra 2 hexes with 19 MP") — confirmed the true optimum via
+  brute force, not just a different answer.
+- All three fixes independently re-verified against the 28-scenario
+  exhaustive brute-force proof (`test_brute_force_dp.html`) and the full
+  existing hex test suite (integration, finish-leg, cosmetic, adjacency,
+  migration, and the real exported-race reproduction) — all still pass.
+
+### 2026-08-24 — Fixed hex Slip resolution: reinstated the longest-path DP
+- **Bug, found via real user testing (a "Show Last Leg" screenshot showing a
+  Slip that clearly could have covered more ground):** the initial hex
+  conversion shipped a "Slip hexes happen first, then forward" fixed rule,
+  reasoning that since every hex is the same real size, no interleaving
+  could cover more distance than another. That reasoning has a hole: step
+  LENGTH is uniform, but step DIRECTION depends on which lane/ring you're
+  currently on, so different interleavings of forward-vs-diagonal steps
+  land on genuinely different FINAL hexes — some further along the track
+  than others. Verified directly against the reported race's actual data:
+  every ship's Leg landed exactly on its recorded position either way (the
+  fixed-order rule was internally consistent, just not optimal), confirming
+  this was a real missed-optimization, not a corrupted-path bug.
+- **A dead end hit while fixing it, reverted:** tried changing
+  `traceLaneRing()`'s straightaway legs from `k+straightLen` (`k` = that
+  lane's own ring level) to a plain constant `straightLen`, reasoning it
+  would make cross-lane comparison trivial and match an intended "same
+  straight length for every lane" design. This broke ring nesting — hex-ring
+  corners aren't at radius-independent offsets the way a circle's are, so a
+  fixed-length straight leg starting from a k-dependent corner drifted out
+  of alignment with the next lane's ring. Caught by a "no hex shared between
+  two lanes" test before shipping; reverted back to `k+straightLen`. Lane
+  growth stays +6 hexes/lap, as it always was.
+- **Fix:** `resolveSlipPath()` is a longest-path DP again (same structure as
+  the original square-grid one, and the same DP guarantee), comparing
+  candidates by real progress instead of a fixed order. (The specific
+  distance metric shipped this day — `hexLoopQ()`, a fraction of each
+  lane's own total hex count — turned out to have its own bug, caught the
+  next day and replaced; see the 2026-08-25 entry above.) Proven optimal
+  against a 28-scenario exhaustive brute-force search
+  (`test_brute_force_dp.html`), not just spot-checked. See RULE_CHANGES.md
+  for the rule-level writeup.
+- `buildCircularLegWaypoints()` now also snaps just the FINAL waypoint of a
+  replayed Leg to its authoritative recorded position if the algorithm has
+  changed since that Leg was recorded (as just happened) — keeps old Legs'
+  replay animation from ending somewhere other than the ship's real
+  position, even though the lead-up path may not be a perfect re-derivation.
+
+### 2026-08-24 — Hex track cosmetic tweaks: starting-line placement, curve shading
+- **Starting line:** each lane's starting-line tick is now drawn as that
+  hex's own FRONT edge — the real spine facing the direction of travel
+  (`hexFrontEdge()`, using a fixed corner-pair lookup per `HEX_DIRS`
+  direction) — instead of a line cut through the hex's center.
+- **Curve shading:** curve (end-cap) hexes now render in a darker grey
+  (`.circcell.curve` in style.css) so the two curved ends read as visually
+  distinct from the straightaways at a glance. Straight hexes are unchanged.
+  Also brightened the curve hexes' own grid-line stroke (`#6b7080`, up from
+  the shared `--border`) — the default border color was too close in
+  brightness to the new darker fill to actually see individual hexes.
+
+### 2026-08-24 — Circular Track rendering engine rebuilt on a real hex grid
+- **Engine rewrite (see RULE_CHANGES.md for the rule-level details):** the
+  entire square/trapezoid rendering and movement engine was replaced with a
+  genuine axial hex grid (`traceLaneRing()` in `app.js`), fixing the
+  lane-to-lane misalignment that sank an earlier hex attempt. The game's
+  rules haven't changed in substance — Slip, Slingshot, Crowded Field,
+  Maneuver range, the staggered start, and the Fail/Fumble Movement-halving
+  all still work — only the underlying grid and a few field names
+  (`squarePos`→`hexPos`, `slipSquares`→`slipHexes`, `innerSquares`→
+  `innerHexes`) changed. `resolveSlipPath()`'s longest-path DP (added
+  2026-08-20 for the square grid) still runs, now comparing candidates via
+  a hex-native loop-position metric instead of continuous real-arc-length —
+  see RULE_CHANGES.md's entry for why a uniform hex grid still needs it
+  (an earlier version of this entry incorrectly claimed it didn't; caught
+  and fixed the same day).
+- **Breaking change:** any existing Circular Track course, and any race in
+  progress on one, is cleared on first load after this update (old
+  square-grid positions don't map onto hex positions). Straight/Legs
+  courses and races are untouched. One-time migration, see
+  `migrateState()`'s `_circularTrackHexed` flag.
+- Verified with ~80 headless-Chrome tests covering hex-ring construction (no
+  gaps, no overlaps, correct orientation), Slip/Slingshot/Crowded Field/
+  Fail-Fumble-halving behavior driven through the real `finishLeg()`, the
+  clean-break migration (old circular races cleared, straight races and
+  fresh hex races both left untouched), and a full click-through of every
+  tab.
+
+### 2026-08-23 — Added an Introduction tab
+- **Feature:** a new first tab, "Introduction," holding the book's front
+  matter/flavor text and lore (GASCAR's history, the Divisions/Circuits
+  structure, Flash Division skimmer racing, Sponsors, and the Combat rule)
+  — pure world-building content, no interactive elements. `renderIntroduction()`
+  in app.js; new `.flavortext`/`.introcaption` styles in style.css for the
+  dramatic opening lines and the image-caption-style aside.
+
 ### 2026-08-23 — Instructions tab updated for this session's rule/feature changes
 - **Fix/update:** the Circular Track paragraph had fallen behind several
-  house rules added this session — it still said flat "1 Level of
+  rule changes made this session — it still said flat "1 Level of
   Disadvantage" for Crowded Field (now scales per ship sharing the square),
   used the stale term "Leg Finishing Score" (the actual UI term is "Leg
   Ranking Score"), and never mentioned the Pilot Fail/Fumble Movement-halving
@@ -167,7 +326,7 @@ Newest entries at the top.
 
 ### 2026-08-21 — Phase VI Pilot card's Leg Ranking Score now also previews the Slingshot bonus
 - Same treatment as the halving fix below, extended to the new Slingshot
-  house rule (see RULE_CHANGES.md): when the declared Slip is inward and
+  rule (see RULE_CHANGES.md): when the declared Slip is inward and
   touches a curve, the card chains a preview onto the same Leg Ranking
   Score line — e.g. "Speed Bonus 14 = **14 ÷2 (Failed, rounded up) = 7 +
   Slingshot 3 (3 squares Slipped inward through the curve) = 10**" — so

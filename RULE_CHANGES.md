@@ -1,10 +1,10 @@
-# GASCAR — House Rule Changes
+# GASCAR — Rule Changes
 
-This file tracks every place this app's **game rules** deviate from the
-printed *Warp Space: GASCAR* rulebook — new house rules, changed numbers, or
-automation of a book rule the app resolves for you. If a Racemaster ran this
-race by hand instead of using the app, this is the list of things they'd
-need to do differently from the printed text.
+This file tracks every place this app's **game rules** have changed from an
+earlier printed or documented version of *Warp Space: GASCAR* — revised
+numbers, new mechanics, or automation of a rule the app resolves for you.
+If a Racemaster ran this race by hand from an older printed copy instead of
+using the app, this is the list of things they'd need to do differently.
 
 This file does **not** cover app features, UI, architecture, or bug fixes —
 those belong in `APP_CHANGES.md`. The test: does this entry change something
@@ -12,10 +12,87 @@ a player or Racemaster needs to know to run/play the race correctly (dice,
 TNs, costs, requirements, who does what when)? If yes, it's here. If it's
 about how the software is built, organized, or displays things, it's not.
 
-Newest entries at the top. Each entry notes the book's original value (where
-applicable), the house-rule value in use, and where it lives in the code.
+Newest entries at the top. Each entry notes the earlier value (where
+applicable), the current value in use, and where it lives in the code.
 
 ---
+
+### 2026-08-24 — Circular Track rebuilt on a real hex grid (supersedes the entire square-grid system below, from "each square of Slip..." (2026-08-19) through "10 extra squares added..." (2026-08-19))
+- **Why:** an earlier attempt at a hex-based track (evidence still visible as
+  the `hexPos`/`innerHexes` field names this migration reintroduces) had
+  lane-to-lane edges that didn't line up and was abandoned in favor of
+  squares. Tracing the actual cause: every curve cell in the square system
+  was built by independently, evenly dividing each lane's own arc into
+  equal-angle slices — a shape flexible enough to seamlessly tile a circle
+  regardless of a neighboring lane's own cell count. A true regular hexagon
+  can't flex that way (fixed 60°/120° angles, equal sides), so no spacing
+  number could have fixed it — the technique itself was incompatible with
+  real hexagons. The fix: a genuine axial hex grid, built with discrete
+  hex-ring math instead of continuous angle division, where adjacent lanes
+  nest perfectly by mathematical construction, not by approximation.
+- **Track shape:** 6 lanes, each a hex ring at ring-level `innerRing+laneIndex`
+  around a shared center, walked leg-by-leg (2 elongated "straight" legs plus
+  4 curved end-cap legs per ring, the standard 6-leg hex-ring walk) — each
+  lane's straight-leg length is itself ring-level-dependent
+  (`ringLevel + straightLen`, not a fixed constant shared by every lane),
+  which turned out to be required: an earlier version of this fix tried a
+  truly fixed straightaway length shared by every lane, and it broke lane
+  nesting (adjacent lanes' hex rings no longer lined up edge-to-edge), so it
+  was reverted. Every lane gains **exactly 6 hexes per lap** over the one
+  inside it — an exact property of hex-ring math (the +1 ring-level step
+  applied across all 6 legs of the ring), the same +6 the old square system
+  used. The course's configurable "inner lane size" (now `innerHexes`,
+  replacing `innerSquares`) is a target the hex-ring parameters are derived
+  from, not an exact count.
+- **Slip still maximizes real ground covered — the distance metric changed,
+  not the goal:** on the old square grid, curve/straight/lane cells were all
+  different real sizes, so the longest-path DP compared cumulative real arc
+  length. On a true hex grid every individual hex-step covers identical real
+  distance (a genuinely hexagon-only property) — but WHICH hex a "forward"
+  step reaches still depends on the current lane, so different interleavings
+  of forward-vs-diagonal steps land on genuinely different FINAL hexes, some
+  further along the track than others. (An earlier version of this entry
+  claimed hex uniformity meant nothing was left to optimize and shipped a
+  fixed "Slip first" rule — that was wrong, caught and corrected the same
+  day before ever being played on: uniform step length does not imply
+  uniform final position.) The DP still runs, comparing candidates by the
+  real structural progress each one contributes — completed legs plus
+  fraction through the current leg (straight or curve), the same measure
+  used to keep a Slip from ever landing on the ring's own seam-adjacent
+  wrap artifact. Both forward and Slip steps are scored the same way, so a
+  Slip through a curve is judged correctly too: a curve leg's hex count
+  scales with the lane's own ring level directly, unlike a straight, so
+  raw hex-index numbers alone are NOT a safe stand-in for real progress
+  there — an earlier version of this fix that scored by raw index instead
+  undervalued (sometimes by a lot) exactly the "hug the inside line through
+  the turn" move that should pay off, caught by a user who'd worked out by
+  hand that it should gain real ground, not lose it. Picking whichever
+  candidate actually gains the most ground at every step is what makes the
+  DP worth running at all. Also supersedes the "square that shares a
+  corner" adjacency rule (2026-08-19 below): a Slip now simply moves to an
+  edge-adjacent hex in the neighboring lane, the natural hex equivalent, no
+  corner-touching special case needed.
+- **Unchanged in substance, only in unit:** the curve-touch Advantage/
+  Disadvantage and Slingshot bonus (+1 Advantage per hex slipped outward,
+  −1 Disadvantage per hex slipped inward; Slingshot's +1 bonus Movement per
+  hex for an inward Slip touching a curve), Crowded Field (1 D per ship
+  sharing an ending hex, scaling with pileup size), the 6-hex-per-lane
+  staggered start, and the Pilot Fail/Fumble Movement-halving all still work
+  exactly as before — only the grid they run on changed, from squares to
+  hexes. Racing Maneuver range is still 2 (now hexes, via real hex distance
+  — cube coordinates — instead of the old same-lane Q-conversion workaround).
+- **Breaking change:** any Circular Track course and any race in progress on
+  one is cleared on upgrade — old square-grid positions don't correspond to
+  anything meaningful under hex rules. Straight/Legs courses and races are
+  untouched. See `migrateState()`'s `_circularTrackHexed` flag in `app.js`.
+- **Where:** `app.js` — the entire Circular Track geometry block
+  (`traceLaneRing()`, `circTrackGeometry()`, `hexToPixel()`/`hexCorners()`,
+  `renderCircularTrackSvg()`, `circRacerTransform()`), movement
+  (`stepForward()`, `resolveSlipPath()`, `buildCircularLegWaypoints()`),
+  `hexesWithinManeuverRange()`, `laneHexesArray()`/`laneStartHexPos()`,
+  `finishLeg()`'s circular branch, and the Declare modal's Slip UI. Every
+  `squarePos`/`slipSquares`/`innerSquares` field is now `hexPos`/`slipHexes`/
+  `innerHexes`.
 
 ### 2026-08-21 — House rule: the Base Leg Result (shared NPC baseline) now averages Speed Bonus alone, not the full Leg Ranking Score
 - **Changed value — and a correction of an earlier same-day misread of this
@@ -41,8 +118,8 @@ applicable), the house-rule value in use, and where it lives in the code.
 
 ---
 
-### 2026-08-21 — House rule: Slingshot — an active inward Slip through a curve grants bonus Movement
-- **New house rule (not in the printed rulebook):** the curve at each end of
+### 2026-08-21 — Slingshot: an active inward Slip through a curve grants bonus Movement
+- **New rule (not in an earlier printed version):** the curve at each end of
   a Circular Track represents a slingshot around a high-gravity body. A
   ship that declares an **inward** Slip ("left") whose path actually
   **touches a curve** this Leg gets **+1 bonus MP per square it actually
@@ -89,8 +166,8 @@ applicable), the house-rule value in use, and where it lives in the code.
 
 ---
 
-### 2026-08-21 — House rule: a failed or fumbled Pilot Task Check halves the Leg's Movement, rounded up
-- **New house rule (not in the printed rulebook):** if the Pilot **Fails or
+### 2026-08-21 — A failed or fumbled Pilot Task Check halves the Leg's Movement, rounded up
+- **New rule (not in an earlier printed version):** if the Pilot **Fails or
   Fumbles** their own Pilot Task Check for a Leg, that Leg's Movement (MPs)
   is cut in half, rounded up (e.g. 15 → 8, 14 → 7), **before** any Slip
   calculations. A Fumble always implies a Fail (the check's chosen die is
@@ -532,7 +609,7 @@ applicable), the house-rule value in use, and where it lives in the code.
 - **Standings:** Progress is shown against each ship's own required distance
   (laps × its lane's circumference, since outer lanes must cover more ground
   for the same lap count) rather than the straight-course points system. The
-  house rule limiting an NPC that falls more than one Leg's movement behind
+  rule limiting an NPC that falls more than one Leg's movement behind
   (see the 2026-08-11 "NPC drop-behind" entry) does not apply on a Circular
   Track — it was calibrated for the points system, not hex distances.
 - **Where:** `app.js` → `laneHexesArray()`, `startRace()`, `lockDeclarations()`
@@ -668,7 +745,7 @@ applicable), the house-rule value in use, and where it lives in the code.
   build time. (Previously `GDATA.DIVISION_CAPS` hard-capped `shipClassTotalCost()`
   per Division — Flash/Spark 20, Comet 25, Meteor 30, Nova 35 — and Flash's Acc was
   clamped to 5-G; edits over cap were reverted with an alert.) This **supersedes**
-  the earlier per-Division cap house rule.
+  the earlier per-Division cap rule.
 - **Rationale:** the only cap in the game is the **per-Leg AAAAA effective-skill
   ceiling**; there is deliberately no purchase ceiling, since campaign XP will keep
   climbing. Balance comes from the escalating cost curves + the Leg cap, not a wall.
@@ -957,7 +1034,7 @@ applicable), the house-rule value in use, and where it lives in the code.
   filled for a ship to be race-legal — this is a hard requirement, not a
   warning: starting a race or locking declarations refuses and lists exactly
   which ships/positions are missing.
-- **New house rule:** the same crewman may fill more than one position, but
+- **New rule:** the same crewman may fill more than one position, but
   how many is capped by the Ship Class's crew size — with 4 positions and a
   crew size of N, one person can hold at most 4-N+1 of them (the rest must
   go to at least N-1 other people). E.g. on a 2-crew (Comet) ship, one

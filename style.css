@@ -243,6 +243,7 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .circtrack-wrap { display: flex; justify-content: center; margin: 6px 0 16px; }
 .circtrack { width: 100%; max-width: 1020px; height: auto; }
 .circcell { fill: var(--panel2); stroke: var(--border); stroke-width: 1; }
+.circcell.curve { fill: #33363c; stroke: #6b7080; }
 .replaytraildot { pointer-events: none; }
 .circfinish { stroke: var(--gold); stroke-width: 2; stroke-dasharray: 4 3; }
 .circdot { fill: var(--gold); stroke: #111; stroke-width: 1.5; }
@@ -262,6 +263,8 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .finallist { font-size: 1.05rem; line-height: 1.9; }
 
 .fumbletext { background: #200f0f; border: 1px solid var(--danger); border-radius: 6px; padding: 8px 12px; font-style: italic; font-size: 0.85rem; }
+.flavortext { font-style: italic; color: var(--text); }
+.introcaption { font-style: italic; }
 .logfumbles { margin: 6px 0 16px; }
 .logfumbles .fumbletext { margin: 6px 0; }
 

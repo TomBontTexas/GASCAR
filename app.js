@@ -34,8 +34,8 @@ function rollCheck(score, net, tn) {
   return { dice, chosen, total, tn, success, successCount, failCount, critLevels, fumbleLevels, isCrit: critLevels > 0, isFumble: fumbleLevels > 0, net };
 }
 function outcomeLabel(rc) {
-  if (rc.isCrit) return "Critical Success";
-  if (rc.isFumble) return "Fumble";
+  if (rc.isCrit) return rc.critLevels + " Critical" + (rc.critLevels === 1 ? "" : "s");
+  if (rc.isFumble) return rc.fumbleLevels + " Fumble" + (rc.fumbleLevels === 1 ? "" : "s");
   return rc.success ? "Success" : "Failure";
 }
 function formatMk(score, net) {
@@ -91,6 +91,21 @@ function migrateState(state) {
     state.race = null;
     state._builtinShipClassesRemoved = true;
   }
+  // ONE-TIME migration (see APP_CHANGES.md/RULE_CHANGES.md): Circular Track
+  // switched from a square grid to a real hex grid -- a clean break, not a
+  // field rename, since the old squarePos/innerSquares positions don't
+  // correspond to anything meaningful under hex rules (this replaces an
+  // EARLIER, now-obsolete hexPos->squarePos rename below that would have
+  // actively fought this migration by renaming fresh hex data back to
+  // square names). Any Circular Track course is removed; a race actively
+  // running on one is cleared too. Straight/Legs courses and their races,
+  // which never used squarePos, are untouched.
+  if (!state._circularTrackHexed) {
+    const raceCourse = state.race ? (state.courses || []).find(c => c.id === state.race.courseId) : null;
+    if (raceCourse && raceCourse.trackType === "circular") state.race = null;
+    state.courses = (state.courses || []).filter(c => c.trackType !== "circular");
+    state._circularTrackHexed = true;
+  }
   (state.shipClasses || []).forEach(sc => {
     if (sc.acc) { sc.maxThrust = sc.acc.score + (sc.acc.adv || 0); delete sc.acc; }
     if (sc.maxThrust == null) sc.maxThrust = 10;
@@ -116,9 +131,6 @@ function migrateState(state) {
   (state.courses || []).forEach(course => {
     if (!GDATA.DIVISIONS.includes(course.division)) course.division = "Comet";
     if (!course.trackType) course.trackType = "legs";
-    // Rename (see APP_CHANGES.md): Circular Track tiles are squares now, not
-    // hexagons -- innerHexes -> innerSquares, value unchanged.
-    if (course.innerHexes != null && course.innerSquares == null) { course.innerSquares = course.innerHexes; delete course.innerHexes; }
   });
   // Self-heal a cached race (see APP_CHANGES.md): a Hero at 0 HP must be out of
   // the race. Early saves (or HP zeroed on a path that didn't flag it) can leave
@@ -146,17 +158,7 @@ function migrateState(state) {
           delete pen.legsRemaining;
         }
       });
-      // Rename (see APP_CHANGES.md): Circular Track tiles are squares now, not
-      // hexagons -- hexPos/startHexPos -> squarePos/startSquarePos, values unchanged.
-      if (p.hexPos != null && p.squarePos == null) { p.squarePos = p.hexPos; delete p.hexPos; }
-      if (p.startHexPos != null && p.startSquarePos == null) { p.startSquarePos = p.startHexPos; delete p.startHexPos; }
-      (p.history || []).forEach(h => { if (h.hexPos != null && h.squarePos == null) { h.squarePos = h.hexPos; delete h.hexPos; } });
     });
-    if (state.race.legState && state.race.legState.perShip) {
-      Object.values(state.race.legState.perShip).forEach(ps => {
-        if (ps.slipHexes != null && ps.slipSquares == null) { ps.slipSquares = ps.slipHexes; delete ps.slipHexes; }
-      });
-    }
   }
 }
 function saveState() {
@@ -336,29 +338,44 @@ function crewLockMessage(ship) {
 // bought past this (see updateSkill/updateShipClassAI); it just goes to waste in a
 // Leg, and its cost keeps climbing regardless (see advCost below).
 var MAX_ADV = 5;
-// House rule (see RULE_CHANGES.md): Circular Track / Distance Tracking. Each
-// lane out from the inside adds a fixed number of squares to its lap length --
-// this SAME number is also the exact decorative square tile count drawn for
-// that lane (see curveSpineSets()/renderCircularTrackSvg() below), not just
-// a gameplay figure.
-var LANE_SQUARE_INCREMENT = 4;
-// House rule (see RULE_CHANGES.md): each straightaway carries this many MORE
-// squares than the "natural" straight/curve split would otherwise give it
-// (see curveNaturalS()/curveSplitForCourse()) -- real extra length, not the
-// same length subdivided into more, smaller squares (STADIUM_HALF_STRAIGHT,
-// defined later, is grown to match). Counted once per straightaway, and
-// there are 2, so a lane's total gains 2x this.
-var STRAIGHT_SQUARE_BONUS = 10;
-function laneSquaresArray(course) {
-  return Array.from({ length: course.lanes || 6 }, (_, i) => (course.innerSquares || 50) + i * LANE_SQUARE_INCREMENT + 2 * STRAIGHT_SQUARE_BONUS);
+// House rule (see RULE_CHANGES.md): Circular Track / Distance Tracking runs
+// on a real hex grid (see circTrackGeometry() below) -- lane N is a hex ring
+// at ring-level (innerRing + N) around a shared center, with the two
+// straight sides elongated by straightLen extra hexes each (see
+// hexRingParamsForCourse()). Growth per lane out is therefore a constant +6
+// hexes (6x the +1 ring-level increase) -- an exact property of hex ring
+// math, not a chosen/arbitrary number. (An earlier attempt made the
+// straight legs a plain constant, independent of ring level, reasoning that
+// would make Q comparisons across lanes simpler -- it does, but it also
+// breaks the ring-nesting guarantee: hex-ring corners aren't at a
+// radius-independent offset the way a circle's are, so a fixed-length
+// straight leg starting from a k-dependent corner drifts out of alignment
+// with the next lane's, reintroducing overlaps. Caught by testing before
+// shipping -- see hexStepAdvance() below for how cross-lane comparison is
+// solved instead, without touching this proven geometry.)
+function laneHexesArray(course) {
+  const { innerRing, straightLen } = hexRingParamsForCourse(course);
+  return Array.from({ length: course.lanes || 6 }, (_, i) => 6 * (innerRing + i) + 2 * straightLen);
+}
+// Derives (innerRing, straightLen) from the course's configurable
+// "innerHexes" target (replacing the old square system's innerSquares field)
+// -- solves innerHexes ~= 6*innerRing + 2*straightLen with straightLen held
+// at 2x innerRing (a reasonable straight-vs-curve shape ratio; unlike the
+// old trapezoid system, every hex is ALWAYS the exact same regular size
+// regardless of this ratio, so this is purely a track-SHAPE choice now, not
+// a cell-size-matching necessity).
+function hexRingParamsForCourse(course) {
+  const target = course.innerHexes || 50;
+  const innerRing = Math.max(1, Math.round(target / 10));
+  const straightLen = 2 * innerRing;
+  return { innerRing, straightLen };
 }
 // Staggered start (see RULE_CHANGES.md): each lane out starts this many
-// squares further ahead than the one inside it -- a fixed offset, not derived
-// from LANE_SQUARE_INCREMENT. Shared by startRace() (actual gameplay
-// squarePos) and the standings SVG (drawing each lane's own starting mark at
-// that same square).
+// hexes further ahead than the one inside it -- a fixed offset. Shared by
+// startRace() (actual gameplay hexPos) and the standings SVG (drawing each
+// lane's own starting mark at that same hex).
 var STAGGER_PER_LANE = 4;
-function laneStartSquarePos(laneIdx0) { return laneIdx0 * STAGGER_PER_LANE; }
+function laneStartHexPos(laneIdx0) { return laneIdx0 * STAGGER_PER_LANE; }
 // House rule (see RULE_CHANGES.md): skill/AI SCORE cost is triangular — level n
 // costs n(n+1)/2 (1,3,6,10,15,21,28,36,45,55 for scores 1..10).
 function scoreCost(score) { score = score || 0; return score * (score + 1) / 2; }
@@ -569,10 +586,10 @@ function initLegState(race) {
       maneuvers: { pilot: "", navigator: "", spotter: "", engineer: "" },
       maneuverTargets: { pilot: [], navigator: [], spotter: [], engineer: [] },
       slip: "", // Circular Track lane change this Leg: "" | "left" | "right" (see RULE_CHANGES.md)
-      slipSquares: 0, // squares of Slip declared this Leg (costs no Movement Points)
+      slipHexes: 0, // hexes of Slip declared this Leg (costs no Movement Points)
       slipAdvantage: 0, // signed A/D from the Slip, computed at lockDeclarations() -- 0 if entirely within a straightaway
       // House rule (see RULE_CHANGES.md): Crowded Field. -1 D per ship that
-      // shared this square with it at the end of the PREVIOUS Leg (flagged by
+      // shared this hex with it at the end of the PREVIOUS Leg (flagged by
       // finishLeg() as the group's size, consumed and cleared here so it only
       // ever applies once).
       crowdedFieldD: p.crowdedFieldNextLeg ? -p.crowdedFieldNextLeg : 0,
@@ -687,16 +704,16 @@ function startRace(courseId, shipIds, npcNames) {
     participants.push({ id: uid("npc"), type: "npc", name: n, cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "" });
   });
   // Circular Track / Distance Tracking (see RULE_CHANGES.md): every racer starts
-  // in a lane, round-robin, and tracks laps completed + square position within the
-  // current lap. Lane may change mid-race via a Slip (see renderDeclModal).
-  // Outer lanes get a staggered head start, same reasoning as a real track: the
-  // whole LANE_SQUARE_INCREMENT (4 squares) a lane's full lap gains over the one
-  // inside it comes entirely from the two curved end-caps (straights are the
-  // same length for every lane), split evenly between them -- so crossing just
-  // the first curve, an unstaggered outer lane would already be running
-  // LANE_SQUARE_INCREMENT/2 = 2 squares long per lane-step. Starting that far ahead
-  // cancels it out. startLane/startSquarePos are kept alongside the live lane/
-  // squarePos so a race replay can redraw the true starting frame later.
+  // in a lane, round-robin, and tracks laps completed + hex position within
+  // the current lap. Lane may change mid-race via a Slip (see
+  // renderDeclModal). Outer lanes get a staggered head start, same reasoning
+  // as a real track: an unstaggered outer lane's full-lap hex gain over the
+  // one inside it comes entirely from the two curved end-caps (straights are
+  // the same length for every lane -- see circTrackGeometry()), so crossing
+  // just the first curve it would already be running ahead. Starting that
+  // far behind cancels it out. startLane/startHexPos are kept alongside the
+  // live lane/hexPos so a race replay can redraw the true starting frame
+  // later.
   if (circular) {
     // House rule (see RULE_CHANGES.md): Initiative. Every ship rolls d20 +
     // its max Acceleration (NPCs have no Ship Class, so just d20) once at the
@@ -708,10 +725,10 @@ function startRace(courseId, shipIds, npcNames) {
     order.forEach((p, i) => {
       const laneIdx0 = i % course.lanes;
       p.lane = laneIdx0 + 1;
-      p.squarePos = laneStartSquarePos(laneIdx0);
+      p.hexPos = laneStartHexPos(laneIdx0);
       p.laps = 0;
       p.startLane = p.lane;
-      p.startSquarePos = p.squarePos;
+      p.startHexPos = p.hexPos;
     });
   }
   const race = { courseId, legIndex: 0, participants, finished: false, log: [] };
@@ -729,32 +746,34 @@ function lockDeclarations() {
     ps.declared = true;
   });
   // Circular Track Slips (see RULE_CHANGES.md): a Slip costs no Movement
-  // Points beyond ordinary movement -- of this Leg's eventual squares of
-  // movement, the ship spends as many as possible moving straight forward in
-  // its CURRENT lane, then spends the declared Slip amount making the lane
-  // change itself. Each square of Slip is a DIAGONAL, corner-touching step --
-  // it advances forward by one square (same as ordinary movement) AND
-  // changes one lane, simultaneously -- not a purely lateral hop, so a Slip's
-  // squares count toward real forward progress exactly like any other
-  // square of movement. Since the Leg's real movement isn't resolved yet
-  // (that's what Phase VI's roll -- fed by the very A/D this determines --
-  // is for), the lane change itself happens later, in finishLeg(), once
-  // movement is known; this only clamps the declared magnitude to physically
-  // available lanes and decides the A/D. It grants +1 Advantage per square if
-  // the destination lane is further outward or -1 Disadvantage per square if
-  // it's further inward, UNLESS the whole projected Leg -- current lane,
-  // forward by (declared Acceleration minus the Slip amount), then each
-  // diagonal Slip step in turn -- stays entirely on a straightaway; touching
+  // Points beyond ordinary movement -- of this Leg's eventual hexes of
+  // movement, the declared Slip hexes are interleaved with ordinary forward
+  // movement wherever resolveSlipPath()'s longest-path DP finds the ship
+  // makes the most real progress around the track (not always first or
+  // last -- see RULE_CHANGES.md; even though every hex is the same real
+  // size, WHICH hex a "forward" step reaches depends on the current lane,
+  // so different interleavings genuinely land on different final hexes).
+  // Each hex of Slip is a diagonal, edge-adjacent step -- it advances
+  // forward by one hex (same as ordinary movement) AND changes one lane,
+  // simultaneously -- not a purely lateral hop. Since the Leg's real
+  // movement isn't resolved yet (that's what Phase VI's roll -- fed by the
+  // very A/D this determines -- is for), the lane change itself happens
+  // later, in finishLeg(), once movement is known; this only clamps the
+  // declared magnitude to physically available lanes and decides the A/D.
+  // It grants +1 Advantage per hex if the destination lane is further
+  // outward or -1 Disadvantage per hex if it's further inward, UNLESS the
+  // whole projected Leg -- current hex, forward by (declared Acceleration
+  // minus the Slip amount), then each diagonal Slip step in turn -- stays
+  // entirely on a straightaway; touching
   // a curve anywhere along that projected span uses the curve A/D. The A/D
   // itself is applied via pilotExtraNet() (not folded into
   // ps.conditions.pilot) so it shows as its own "Slip" line in
   // legAdSourcesHtml() instead of disappearing into "Conditions."
   if (course.trackType === "circular") {
     const geom = circTrackGeometry(course);
-    const laneSquares = laneSquaresArray(course);
     Object.entries(ls.perShip).forEach(([pid, ps]) => {
       ps.slipAdvantage = 0;
-      if (!ps.slip) { ps.slipSquares = 0; return; }
+      if (!ps.slip) { ps.slipHexes = 0; return; }
       const participant = race.participants.find(p => p.id === pid);
       // The track runs counterclockwise (see RULE_CHANGES.md) -- facing the
       // direction of travel, steering LEFT points toward the track's center
@@ -762,27 +781,27 @@ function lockDeclarations() {
       // toward a higher lane number), the same way a driver on a real
       // counterclockwise oval steers left to move to the inside lane.
       // House rule (see RULE_CHANGES.md): a Slip is also capped at the ship's
-      // declared Acceleration -- a ship can't Slip more squares than its own
+      // declared Acceleration -- a ship can't Slip more hexes than its own
       // declared G rate this Leg, on top of the lanes actually available.
       const maxLane = Math.min(ps.slip === "left" ? participant.lane - 1 : course.lanes - participant.lane, ps.accel || 0);
-      const squares = clampInt(ps.slipSquares, 0, Math.max(0, maxLane), 0);
-      ps.slipSquares = squares;
-      if (squares <= 0) { ps.slip = ""; return; }
+      const hexes = clampInt(ps.slipHexes, 0, Math.max(0, maxLane), 0);
+      ps.slipHexes = hexes;
+      if (hexes <= 0) { ps.slip = ""; return; }
       const originLaneIdx0 = participant.lane - 1;
-      const originSquarePos = participant.squarePos || 0;
+      const originHexPos = participant.hexPos || 0;
       const dir = ps.slip === "left" ? -1 : 1;
-      // Touches a curve if the origin square does, or if any square along
-      // the projected path (declared Acceleration's worth of movement,
-      // interleaved with the declared Slip squares the same way
+      // Touches a curve if the origin hex does, or if any hex along the
+      // projected path (declared Acceleration's worth of movement,
+      // interleaved with the declared Slip hexes the same way
       // resolveSlipPath() actually resolves the Leg -- see RULE_CHANGES.md)
       // does.
-      const projected = resolveSlipPath(geom, laneSquares, originLaneIdx0, originSquarePos, ps.accel || 0, squares, dir);
-      let touchesCurve = !isSquareOnStraight(geom, originLaneIdx0, originSquarePos);
+      const projected = resolveSlipPath(geom, originLaneIdx0, originHexPos, ps.accel || 0, hexes, dir);
+      let touchesCurve = !isHexOnStraight(geom, originLaneIdx0, originHexPos);
       for (let i = 0; !touchesCurve && i < projected.steps.length; i++) {
         const step = projected.steps[i];
-        if (!isSquareOnStraight(geom, step.laneIdx0, step.squarePos)) touchesCurve = true;
+        if (!isHexOnStraight(geom, step.laneIdx0, step.hexPos)) touchesCurve = true;
       }
-      ps.slipAdvantage = touchesCurve ? (ps.slip === "right" ? squares : -squares) : 0;
+      ps.slipAdvantage = touchesCurve ? (ps.slip === "right" ? hexes : -hexes) : 0;
     });
   }
   // Apply maneuvers: each position may run its own Maneuver against the SAME
@@ -867,9 +886,9 @@ function pilotExtraNet(ps) {
   // here (not folded into ps.conditions.pilot) so each gets its own labeled
   // line in legAdSourcesHtml() instead of vanishing into a generic total.
   // ps.slipAdvantage (set in lockDeclarations()) is signed and already scaled
-  // by squares slipped -- 0 if the Slip was entirely within a straightaway.
+  // by hexes slipped -- 0 if the Slip was entirely within a straightaway.
   // ps.crowdedFieldD (set in initLegState() from last Leg's finishLeg()
-  // detection -- see RULE_CHANGES.md) is -1 if 2+ ships shared a square
+  // detection -- see RULE_CHANGES.md) is -1 if 2+ ships shared a hex
   // entering this Leg, else 0.
   return (ps.netLegAcc || 0) + (ps.slipAdvantage || 0) + (ps.crowdedFieldD || 0);
 }
@@ -1022,7 +1041,7 @@ function finishLeg() {
     const key = r.lastPlace ? "AL" : `${r.total}|${r.successCount}|${r.fumbleCount}`;
     if (key !== lastKey) { lastPos = i + 1; lastKey = key; }
     r.position = lastPos;
-    // Distance Tracking (see RULE_CHANGES.md): squares moved this Leg is the ship's
+    // Distance Tracking (see RULE_CHANGES.md): hexes moved this Leg is the ship's
     // real Leg Finishing Score, floored at 0 -- Fumbles and Disadvantage slow a
     // ship, never send it backward. The points-ranking "forced last" override
     // (via r.total/-999) is a straight-course-only concept and doesn't apply here.
@@ -1033,7 +1052,7 @@ function finishLeg() {
     // House rule (see RULE_CHANGES.md): if the Pilot Fails or Fumbles their
     // own Task Check this Leg, Movement (MPs) for the Leg is cut in half,
     // rounded up -- applied here, BEFORE any Slip calculations below, so a
-    // Slip's squares (and the curve-touch Advantage/Disadvantage) are based
+    // Slip's hexes (and the curve-touch Advantage/Disadvantage) are based
     // on the ALREADY-HALVED total, never the full pre-Fumble amount.
     if (circular && r.type === "hero") {
       const pilotRc = ls.perShip[r.id] && ls.perShip[r.id].results.pilot && ls.perShip[r.id].results.pilot.rc;
@@ -1041,55 +1060,53 @@ function finishLeg() {
     }
   });
   const circGeom = circular ? circTrackGeometry(course) : null;
-  const circLaneSquares = circular ? laneSquaresArray(course) : null;
   rows.forEach(r => {
     const participant = race.participants.find(p => p.id === r.id);
-    participant.cumulative += r.movement; // straight: points; circular: total squares traveled (monotonic)
+    participant.cumulative += r.movement; // straight: points; circular: total hexes traveled (monotonic)
     if (circular) {
-      // Circular Track Slip (see RULE_CHANGES.md): the Slip's squares are
-      // interleaved with ordinary forward movement to maximize the ship's
-      // real distance covered this Leg -- see resolveSlipPath(). A ship
-      // that didn't Slip this Leg (or rolled 0 movement) just moves forward
-      // in its current lane as always.
+      // Circular Track Slip (see RULE_CHANGES.md): the Slip's hexes are
+      // taken first, then the ship continues forward in its new lane -- see
+      // resolveSlipPath(). A ship that didn't Slip this Leg (or rolled 0
+      // movement) just moves forward in its current lane as always.
       const ps = ls.perShip[r.id];
       const originLaneIdx0 = participant.lane - 1;
-      const declaredSlipSquares = (ps && ps.slip) ? (ps.slipSquares || 0) : 0;
-      const actualSlipSquares = Math.min(declaredSlipSquares, Math.max(0, r.movement));
+      const declaredSlipHexes = (ps && ps.slip) ? (ps.slipHexes || 0) : 0;
+      const actualSlipHexes = Math.min(declaredSlipHexes, Math.max(0, r.movement));
       const dir = (ps && ps.slip === "left") ? -1 : 1;
       // House rule (see RULE_CHANGES.md): Slingshot. An inward Slip that
       // touches a curve (ps.slipAdvantage is negative ONLY for "left" +
-      // touchesCurve, per lockDeclarations()) grants 1 bonus MP per square
-      // actually Slipped this Leg (actualSlipSquares, already shrunk by any
+      // touchesCurve, per lockDeclarations()) grants 1 bonus MP per hex
+      // actually Slipped this Leg (actualSlipHexes, already shrunk by any
       // Fail/Fumble halving or lane clamp above) -- pure extra forward
-      // movement on top, not an extra Slip square. Gated on an ACTIVE dive
+      // movement on top, not an extra Slip hex. Gated on an ACTIVE dive
       // toward the inside this Leg, never on merely occupying the inside
       // lane already.
-      const slingshotBonus = (ps && ps.slipAdvantage < 0) ? actualSlipSquares : 0;
+      const slingshotBonus = (ps && ps.slipAdvantage < 0) ? actualSlipHexes : 0;
       const totalMovement = r.movement + slingshotBonus;
       participant.cumulative += slingshotBonus;
-      const path = resolveSlipPath(circGeom, circLaneSquares, originLaneIdx0, participant.squarePos || 0, totalMovement, actualSlipSquares, dir);
+      const path = resolveSlipPath(circGeom, originLaneIdx0, participant.hexPos || 0, totalMovement, actualSlipHexes, dir);
       participant.lane = path.finalLaneIdx0 + 1;
-      participant.squarePos = path.finalSquarePos;
+      participant.hexPos = path.finalHexPos;
       participant.laps = (participant.laps || 0) + path.lapsGained;
-      participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: totalMovement, lane: participant.lane, laps: participant.laps, squarePos: participant.squarePos, slipSquares: actualSlipSquares, slingshotBonus });
+      participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: totalMovement, lane: participant.lane, laps: participant.laps, hexPos: participant.hexPos, slipHexes: actualSlipHexes, slingshotBonus });
     } else {
       participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: r.movement });
     }
     if (participant.type === "hero" && participant.forcedLastLegs > 0) participant.forcedLastLegs -= 1;
   });
   // House rule (see RULE_CHANGES.md): Crowded Field. Any 2+ ships (hero or NPC)
-  // that end this Leg sharing the same square flag every HERO among them for a
-  // one-Leg Pilot Disadvantage next Leg, 1 D per ship in the square (consumed
-  // in initLegState() via crowdedFieldD) -- an NPC can crowd a Hero's square
+  // that end this Leg sharing the same hex flag every HERO among them for a
+  // one-Leg Pilot Disadvantage next Leg, 1 D per ship in the hex (consumed
+  // in initLegState() via crowdedFieldD) -- an NPC can crowd a Hero's hex
   // even though only a Hero has a Pilot to penalize.
   if (circular) {
-    const bySquare = {};
+    const byHex = {};
     race.participants.forEach(p => {
       if (p.out) return;
-      const key = `${p.lane}|${p.squarePos}`;
-      (bySquare[key] = bySquare[key] || []).push(p);
+      const key = `${p.lane}|${p.hexPos}`;
+      (byHex[key] = byHex[key] || []).push(p);
     });
-    Object.values(bySquare).forEach(group => {
+    Object.values(byHex).forEach(group => {
       if (group.length < 2) return;
       group.forEach(p => { if (p.type === "hero") p.crowdedFieldNextLeg = group.length; });
     });
@@ -1100,7 +1117,7 @@ function finishLeg() {
   // movement is N (the racer count), so the gap scales with the field instead of
   // a flat number. Loop so a detached tail can clear in one Leg; stops as soon as
   // last place is a Hero or the gap closes to <= one Leg. Distance Tracking
-  // measures in squares, not points, so this points-scaled gap doesn't apply there.
+  // measures in hexes, not points, so this points-scaled gap doesn't apply there.
   if (!circular) {
     while (true) {
       const inRace = race.participants.filter(p => !p.out).sort((a, b) => a.cumulative - b.cumulative);
@@ -1151,7 +1168,8 @@ function setTab(tab) { CURRENT_TAB = tab; render(); }
 function render() {
   document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === CURRENT_TAB));
   const root = document.getElementById("view");
-  if (CURRENT_TAB === "shipyard") root.innerHTML = renderShipyard();
+  if (CURRENT_TAB === "introduction") root.innerHTML = renderIntroduction();
+  else if (CURRENT_TAB === "shipyard") root.innerHTML = renderShipyard();
   else if (CURRENT_TAB === "cantina") root.innerHTML = renderCantina();
   else if (CURRENT_TAB === "hangar") root.innerHTML = renderHangarBay();
   else if (CURRENT_TAB === "course") root.innerHTML = renderCourse();
@@ -1520,13 +1538,13 @@ function renderCourse() {
         <option value="circular" ${trackType === "circular" ? "selected" : ""}>Circular — Distance Tracking</option>
       </select></div>
     ${trackType === "circular" ? `
-    <p class="muted">Circular Track (see RULE_CHANGES.md): 6 lanes, each ${LANE_SQUARE_INCREMENT} squares longer than the one inside it. Race runs Leg by Leg until a racer completes the required laps — there's no fixed Leg count.</p>
-    <div class="formrow"><label>Inner Lane Squares</label><input id="cInnerSquares" type="number" min="1" value="50" oninput="App.previewLaneSquares(this.value)"></div>
+    <p class="muted">Circular Track (see RULE_CHANGES.md): 6 lanes on a real hex grid, each exactly 6 hexes longer per lap than the one inside it (an exact property of hex ring math, not a chosen number). Race runs Leg by Leg until a racer completes the required laps — there's no fixed Leg count.</p>
+    <div class="formrow"><label>Inner Lane Hexes (approx.)</label><input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)"></div>
     <div class="formrow"><label>Laps to Finish</label><input id="cLaps" type="number" min="1" value="3"></div>
     <div class="formrow"><label>Apply Leg Modifier To</label>
       <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
     <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
-      <tr><td>Squares/Lap</td>${laneSquaresArray({ lanes: 6, innerSquares: 50 }).map((h, i) => `<td id="laneSquareCol${i}">${h}</td>`).join("")}</tr></table>
+      <tr><td>Hexes/Lap</td>${laneHexesArray({ lanes: 6, innerHexes: 50 }).map((h, i) => `<td id="laneHexCol${i}">${h}</td>`).join("")}</tr></table>
     ` : `
     <div class="formrow"><label>Race Type</label>
       <select id="cType">
@@ -1545,7 +1563,7 @@ function renderCourse() {
   if (!STATE.courses.length) html += `<p class="muted">None yet — generate one on the left.</p>`;
   STATE.courses.forEach(c => {
     const circular = c.trackType === "circular";
-    const circTag = circular ? `<span class="tag">Circular</span> <span class="tag">${c.lanes} lanes, inner ${c.innerSquares} squares</span> <span class="tag">${c.laps} laps</span>` : `${c.type ? `<span class="tag">${esc(c.type)}</span>` : ""} <span class="tag">${c.legs.length} Legs</span>`;
+    const circTag = circular ? `<span class="tag">Circular</span> <span class="tag">${c.lanes} lanes, inner ~${c.innerHexes} hexes</span> <span class="tag">${c.laps} laps</span>` : `${c.type ? `<span class="tag">${esc(c.type)}</span>` : ""} <span class="tag">${c.legs.length} Legs</span>`;
     // Circular Track Legs are rolled fresh live during the race, never stored
     // on the course (see RULE_CHANGES.md) -- there's nothing to preview here.
     const viewLegsBtn = circular ? `<span class="muted">Legs are rolled fresh each race</span>` : `<button class="ghost" onclick="App.toggleCourseView('${c.id}')">${STATE._expanded === c.id ? "Hide" : "View"} Legs</button>`;
@@ -1637,7 +1655,7 @@ function renderRaceSetup() {
   {
     const selCourse = getCourse(courseId);
     if (selCourse && selCourse.trackType === "circular") {
-      html += `<p class="muted">Circular Track — Distance Tracking is in effect (see Instructions). ${selCourse.lanes} lanes, inner lane ${selCourse.innerSquares} squares around, ${selCourse.laps} laps to finish. Ships are assigned a starting lane automatically; the Pilot may Slip a lane during the race.</p>`;
+      html += `<p class="muted">Circular Track — Distance Tracking is in effect (see Instructions). ${selCourse.lanes} lanes, inner lane ~${selCourse.innerHexes} hexes around, ${selCourse.laps} laps to finish. Ships are assigned a starting lane automatically; the Pilot may Slip a lane during the race.</p>`;
     }
   }
   // Only ships of the racecourse's Division are eligible to race it.
@@ -1662,606 +1680,424 @@ function renderRaceSetup() {
    Racer order never changes leg to leg -- only how far each bar reaches.
    "Show Entire Race" replays that growth from Leg 1 forward on the same bars
    (see App.playRaceReplay), rather than printing a separate snapshot per Leg. */
-/* Oblong (stadium) track geometry (see RULE_CHANGES.md): two straightaways of
-   fixed length joined by a semicircular curve at each end -- like a real
-   running track, where lane N is the same shape as lane 1 just pushed
-   outward, so its straights are the same length and only its curves get
-   bigger. Traces the loop COUNTERCLOCKWISE (the real-world racing
-   convention) starting at the top-right straight/curve join (the far right
-   end of the upper straightaway, where the starting line is drawn): left
-   along the top straight, down the left cap, right along the bottom
-   straight, up the right cap, back to start. `t` is arc length along that
-   lane's own perimeter, wrapping at `perimeter`. */
-// Originally scaled 1.5x together (100->150, 36->54) to make the drawn track
-// 50% bigger while keeping every lane's square count identical.
-// STADIUM_INNER_R stays at that base value; STADIUM_HALF_STRAIGHT is grown
-// further below to fit STRAIGHT_SQUARE_BONUS extra squares onto EACH
-// straightaway (see RULE_CHANGES.md) as real extra length, not the same
-// length subdivided into more, smaller squares -- BASE_STADIUM_HALF_STRAIGHT
-// is the frozen 150 used only to size that bonus, so growing
-// STADIUM_HALF_STRAIGHT itself doesn't feed back into its own calculation.
-const BASE_STADIUM_HALF_STRAIGHT = 150, STADIUM_INNER_R = 54;
-// The "natural" straight square count (see curveSplitForCourse()) at a given
-// half-straight length -- straight square width roughly equal to lane 1's
-// curve square width.
-function curveNaturalS(halfStraight, innerR, innerSquares) {
-  const ratio = (2 * halfStraight) / (Math.PI * innerR);
-  const half0 = innerSquares / 2;
-  return Math.max(1, Math.round(half0 - Math.max(1, half0 / (ratio + 1))));
-}
-const BASE_NATURAL_S = curveNaturalS(BASE_STADIUM_HALF_STRAIGHT, STADIUM_INNER_R, 50);
-const STADIUM_HALF_STRAIGHT = BASE_STADIUM_HALF_STRAIGHT * (BASE_NATURAL_S + STRAIGHT_SQUARE_BONUS) / BASE_NATURAL_S;
-function stadiumPerimeter(r) { return 4 * STADIUM_HALF_STRAIGHT + 2 * Math.PI * r; }
-// Total length of Q, the LANE-INDEPENDENT loop coordinate stadiumPoint() and
-// friends use below (see their comment) -- two straightaways plus a full
-// circle's worth of raw angle (the two half-circle caps together).
-function qLoopTotal() { return 4 * STADIUM_HALF_STRAIGHT + 2 * Math.PI; }
-// Real (x,y) for a lane of radius r at loop-position Q. Unlike a plain
-// arc-length parametrization, Q means the same thing for every lane: real arc
-// length on the two straightaways (identical length regardless of lane), but
-// raw SWEPT ANGLE -- not scaled by radius -- on the two curved end-caps. Two
-// different lanes at the same Q therefore sit on the same straight
-// cross-section, or on the same radial spoke through the curve, which is
-// exactly the property a square grid needs for its column lines to stay aligned
-// across lanes (see RULE_CHANGES.md/APP_CHANGES.md) -- and since the same
-// angular step covers more real arc length at a bigger radius, outer lanes'
-// grid cells naturally stretch wider through a curve rather than needing to
-// be forced into it.
-function stadiumPoint(cx, cy, r, Q) {
-  const straight = 2 * STADIUM_HALF_STRAIGHT, total = qLoopTotal();
-  Q = ((Q % total) + total) % total;
-  if (Q < straight) return { x: cx + STADIUM_HALF_STRAIGHT - Q, y: cy - r };
-  Q -= straight;
-  if (Q < Math.PI) {
-    const a = -Math.PI / 2 - Q;
-    return { x: cx - STADIUM_HALF_STRAIGHT + r * Math.cos(a), y: cy + r * Math.sin(a) };
+/* Hex-grid track geometry (see RULE_CHANGES.md): a real pointy-top axial hex
+   grid, replacing the old continuous-Q trapezoid system entirely. Lane N is
+   a hex ring at ring-level (innerRing+N) around a shared center -- see
+   traceLaneRing() -- with the two straight sides elongated by a fixed
+   straightLen so every lane shares the exact same straight length and only
+   the curved end-caps grow. Because every lane's ring shares the same
+   center and elongation, adjacent rings are ALWAYS perfectly nested by
+   construction (standard hex-ring math) -- this is the actual fix for the
+   earlier hex attempt's lane-to-lane misalignment: that used continuous,
+   independently divided equal-angle curve slices (a shape that can flex to
+   fit a circle regardless of neighboring lanes' cell counts), which a true
+   regular hexagon can't do -- fixed 60-degree angles/equal sides, no
+   flexing. Traces each lane COUNTERCLOCKWISE starting top-right (same
+   convention as before): left along the top straight, down the left cap,
+   right along the bottom straight, up the right cap, back to start. */
+// 6 neighbor directions for pointy-top axial hexes, fixed rotational order.
+const HEX_DIRS = [
+  { dq: 1, dr: 0 }, { dq: 1, dr: -1 }, { dq: 0, dr: -1 },
+  { dq: -1, dr: 0 }, { dq: -1, dr: 1 }, { dq: 0, dr: 1 },
+];
+function hexKey(q, r) { return q + "," + r; }
+function hexAdd(h, dir, n) { return { q: h.q + dir.dq * n, r: h.r + dir.dr * n }; }
+// Direction order [W,SW,SE,E,NE,NW] (not the "textbook" ring-trace order
+// [E,NE,NW,W,SW,SE]) so the walk starts top-right and goes counterclockwise,
+// matching this app's existing convention. The W and E legs (indices 3 and
+// 0) are the two constant-r directions -- straightaways, elongated by a
+// fixed `straightLen` extra hexes on top of `k` (NOT held to a plain
+// constant -- see hexStepAdvance()'s own comment below for why that
+// seemingly-cleaner alternative actually breaks ring nesting between
+// adjacent lanes).
+const HEX_RING_ORDER = [3, 4, 5, 0, 1, 2];
+function traceLaneRing(k, straightLen) {
+  const legLen = dirIdx => (dirIdx === 0 || dirIdx === 3) ? k + straightLen : k;
+  let cur = hexAdd({ q: 0, r: 0 }, HEX_DIRS[1], k);
+  const hexes = [];
+  for (const dirIdx of HEX_RING_ORDER) {
+    const isStraight = dirIdx === 0 || dirIdx === 3;
+    for (let step = 0; step < legLen(dirIdx); step++) {
+      hexes.push({ q: cur.q, r: cur.r, isStraight });
+      cur = hexAdd(cur, HEX_DIRS[dirIdx], 1);
+    }
   }
-  Q -= Math.PI;
-  if (Q < straight) return { x: cx - STADIUM_HALF_STRAIGHT + Q, y: cy + r };
-  Q -= straight;
-  const a = Math.PI / 2 - Q;
-  return { x: cx + STADIUM_HALF_STRAIGHT + r * Math.cos(a), y: cy + r * Math.sin(a) };
+  return hexes; // ordered; index = hexPos, today's squarePos
 }
-// Tangent direction at Q -- independent of r (mirrors stadiumPoint()'s exact
-// segment order): at a shared angular position every concentric lane points
-// the same way, and every lane is already parallel on the straights. Chosen
-// to be CONTINUOUS (no jump) across each internal segment boundary -- the top
-// straight ends at PI and the left cap starts at PI - 0 = PI (not the
-// equivalent-but-numerically-different -PI a naive "-PI/2 - Q - PI/2" gives),
-// the left cap ends at PI - PI = 0 matching the bottom straight's constant 0,
-// and the right cap already starts and stays in the same -Q branch the
-// bottom straight's 0 leads into. This matters because circRacerTransform()'s
-// rotate(deg) is CSS-transitioned during replay (see APP_CHANGES.md): a jump
-// from a value like 180 to its equivalent -180 would interpolate the LONG way
-// around (a visible full-turn spin) instead of not moving at all. The one
-// remaining jump, at the lap boundary (Q wraps from qLoopTotal back to 0), is
-// unavoidable -- turning a bounded angle into an ever-increasing one would
-// break at the SAME kind of boundary eventually anyway -- but it only occurs
-// once per lap, at the start/finish line, not at every internal transition.
-function stadiumTangent(Q) {
-  const straight = 2 * STADIUM_HALF_STRAIGHT, total = qLoopTotal();
-  Q = ((Q % total) + total) % total;
-  if (Q < straight) return Math.PI;
-  Q -= straight;
-  if (Q < Math.PI) return Math.PI - Q;
-  Q -= Math.PI;
-  if (Q < straight) return 0;
-  Q -= straight;
-  return -Q;
+// Pointy-top axial -> pixel, relative to the track's own (cx,cy) and
+// hexSize (center-to-vertex distance).
+function hexToPixel(geom, q, r) {
+  return { x: geom.cx + geom.hexSize * Math.sqrt(3) * (q + r / 2), y: geom.cy + geom.hexSize * 1.5 * r };
 }
-// Shortest wraparound distance between two squarePos values a and b around a
-// lane of circ squares (a lap loops back to 0, so square circ-1 and square 0
-// are themselves adjacent).
-function circularSquareDist(a, b, circ) {
+// The 6 corner points of a pointy-top hex of the given size, centered at (cx,cy).
+function hexCorners(size, cx, cy) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    pts.push({ x: cx + size * Math.cos(a), y: cy + size * Math.sin(a) });
+  }
+  return pts;
+}
+// The two corner points of the hex edge a ship crosses moving from `hex`
+// toward `nextHex` -- i.e. that hex's own "front" edge/spine in the
+// direction of travel, as opposed to a line through its center. Each of the
+// 6 HEX_DIRS faces exactly one edge; this pairing is fixed by hexCorners()'s
+// own corner angle scheme (60*i-30) and doesn't depend on position.
+const HEX_EDGE_CORNERS = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]]; // indexed by HEX_DIRS
+function hexFrontEdge(geom, hex, nextHex) {
+  const dq = nextHex.q - hex.q, dr = nextHex.r - hex.r;
+  const dirIdx = HEX_DIRS.findIndex(d => d.dq === dq && d.dr === dr);
+  const { x, y } = hexToPixel(geom, hex.q, hex.r);
+  const corners = hexCorners(geom.hexSize * 0.96, x, y);
+  const [a, b] = HEX_EDGE_CORNERS[dirIdx >= 0 ? dirIdx : 0];
+  return [corners[a], corners[b]];
+}
+// Shortest wraparound distance between two hexPos values around a lane of
+// `circ` hexes (a lap loops back to 0, so the last hex and hex 0 are
+// themselves adjacent).
+function circularHexDist(a, b, circ) {
   const d = Math.abs(a - b) % circ;
   return Math.min(d, circ - d);
 }
-// House rule (see RULE_CHANGES.md): Racing Maneuvers can target a ship within
-// MANEUVER_RANGE_SQUARES squares (same lane or a nearby one), wrapping a lap
-// in the same lane. A different lane's position is carried into pA's own
-// lane's square units via the exact squarePosToQ()/qToSquarePos() real-arc
-// conversions (the same ones the Slip mechanic uses), then compared the same
-// way -- this keeps range consistent regardless of curve vs. straight square
-// size, rather than assuming every square is the same length.
-var MANEUVER_RANGE_SQUARES = 2;
-function squaresWithinManeuverRange(geom, pA, pB) {
+// Cube-coordinate hex distance -- the number of hex steps between any two
+// hexes, straight-line, regardless of lane.
+function hexDistance(a, b) {
+  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
+}
+// House rule (see RULE_CHANGES.md): Racing Maneuvers can target a ship
+// within MANEUVER_RANGE_HEXES hexes (same lane or a nearby one), wrapping a
+// lap in the same lane. A different lane's position is compared via real
+// hex distance (cube coordinates) -- exact between any two hexes directly,
+// simpler than the old system's same-lane Q-conversion workaround.
+var MANEUVER_RANGE_HEXES = 2;
+function hexesWithinManeuverRange(geom, pA, pB) {
   const laneA = (pA.lane || 1) - 1, laneB = (pB.lane || 1) - 1;
-  if (Math.abs(laneA - laneB) > MANEUVER_RANGE_SQUARES) return false;
-  const circA = geom.laneSquares[laneA] || 1;
-  if (laneA === laneB) return circularSquareDist(pA.squarePos || 0, pB.squarePos || 0, circA) <= MANEUVER_RANGE_SQUARES;
-  const qB = squarePosToQ(geom, laneB, pB.squarePos || 0);
-  const equivB = qToSquarePos(geom, laneA, qB);
-  return circularSquareDist(pA.squarePos || 0, equivB, circA) <= MANEUVER_RANGE_SQUARES;
+  if (Math.abs(laneA - laneB) > MANEUVER_RANGE_HEXES) return false;
+  if (laneA === laneB) {
+    const circA = geom.laneHexLists[laneA].length || 1;
+    return circularHexDist(pA.hexPos || 0, pB.hexPos || 0, circA) <= MANEUVER_RANGE_HEXES;
+  }
+  const hexA = geom.laneHexLists[laneA][(pA.hexPos || 0) % geom.laneHexLists[laneA].length];
+  const hexB = geom.laneHexLists[laneB][(pB.hexPos || 0) % geom.laneHexLists[laneB].length];
+  return hexDistance(hexA, hexB) <= MANEUVER_RANGE_HEXES;
 }
-// Curve/straight split (see RULE_CHANGES.md): lanes carry DIFFERENT total
-// cell counts (LANE_SQUARE_INCREMENT apart), used identically for gameplay
-// (laneSquaresArray()) and for the decorative tile count drawn below. The
-// straight portion's real length is the same for every lane, so it keeps one
-// SHARED cell count S across all 6 lanes; the entire per-lane growth is spent
-// on the two curves, split evenly between them. S is chosen once so a
-// straight cell and lane 1's curve cell come out close to the same length.
-function curveSplitForCourse(course) {
-  const laneSquares = laneSquaresArray(course); // already includes the +2*STRAIGHT_SQUARE_BONUS total
-  // Natural split uses the UNPADDED innerSquares (matching BASE_NATURAL_S's own
-  // baseline above) and the frozen BASE_STADIUM_HALF_STRAIGHT, then adds the
-  // bonus -- not laneSquares[0]/BASE_STADIUM_HALF_STRAIGHT directly, since
-  // those already carry the bonus baked in and would double-count it.
-  const naturalS = curveNaturalS(BASE_STADIUM_HALF_STRAIGHT, STADIUM_INNER_R, course.innerSquares || 50);
-  const S = naturalS + STRAIGHT_SQUARE_BONUS;
-  const curveCounts = laneSquares.map(h => (h - 2 * S) / 2);
-  return { S, curveCounts };
+// Shared geometry for one course's Circular Track drawing -- computed once
+// and reused both by the initial full SVG draw and by later incremental
+// position updates (replay), so the two never drift out of sync with each
+// other. Builds every lane's ordered hex ring, a global (q,r) lookup, and
+// per-hex Slip-neighbor tables (which adjacent-lane hexes each hex is
+// edge-adjacent to) -- everything movement/Slip/rendering need, computed
+// once so nothing downstream needs runtime trig.
+// A hex's structural position expressed as (completed legs) + (fraction
+// through the current leg) -- used ONLY to sanity-check candidate Slip
+// neighbors below, not as a distance metric. Since every leg (straight or
+// curve) grows by exactly +1 hex per lane step, this value's expected
+// change for "the same real structural position" one lane over is tiny
+// (well under 1) everywhere EXCEPT at the ring's own seam (hexPos 0 /
+// hexPos total-1), where the closed loop puts a hex from the FAR end of
+// the neighboring lane's ring genuinely hex-adjacent too (see
+// circTrackGeometry()'s slipNeighbors filter for why that specific
+// coincidental adjacency has to be excluded as a Slip target).
+function hexLegOffset(innerRing, straightLen, laneIdx0, hexPos) {
+  const S = straightLen, k = innerRing + laneIdx0;
+  const legLens = [k + S, k, k, k + S, k, k];
+  let n = hexPos, base = 0;
+  for (let leg = 0; leg < 6; leg++) {
+    const len = legLens[leg];
+    if (n < len) return base + n / len;
+    n -= len;
+    base += 1;
+  }
+  return base;
 }
-// Per-lane curve spine angles (0..PI), one array per lane -- EQUALLY spaced
-// within that lane (lane 2's 11 curve cells are each exactly 1/11 of the
-// curve, not a mix of sizes), independent of any other lane's own division.
-// Since lanes now generally have different counts, this does NOT nest the
-// way a shared/bisected grid would -- curveCellPoints() below handles the
-// resulting non-matching boundaries so tiles still meet with no gap.
-function curveSpineSets(course) {
-  const { S, curveCounts } = curveSplitForCourse(course);
-  const sets = curveCounts.map(count => Array.from({ length: count + 1 }, (_, k) => (k / count) * Math.PI));
-  return { S, curveCounts, sets };
-}
-// The angles at which lane `outerIdx`'s inner edge and lane `innerIdx`'s
-// outer edge must both place a vertex, restricted to [a0,a1] -- the union of
-// both lanes' own spine angles in that range, sorted and deduped. Since
-// lanes are independently and evenly spaced (see curveSpineSets()) neither
-// lane's angles are a subset of the other's, so a shared boundary can only
-// stay gapless if BOTH sides draw it from this same combined point list
-// instead of each using only its own 2 endpoints.
-function mergedBoundaryAngles(geom, innerIdx, outerIdx, a0, a1) {
-  const eps = 1e-9;
-  const merged = [...geom.spineSets[innerIdx], ...geom.spineSets[outerIdx]]
-    .filter(a => a > a0 - eps && a < a1 + eps).sort((x, y) => x - y);
-  const out = [a0];
-  for (const a of merged) if (a - out[out.length - 1] > eps && a1 - a > eps) out.push(a);
-  out.push(a1);
-  return out;
-}
-// One STRAIGHT cell's 4 corner points -- a true square, since rowGap ===
-// squareSpacing (see circTrackGeometry()). `which` is 0 for the top
-// straightaway, 1 for the bottom.
-function straightCellPoints(geom, which, row, col) {
-  const straight = 2 * STADIUM_HALF_STRAIGHT;
-  const base = which === 0 ? 0 : straight + Math.PI;
-  const Q0 = base + col * geom.squareSpacing, Q1 = base + (col + 1) * geom.squareSpacing;
-  const r = STADIUM_INNER_R + row * geom.rowGap, half = geom.rowGap / 2;
-  return [
-    stadiumPoint(geom.cx, geom.cy, r - half, Q0),
-    stadiumPoint(geom.cx, geom.cy, r - half, Q1),
-    stadiumPoint(geom.cx, geom.cy, r + half, Q1),
-    stadiumPoint(geom.cx, geom.cy, r + half, Q0),
-  ];
-}
-// One curve cell's corner points for lane laneIdx0, cell k (between that
-// lane's own spine angles k and k+1, from curveSpineSets()) -- a "curved
-// rectangle" (radial-sector trapezoid), equally sized within its own lane,
-// bounded by the two radial spines and the inner/outer radius halfway to
-// each neighboring lane -- the SAME half-band width a straight cell uses, so
-// straight and curve meet edge-to-edge with no seam at the transition.
-// Neither the inner nor outer edge is always just 2 points: since each lane
-// is independently and evenly divided (see curveSpineSets()), a neighboring
-// lane's spines generally fall at different angles than this lane's own, so
-// both edges are drawn from mergedBoundaryAngles() -- the combined point
-// list both this lane and its neighbor use for that shared boundary -- so
-// they always meet exactly, whichever side has more subdivisions there.
-function curveCellPoints(geom, which, laneIdx0, k) {
-  const spines = geom.spineSets[laneIdx0];
-  const a0 = spines[k], a1 = spines[k + 1];
-  const straight = 2 * STADIUM_HALF_STRAIGHT;
-  const base = which === 0 ? straight : 2 * straight + Math.PI;
-  const r = geom.radii[laneIdx0], half = geom.rowGap / 2;
-  const innerAngles = laneIdx0 > 0 ? mergedBoundaryAngles(geom, laneIdx0 - 1, laneIdx0, a0, a1) : [a0, a1];
-  const outerAngles = laneIdx0 < geom.spineSets.length - 1 ? mergedBoundaryAngles(geom, laneIdx0, laneIdx0 + 1, a0, a1) : [a0, a1];
-  const pts = [];
-  for (const a of innerAngles) pts.push(stadiumPoint(geom.cx, geom.cy, r - half, base + a));
-  for (let i = outerAngles.length - 1; i >= 0; i--) pts.push(stadiumPoint(geom.cx, geom.cy, r + half, base + outerAngles[i]));
-  return pts;
-}
-// Shared geometry for one course's Circular Track drawing -- computed once and
-// reused both by the initial full SVG draw and by later incremental position
-// updates (replay), so the two never drift out of sync with each other.
 function circTrackGeometry(course) {
-  const laneSquares = laneSquaresArray(course); // gameplay cell counts -- also the decorative tile count per lane
-  const { S, curveCounts, sets } = curveSpineSets(course);
-  const squareSpacing = (2 * STADIUM_HALF_STRAIGHT) / S; // straight cell length
-  const rowGap = squareSpacing; // square cells: radial (lane) spacing matches cell length
-  const radii = laneSquares.map((_, i) => STADIUM_INNER_R + i * rowGap);
-  const outerR = radii[radii.length - 1];
-  // Margin needs to clear a cell's own extent past its center, not just the
-  // lane radius -- a tile centered exactly at outerR still sticks out another half-cell.
-  const margin = rowGap / 2 + 10;
-  const vbW = 2 * (STADIUM_HALF_STRAIGHT + outerR + margin), vbH = 2 * (outerR + margin);
-  const cx = vbW / 2, cy = vbH / 2; // always exactly centered on this render's own viewBox
-  // Icon size is a fraction of a straight square's own side length (curve
-  // squares run close to the same size by construction -- see
-  // curveSplitForCourse()) -- comfortably smaller than the square itself so
-  // the icon fits inside it with a little margin, not overflowing into
-  // neighboring squares.
-  return { laneSquares, rowGap, squareSpacing, radii, outerR, vbW, vbH, cx, cy, S, curveCounts, spineSets: sets, iconSize: squareSpacing * 0.8 };
+  const { innerRing, straightLen } = hexRingParamsForCourse(course);
+  const lanes = course.lanes || 6;
+  const laneHexLists = [];
+  const lookup = new Map();
+  for (let lane = 0; lane < lanes; lane++) {
+    const ring = traceLaneRing(innerRing + lane, straightLen);
+    laneHexLists.push(ring);
+    ring.forEach((h, idx) => lookup.set(hexKey(h.q, h.r), { lane, index: idx }));
+  }
+  const slipNeighbors = laneHexLists.map(ring => ring.map(() => ({ outward: [], inward: [] })));
+  for (let lane = 0; lane < lanes; lane++) {
+    laneHexLists[lane].forEach((h, idx) => {
+      const sn = slipNeighbors[lane][idx];
+      const fromOffset = hexLegOffset(innerRing, straightLen, lane, idx);
+      for (const dir of HEX_DIRS) {
+        const hit = lookup.get(hexKey(h.q + dir.dq, h.r + dir.dr));
+        if (!hit) continue;
+        if (hit.lane !== lane + 1 && hit.lane !== lane - 1) continue;
+        // The ring closing back on itself makes a hex right at the START
+        // of the walk (hexPos near 0) ALSO true-hex-adjacent to a hex right
+        // at the END of the neighboring lane's ring (hexPos near its own
+        // total-1) -- real (q,r) adjacency, but not the "same real
+        // position one lane over" a Slip is supposed to reach: taking it
+        // would let a single lane-change land almost a full lap ahead by
+        // pure coordinate-labeling coincidence, not real travel. Structural
+        // offset catches this cleanly (a real corner candidate's offset
+        // never drifts more than a fraction of 1; this artifact drifts by
+        // nearly a full 6-leg lap) without touching the proven geometry.
+        const toOffset = hexLegOffset(innerRing, straightLen, hit.lane, hit.index);
+        if (Math.abs(toOffset - fromOffset) > 1.5) continue;
+        if (hit.lane === lane + 1) sn.outward.push(hit.index);
+        else sn.inward.push(hit.index);
+      }
+    });
+  }
+  const hexSize = 16;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  laneHexLists.forEach(ring => ring.forEach(h => {
+    const x = hexSize * Math.sqrt(3) * (h.q + h.r / 2), y = hexSize * 1.5 * h.r;
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }));
+  const margin = hexSize + 10;
+  const vbW = (maxX - minX) + 2 * margin, vbH = (maxY - minY) + 2 * margin;
+  const cx = margin - minX, cy = margin - minY;
+  return { lanes, innerRing, straightLen, laneHexLists, lookup, slipNeighbors, hexSize, cx, cy, vbW, vbH, iconSize: hexSize * 1.3 };
 }
-// Exact real Q for gameplay squarePos N in lane laneIdx0 -- indexes directly
-// into the SAME decorative segment structure renderCircularTrackSvg() draws
-// (S shared straight squares, then that lane's own curveCounts[] curve
-// squares, repeated for the second straight/curve) rather than approximating
-// through squarePos's fraction of the lap's AVERAGE square size
-// (perimeter(r)/laneSquares[lane]) -- that average generally does NOT match
-// the straight's own square width once a lane's curve squares differ enough
-// in real size from the straight's, which put ship positions visibly off (by
-// a whole square, growing outward) from lane 3 on (see RULE_CHANGES.md/
-// APP_CHANGES.md). squarePos is always an integer square index here, so this
-// needs no snapping/rounding -- it's exact by construction. Returns the
-// square's CENTER (matching straightCellPoints()'s [col*spacing,
-// (col+1)*spacing] span and curveCellPoints()'s spine-midpoint span) so a
-// racer icon lands centered in its square rather than pinned to its leading
-// edge.
-function squarePosToQ(geom, laneIdx0, squarePos) {
-  const S = geom.S, C = geom.curveCounts[laneIdx0], circ = geom.laneSquares[laneIdx0] || 1;
-  const straight = 2 * STADIUM_HALF_STRAIGHT;
-  let n = ((squarePos % circ) + circ) % circ;
-  if (n < S) return (n + 0.5) * geom.squareSpacing;
-  n -= S;
-  const spines = geom.spineSets[laneIdx0];
-  if (n < C) return straight + (spines[n] + spines[n + 1]) / 2;
-  n -= C;
-  if (n < S) return straight + Math.PI + (n + 0.5) * geom.squareSpacing;
-  n -= S;
-  return 2 * straight + Math.PI + (spines[n] + spines[n + 1]) / 2;
-}
-// The Q of square `squarePos`'s LEADING (forward) edge -- the boundary it
-// shares with the next square in its own lane -- as opposed to
-// squarePosToQ()'s CENTER. This is the actual corner point a diagonal Slip
-// step touches in the adjacent lane (see stepDiagonal()): on the straight,
-// every lane shares the exact same grid (same S, same squareSpacing), so a
-// square's leading edge and its neighbor's center happen to floor to the
-// same destination index there, which is what masked this for so long -- but
-// on the curve, where lanes have DIFFERENT subdivision counts (see
-// curveSplitForCourse()), a square's own leading-edge boundary and its
-// same-lane neighbor's center are NOT the same point, and floor-converting
-// the wrong one into the adjacent lane picks a cell that doesn't actually
-// touch the origin at all (see RULE_CHANGES.md).
-function squareLeadingEdgeQ(geom, laneIdx0, squarePos) {
-  const S = geom.S, C = geom.curveCounts[laneIdx0], circ = geom.laneSquares[laneIdx0] || 1;
-  const straight = 2 * STADIUM_HALF_STRAIGHT;
-  let n = ((squarePos % circ) + circ) % circ;
-  if (n < S) return (n + 1) * geom.squareSpacing;
-  n -= S;
-  const spines = geom.spineSets[laneIdx0];
-  if (n < C) return straight + spines[n + 1];
-  n -= C;
-  if (n < S) return straight + Math.PI + (n + 1) * geom.squareSpacing;
-  n -= S;
-  return 2 * straight + Math.PI + spines[n + 1];
-}
-// Exact inverse of squarePosToQ() -- given a real Q, finds which gameplay
-// square (integer index) in lane laneIdx0 contains it. Curve cells are
-// equally sized within a lane (see curveSpineSets()), so the curve branches
-// divide directly by Math.PI/C rather than searching geom.spineSets -- exact,
-// same as squarePosToQ(), and NOT the old average-density approximation
-// (t/perimeter(r)*laneSquares[lane]) that a Q/t-based Slip conversion used to
-// round through, which drifted off by whole squares once a lane's curve
-// squares differ enough in real size from the straight's (see
-// RULE_CHANGES.md/APP_CHANGES.md).
-function qToSquarePos(geom, laneIdx0, Q) {
-  const S = geom.S, C = geom.curveCounts[laneIdx0];
-  const straight = 2 * STADIUM_HALF_STRAIGHT, total = 2 * straight + 2 * Math.PI;
-  Q = ((Q % total) + total) % total;
-  if (Q < straight) return Math.min(S - 1, Math.floor(Q / geom.squareSpacing));
-  Q -= straight;
-  if (Q < Math.PI) return S + Math.min(C - 1, Math.floor(Q / (Math.PI / C)));
-  Q -= Math.PI;
-  if (Q < straight) return S + C + Math.min(S - 1, Math.floor(Q / geom.squareSpacing));
-  Q -= straight;
-  return S + C + S + Math.min(C - 1, Math.floor(Q / (Math.PI / C)));
-}
-// Whether gameplay square N in lane laneIdx0 is a straight square or a curve
-// square -- same S/curveCounts[] segment structure as squarePosToQ(), just
-// returning a boolean classification instead of a real Q. Used by the
-// Circular Track Slip A/D rule (see RULE_CHANGES.md) to walk every square a
-// Leg's projected movement passes through.
-function isSquareOnStraight(geom, laneIdx0, squarePos) {
-  const S = geom.S, C = geom.curveCounts[laneIdx0], circ = geom.laneSquares[laneIdx0] || 1;
-  let n = ((squarePos % circ) + circ) % circ;
-  if (n < S) return true;
-  n -= S;
-  if (n < C) return false;
-  n -= C;
-  return n < S;
+// Whether hex `hexPos` in lane laneIdx0 is a straight-section hex or a
+// curved-cap hex -- tagged once at construction time (traceLaneRing()).
+// Used by the Circular Track Slip A/D rule (see RULE_CHANGES.md) to walk
+// every hex a Leg's projected movement passes through.
+function isHexOnStraight(geom, laneIdx0, hexPos) {
+  return geom.laneHexLists[laneIdx0][hexPos].isStraight;
 }
 // One atomic unit of ordinary forward movement, staying in the same lane --
 // used by resolveSlipPath() below. Returns the new position and whether a
-// lap was completed by this single square (a single square can cross the
-// lap boundary at most once).
-function stepForward(laneSquaresArr, laneIdx0, squarePos) {
-  const circ = laneSquaresArr[laneIdx0];
-  const lapGained = squarePos + 1 >= circ ? 1 : 0;
-  return { laneIdx0, squarePos: (squarePos + 1) % circ, lapGained };
+// lap was completed by this single hex (a single hex can cross the lap
+// boundary at most once).
+function stepForward(geom, laneIdx0, hexPos) {
+  const circ = geom.laneHexLists[laneIdx0].length;
+  const lapGained = hexPos + 1 >= circ ? 1 : 0;
+  return { laneIdx0, hexPos: (hexPos + 1) % circ, lapGained };
 }
-// One atomic unit of Slip movement -- a diagonal, corner-touching step: one
-// square forward (in the CURRENT lane's own square-width, same as ordinary
-// movement) AND one lane over, at once (see RULE_CHANGES.md). Used by
-// resolveSlipPath() below.
-function stepDiagonal(geom, laneSquaresArr, laneIdx0, squarePos, dir) {
-  const circ = laneSquaresArr[laneIdx0];
-  const lapGained = squarePos + 1 >= circ ? 1 : 0;
-  const nextLaneIdx0 = laneIdx0 + dir;
-  const advancedQ = squareLeadingEdgeQ(geom, laneIdx0, squarePos);
-  return { laneIdx0: nextLaneIdx0, squarePos: qToSquarePos(geom, nextLaneIdx0, advancedQ), lapGained };
+// Real forward advance contributed by ONE atomic step -- what
+// resolveSlipPath()'s longest-path DP (below) sums and maximizes to decide
+// where to interleave a Slip. Scored as the change in hexLegOffset()
+// (completed legs + fraction through the current leg) between the two
+// hexes -- the SAME structural measure used to filter slipNeighbors, now
+// also used to VALUE them, so a hex-adjacent step is scored by how much
+// real ground it actually covers, not by an incidental index number.
+//
+// (Two earlier versions of this function each got one thing right and one
+// thing wrong. The first expressed every hex as a FRACTION of its own
+// lane's total hex count (hexPos/laneLen) -- correct proportionality
+// between straights and curves, but taking a same-index candidate into a
+// longer destination lane makes that fraction slightly SMALLER even
+// though nothing regressed, and the modular wraparound needed to handle
+// genuine lap completions misread that tiny decrease as "advanced almost
+// a full lap" -- a fake-huge score that made the DP pick a stationary
+// candidate over a genuinely better one. The second switched to raw
+// hex-INDEX delta -- no wraparound trap, and correct on the straights
+// (where the two lanes' indices track closely, deltas of 0/1), but wrong
+// on the curves: a curve leg's length scales with the lane's own ring
+// level directly (not lane-length-plus-a-shared-constant, the way a
+// straight does), so the exact same real structural position can be
+// several raw index numbers apart between adjacent lanes partway through
+// a curve -- scoring that raw gap as real distance produced deeply
+// negative totals for any Leg that slipped through a curve, exactly
+// backwards from the real Slingshot-style advantage of hugging the inside
+// line through a turn. hexLegOffset() stays correctly small (well under 1)
+// for any genuine adjacent candidate everywhere on the ring, straight or
+// curve, so a plain subtraction -- no modular wraparound needed, since
+// circTrackGeometry()'s slipNeighbors filter already excludes the one case
+// (the ring's own seam) where two truly hex-adjacent hexes have very
+// different offsets -- is the correct, uniform way to score every step.
+// Caught via a user-flagged race where a heavy inward Slip through a curve
+// landed far short of the demonstrably better "hug the inside line, gain
+// ground exiting the curve" path the user had worked out by hand.)
+function hexStepAdvance(geom, fromLaneIdx0, fromHexPos, toLaneIdx0, toHexPos) {
+  return hexLegOffset(geom.innerRing, geom.straightLen, toLaneIdx0, toHexPos) -
+    hexLegOffset(geom.innerRing, geom.straightLen, fromLaneIdx0, fromHexPos);
 }
-// Real forward Q-distance from fromQ to toQ, wrap-aware -- always the SHORT
-// way around the loop, since a single atomic step never covers anywhere
-// close to a full lap.
-function qAdvance(fromQ, toQ) {
-  const total = qLoopTotal();
-  return ((toQ - fromQ) % total + total) % total;
-}
-// House rule (see RULE_CHANGES.md): a Slip's squares are interleaved with
-// ordinary forward movement to actually maximize the ship's real distance
-// covered this Leg, rather than assuming "all Slip squares first" or "all
-// Slip squares last" is always optimal. Adjacent lanes' squares are only
-// close to, not exactly, the same real length (see curveSplitForCourse()),
-// and a diagonal hop lands on whichever square in the new lane contains the
-// target Q -- not necessarily a same-length square -- so which option covers
-// more real ground can genuinely go either way depending on how the two
-// lanes' grids happen to align right there.
+// House rule (see RULE_CHANGES.md): a Slip's hexes are interleaved with
+// ordinary forward movement to actually maximize the ship's real progress
+// around the track this Leg, rather than assuming "all Slip hexes first"
+// is always optimal. Even though every hex is the same real size, WHICH
+// hex a "forward" step reaches depends on the current lane/ring, so
+// different interleavings of forward-vs-diagonal steps land on genuinely
+// different final hexes -- some further along than others -- exactly the
+// same class of issue the original square-grid bug had.
 //
 // This is a longest-path DP, not a greedy one-step lookahead (a single-step
-// "whichever is bigger right now" comparison can lock in a choice that looks
-// better immediately but blocks a much better option two steps later --
-// reported directly by a replay trail that visibly hugged a curve's inner
-// squares instead of the wider, faster arc it could have taken). The state
-// at step i is fully described by k = how many of the slipSquares diagonal
-// hops have been used so far (the current lane is just originLane + dir*k,
-// with no other freedom), so only squarePos and the true best cumulative
-// real distance need tracking per (i, k) -- and since Q strictly increases
-// with squarePos within a lane, whichever candidate for a given (i, k) has
-// covered the most real distance so far is ALSO the one every future step
-// (forward or diagonal) does at least as well from, so keeping only that
-// max-distance candidate per (i, k) and discarding the rest is lossless: the
-// standard "keep the winner, forget the pretenders" DP guarantee. Movement
-// and slipSquares are both small (a handful to a few dozen), so this is
-// exhaustive-cheap. Deterministic given (origin, movement, Slip squares,
-// direction) -- the same inputs recorded in history -- so a replay can
-// exactly re-derive the original path rather than approximate it.
-function resolveSlipPath(geom, laneSquaresArr, originLaneIdx0, originSquarePos, movement, slipSquares, dir) {
-  const maxLaneIdx0 = laneSquaresArr.length - 1;
-  // states[k] = the best (max real distance covered) way to have used
-  // exactly k diagonal Slip squares after the steps processed so far.
-  let states = new Array(slipSquares + 1).fill(null);
-  states[0] = { laneIdx0: originLaneIdx0, squarePos: originSquarePos, dist: 0, lapsGained: 0, prev: null, step: null };
+// "whichever is bigger right now" comparison can lock in a choice that
+// blocks a much better option two steps later). The state at step i is
+// fully described by k = how many of the slipHexes diagonal hops have been
+// used so far (the current lane is just originLane + dir*k), so only hexPos
+// and the true best cumulative advance (via hexStepAdvance() -- real,
+// cross-lane-comparable progress) need tracking per (i, k); keeping
+// only the max-advance candidate per (i, k) and discarding the rest is
+// lossless (same DP guarantee as the old square-grid version). A hex-ring
+// corner can have up to 3 valid diagonal neighbor candidates (see
+// circTrackGeometry()'s slipNeighbors) -- the DP tries all of them.
+function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes, dir) {
+  const maxLaneIdx0 = geom.laneHexLists.length - 1;
+  // DP state is keyed by (k, laneIdx0, hexPos) -- diagonal-hops-used PLUS
+  // exact physical position -- not just (k) alone. Collapsing on (k) alone
+  // is unsound: two different paths can tie in cumulative distance-so-far
+  // while sitting on genuinely different hexes, and which one is better
+  // depends on the lane you're now in (forward-step Q advance differs per
+  // lane) -- discarding the "loser" of such a tie can throw away a state
+  // that leads to a strictly better total. Keying by exact position is safe
+  // because from an identical physical position, the best possible future
+  // is a pure function of that position plus remaining moves/slips,
+  // independent of how you got there -- a genuine DP state.
+  let states = new Array(slipHexes + 1).fill(null).map(() => new Map());
+  states[0].set(originLaneIdx0 + "," + originHexPos, { laneIdx0: originLaneIdx0, hexPos: originHexPos, dist: 0, lapsGained: 0, prev: null, step: null });
   for (let i = 0; i < movement; i++) {
-    const next = new Array(slipSquares + 1).fill(null);
-    for (let k = 0; k <= Math.min(i, slipSquares); k++) {
-      const st = states[k];
-      if (!st) continue;
-      const curQ = squarePosToQ(geom, st.laneIdx0, st.squarePos);
-      const fwd = stepForward(laneSquaresArr, st.laneIdx0, st.squarePos);
-      const fwdDist = st.dist + qAdvance(curQ, squarePosToQ(geom, fwd.laneIdx0, fwd.squarePos));
-      if (!next[k] || fwdDist > next[k].dist) {
-        next[k] = { laneIdx0: fwd.laneIdx0, squarePos: fwd.squarePos, dist: fwdDist, lapsGained: st.lapsGained + fwd.lapGained, prev: st, step: { laneIdx0: fwd.laneIdx0, squarePos: fwd.squarePos, isSlip: false } };
-      }
-      // Defensive: a Slip should never be able to cross past the outermost
-      // or innermost lane (lockDeclarations() clamps for exactly this
-      // reason in real play), but this also reconstructs from RECORDED
-      // history/declared values, which could in principle be malformed
-      // (corrupted save data, a record from some future rule change) --
-      // this bounds check just makes that option unavailable rather than
-      // indexing off the end of the lane arrays.
-      if (k < slipSquares && st.laneIdx0 + dir >= 0 && st.laneIdx0 + dir <= maxLaneIdx0) {
-        const diag = stepDiagonal(geom, laneSquaresArr, st.laneIdx0, st.squarePos, dir);
-        const diagDist = st.dist + qAdvance(curQ, squarePosToQ(geom, diag.laneIdx0, diag.squarePos));
-        if (!next[k + 1] || diagDist > next[k + 1].dist) {
-          next[k + 1] = { laneIdx0: diag.laneIdx0, squarePos: diag.squarePos, dist: diagDist, lapsGained: st.lapsGained + diag.lapGained, prev: st, step: { laneIdx0: diag.laneIdx0, squarePos: diag.squarePos, isSlip: true } };
+    const next = new Array(slipHexes + 1).fill(null).map(() => new Map());
+    for (let k = 0; k <= Math.min(i, slipHexes); k++) {
+      states[k].forEach(st => {
+        const fwd = stepForward(geom, st.laneIdx0, st.hexPos);
+        // Score against the UNWRAPPED hexPos+1, not fwd.hexPos (which wraps
+        // to 0 on a lap completion) -- hexLegOffset() treats an input equal
+        // to the lane's own total as exactly one full lap (verified: its
+        // leg-by-leg walk falls through to base=6), so this scores a
+        // lap-completing step correctly without a special case, instead of
+        // reading it as a huge regression back to hexPos 0.
+        const fwdDist = st.dist + hexStepAdvance(geom, st.laneIdx0, st.hexPos, fwd.laneIdx0, st.hexPos + 1);
+        const fwdKey = fwd.laneIdx0 + "," + fwd.hexPos;
+        const existingFwd = next[k].get(fwdKey);
+        if (!existingFwd || fwdDist > existingFwd.dist) {
+          next[k].set(fwdKey, { laneIdx0: fwd.laneIdx0, hexPos: fwd.hexPos, dist: fwdDist, lapsGained: st.lapsGained + fwd.lapGained, prev: st, step: { laneIdx0: fwd.laneIdx0, hexPos: fwd.hexPos, isSlip: false } });
         }
-      }
+        // Defensive bounds check (see the old system's own equivalent): a
+        // live declared Slip is always pre-clamped to available lanes (see
+        // lockDeclarations()), but this also reconstructs from RECORDED
+        // history, which could in principle be malformed -- this just makes
+        // the option unavailable rather than indexing off the end.
+        if (k < slipHexes && st.laneIdx0 + dir >= 0 && st.laneIdx0 + dir <= maxLaneIdx0) {
+          const sn = geom.slipNeighbors[st.laneIdx0][st.hexPos];
+          const candidates = dir > 0 ? sn.outward : sn.inward;
+          const circHere = geom.laneHexLists[st.laneIdx0].length;
+          const lapGained = st.hexPos + 1 >= circHere ? 1 : 0;
+          const diagLaneIdx0 = st.laneIdx0 + dir;
+          candidates.forEach(candHexPos => {
+            const diagDist = st.dist + hexStepAdvance(geom, st.laneIdx0, st.hexPos, diagLaneIdx0, candHexPos);
+            const diagKey = diagLaneIdx0 + "," + candHexPos;
+            const existingDiag = next[k + 1].get(diagKey);
+            if (!existingDiag || diagDist > existingDiag.dist) {
+              next[k + 1].set(diagKey, { laneIdx0: diagLaneIdx0, hexPos: candHexPos, dist: diagDist, lapsGained: st.lapsGained + lapGained, prev: st, step: { laneIdx0: diagLaneIdx0, hexPos: candHexPos, isSlip: true } });
+            }
+          });
+        }
+      });
     }
     states = next;
   }
   // Defensive: states[0] is always reachable (the unconditional forward
-  // transition keeps it populated every step), but a requested slipSquares
-  // that isn't actually achievable within the lane bounds along the way --
-  // possible only from malformed/legacy inputs (see the bounds-check comment
-  // above), never from a live, freshly-declared Slip -- leaves states[k]
-  // null for the unreachable k and every k above it. Gracefully degrade to
-  // the largest achievable k instead of crashing, the same way the old
-  // implementation silently used fewer diagonal squares than requested
-  // rather than erroring out.
-  let k = slipSquares;
-  while (k > 0 && !states[k]) k--;
-  const final = states[k];
+  // transition keeps it populated every step), but a requested slipHexes
+  // that isn't actually achievable within the lane bounds along the way
+  // (malformed/legacy inputs only, never a live declared Slip) leaves
+  // states[k] empty for the unreachable k and every k above it. Gracefully
+  // degrade to the largest achievable k instead of crashing.
+  let k = slipHexes;
+  while (k > 0 && states[k].size === 0) k--;
+  let final = null;
+  states[k].forEach(st => { if (!final || st.dist > final.dist) final = st; });
   const steps = [];
   for (let cur = final; cur && cur.step; cur = cur.prev) steps.push(cur.step);
   steps.reverse();
-  return { steps, finalLaneIdx0: final.laneIdx0, finalSquarePos: final.squarePos, lapsGained: final.lapsGained };
+  return { steps, finalLaneIdx0: final.laneIdx0, finalHexPos: final.hexPos, lapsGained: final.lapsGained };
 }
-// Every intermediate square a racer's <g> should visit while animating
-// through each of its Legs (see App.playRaceReplay(), RULE_CHANGES.md/
-// APP_CHANGES.md) -- walking square by square instead of one straight-line
-// transition from a Leg's start position to its end position, since a
-// straight chord cuts across a curve instead of following the track.
-// Returns one array of {lane,squarePos} waypoints per Leg.
-//
-// For a Leg with a recorded slipSquares field, this re-runs the EXACT same
-// deterministic algorithm finishLeg() used to resolve it (resolveSlipPath())
-// with that Leg's own recorded movement/slipSquares/direction -- a perfect,
-// step-for-step reconstruction, since the same inputs always produce the
-// same path. If that re-simulation doesn't land exactly on the Leg's
-// authoritative recorded (lane, squarePos) -- meaning it was recorded under
-// an earlier rule version, where the same inputs would have resolved
-// differently (this rule has changed more than once, and old in-progress
-// races mix Legs recorded under different versions of it) -- or the record
-// predates the slipSquares field entirely (old saved races, still sitting in
-// localStorage), it falls back to a diagonal hop per lane crossed FIRST
-// (from the origin square, using the same exact stepDiagonal() primitive),
-// then however many forward steps are actually needed, in the destination
-// lane, to land exactly on the Leg's recorded position -- that forward count
-// is DERIVED from the real gap left after the hops, never assumed and then
-// force-corrected, so every step is a genuine, valid move and nothing ever
-// needs overriding. Either way the reconstruction always lands exactly on
-// the Leg's authoritative recorded position with a connected,
-// corner-touching path the whole way.
-function buildCircularLegWaypoints(p, laneSquares, geom) {
+// Every intermediate hex a racer's <g> should visit while animating through
+// each of its Legs (see App.playRaceReplay(), RULE_CHANGES.md/APP_CHANGES.md)
+// -- walking hex by hex instead of one straight-line transition from a Leg's
+// start position to its end position, since a straight chord cuts across a
+// curve instead of following the track. Returns one array of {lane,hexPos}
+// waypoints per Leg, by re-running the exact same deterministic
+// resolveSlipPath() finishLeg() used to resolve it -- a perfect, step-for-
+// step reconstruction, since the same inputs always produce the same path,
+// PROVIDED the algorithm hasn't changed since that Leg was recorded (it has,
+// at least once already, mid-development -- see RULE_CHANGES.md's
+// longest-path DP entry). If the recomputed path doesn't land exactly on
+// the Leg's authoritative recorded position, only the FINAL waypoint is
+// snapped to match it -- the replay always ends where the ship actually is,
+// even if an older Leg's lead-up animation isn't a perfect re-derivation.
+function buildCircularLegWaypoints(p, geom) {
   const h = p.history || [];
   const perLeg = [];
-  let fromLane = p.startLane || 1, fromSquarePos = p.startSquarePos || 0, fromLaps = 0;
+  let fromLane = p.startLane || 1, fromHexPos = p.startHexPos || 0;
   for (let L = 0; L < h.length; L++) {
     const rec = h[L];
     const toLane = rec.lane, movement = rec.movement || 0;
-    let waypoints = [];
-    if (rec.slipSquares !== undefined) {
-      const dir = toLane >= fromLane ? 1 : -1;
-      const path = resolveSlipPath(geom, laneSquares, fromLane - 1, fromSquarePos, movement, rec.slipSquares, dir);
-      if (path.finalLaneIdx0 + 1 === toLane && path.finalSquarePos === rec.squarePos) {
-        waypoints = path.steps.map(s => ({ lane: s.laneIdx0 + 1, squarePos: s.squarePos }));
-      }
-    }
-    if (!waypoints.length) {
-      if (toLane === fromLane) {
-        const circ = laneSquares[fromLane - 1] || 1;
-        let cur = fromSquarePos;
-        for (let s = 0; s < movement; s++) {
-          cur = (cur + 1) % circ;
-          waypoints.push({ lane: fromLane, squarePos: cur });
-        }
-      } else {
-        // A Leg recorded under an earlier rule version (this rule has
-        // changed more than once today, and old in-progress races mix Legs
-        // recorded under different versions of it): walk it DISCRETELY --
-        // one diagonal hop per lane crossed FIRST, using the exact same
-        // stepDiagonal() primitive resolveSlipPath() itself uses (not a
-        // continuous Q interpolation -- see RULE_CHANGES.md for why that
-        // used to under/overshoot on the curve), then as many forward steps
-        // as needed, IN THE DESTINATION LANE, to land exactly on the Leg's
-        // authoritative recorded position. Deliberately not assuming
-        // exactly `movement - slipSquares` forward steps and then
-        // overriding/snapping the final waypoint if that guess doesn't land
-        // right -- that guess isn't even meaningful for a Leg recorded
-        // under a genuinely different rule, and forcing a mismatched final
-        // waypoint created a visible backward jump right at the end. Instead
-        // the forward count is DERIVED from the actual gap left after the
-        // hops, so every single step -- including the last -- is a real,
-        // valid, corner-touching or same-lane move; nothing is ever forced.
-        const numHops = Math.abs(toLane - fromLane);
-        const dir = toLane > fromLane ? 1 : -1;
-        let laneIdx0 = fromLane - 1, squarePos = fromSquarePos;
-        for (let i = 0; i < numHops; i++) {
-          const r = stepDiagonal(geom, laneSquares, laneIdx0, squarePos, dir);
-          laneIdx0 = r.laneIdx0; squarePos = r.squarePos;
-          waypoints.push({ lane: laneIdx0 + 1, squarePos });
-        }
-        const circTo = laneSquares[laneIdx0];
-        const neededForward = ((rec.squarePos - squarePos) % circTo + circTo) % circTo;
-        for (let s = 0; s < neededForward; s++) {
-          const r = stepForward(laneSquares, laneIdx0, squarePos);
-          laneIdx0 = r.laneIdx0; squarePos = r.squarePos;
-          waypoints.push({ lane: laneIdx0 + 1, squarePos });
-        }
-      }
-    }
-    if (!waypoints.length) waypoints.push({ lane: toLane, squarePos: rec.squarePos });
+    const dir = toLane >= fromLane ? 1 : -1;
+    const path = resolveSlipPath(geom, fromLane - 1, fromHexPos, movement, rec.slipHexes || 0, dir);
+    const waypoints = path.steps.map(s => ({ lane: s.laneIdx0 + 1, hexPos: s.hexPos }));
+    if (!waypoints.length) waypoints.push({ lane: toLane, hexPos: rec.hexPos });
+    const last = waypoints[waypoints.length - 1];
+    if (last.lane !== toLane || last.hexPos !== rec.hexPos) waypoints[waypoints.length - 1] = { lane: toLane, hexPos: rec.hexPos };
     perLeg.push(waypoints);
-    fromLane = toLane; fromSquarePos = rec.squarePos; fromLaps = rec.laps || 0;
+    fromLane = toLane; fromHexPos = rec.hexPos;
   }
   return perLeg;
 }
-// One racer's placement on the track for a given (lane, squarePos) snapshot --
-// used for both the initial draw and later incremental transform updates, so
-// a replay step only has to change this string, not rebuild any markup.
+// One racer's placement on the track for a given (lane, hexPos) snapshot --
+// used for both the initial draw and later incremental transform updates,
+// so a replay step only has to change this string, not rebuild any markup.
 function circRacerTransform(geom, p, prevRotDeg) {
-  const laneIdx0 = Math.min(Math.max((p.lane || 1) - 1, 0), geom.radii.length - 1);
-  const r = geom.radii[laneIdx0];
-  const Q = squarePosToQ(geom, laneIdx0, p.squarePos || 0);
-  const { x, y } = stadiumPoint(geom.cx, geom.cy, r, Q);
-  // Icon art faces "up" natively (see .boardicon in style.css) -- +90 turns
-  // that into the tangent's own 0deg-is-east convention.
-  let rotDeg = stadiumTangent(Q) * 180 / Math.PI + 90;
-  // If given the racer's CURRENTLY-displayed rotation (see circularSnapshotAt()
-  // in App.playRaceReplay()), re-express rotDeg as the equivalent (mod 360)
-  // angle closest to it, so a CSS transition between them always animates the
-  // short way around -- e.g. 179 -> 181 instead of the numerically-different
-  // but visually-identical 179 -> -179, which would spin the long way through
-  // 0. stadiumTangent() is already made continuous across every INTERNAL
-  // segment boundary (see its own comment); this catches the one remaining
-  // jump, once per lap at the start/finish line, plus any other rotation
-  // source (e.g. a replay reset) that isn't already guaranteed continuous.
+  const laneIdx0 = Math.min(Math.max((p.lane || 1) - 1, 0), geom.laneHexLists.length - 1);
+  const ring = geom.laneHexLists[laneIdx0];
+  const hexPos = ((p.hexPos || 0) % ring.length + ring.length) % ring.length;
+  const hex = ring[hexPos];
+  const { x, y } = hexToPixel(geom, hex.q, hex.r);
+  // Icon art faces "up" natively (see .boardicon in style.css) -- facing
+  // direction is just the pixel-space delta toward the NEXT hex in this
+  // lane's own sequence (no trig needed, the grid is discrete), +90 to turn
+  // that into the standard 0deg-is-east convention.
+  const next = ring[(hexPos + 1) % ring.length];
+  const nextPt = hexToPixel(geom, next.q, next.r);
+  let rotDeg = Math.atan2(nextPt.y - y, nextPt.x - x) * 180 / Math.PI + 90;
+  // If given the racer's CURRENTLY-displayed rotation (see App.playRaceReplay()),
+  // re-express rotDeg as the equivalent (mod 360) angle closest to it, so a
+  // CSS transition between them always animates the short way around --
+  // e.g. 179 -> 181 instead of the numerically-different but
+  // visually-identical 179 -> -179, which would spin the long way through 0.
   if (prevRotDeg != null) rotDeg += Math.round((prevRotDeg - rotDeg) / 360) * 360;
   return { laneIdx0, transform: `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${rotDeg.toFixed(1)})` };
 }
-/* Circular Track standings view: an oblong (stadium) track, two straightaways
-   with a curve on each end, one lane per Division lane. The straight portion
-   is tiled with true SQUARES (straightCellPoints()) -- since every lane
-   shares the same straight cell count S, adjacent lanes' squares simply share
-   an edge with no offset math needed. The curve portion is tiled with "curved
-   rectangles" (radial-sector trapezoids, curveCellPoints()) instead, EQUALLY
-   sized within each lane -- lane 2's 11 curve cells are each exactly 1/11 of
-   that curve, not a mix of sizes (see curveSpineSets()) -- since different
-   lanes carry different curve cell counts (see RULE_CHANGES.md/
-   APP_CHANGES.md), this means neighboring lanes' radial spines generally
-   don't land at the same angles. Gapless tiling is instead guaranteed per
-   shared boundary: the edge between lane R and lane R+1 is drawn from
-   mergedBoundaryAngles(), the combined set of both lanes' own angles in that
-   stretch, so whichever side has more subdivisions there, both sides trace
-   the exact same points. Both straight and curve cells use the identical
-   half-band radial extent, so they meet edge-to-edge with no seam at the
-   transition either. Racer icons snap to the center of whichever cell their
-   position falls in (circRacerTransform()/snapQToCell()). Each racer `<g>`
-   gets a stable id (`circracer-<id>`) and a CSS transform transition (see
-   style.css), the same way the linear board's icons/bars only actually
-   animate when something moves their EXISTING DOM node rather than
-   recreating it -- see App.playRaceReplay(), which updates these transforms
-   directly instead of regenerating this whole SVG every step. */
+/* Circular Track standings view: a real hex-grid stadium track, one lane per
+   Division lane, drawn as true regular hexagons (see circTrackGeometry()/
+   traceLaneRing() above) -- every cell the exact same size and shape,
+   adjacent lanes always meeting edge-to-edge by construction, no
+   boundary-matching math needed at all (the old trapezoid system's
+   mergedBoundaryAngles() has no hex equivalent -- it just isn't needed).
+   Racer icons snap to the center of whichever hex their position falls in
+   (circRacerTransform()). Each racer `<g>` gets a stable id
+   (`circracer-<id>`) and a CSS transform transition (see style.css), the
+   same way the linear board's icons/bars only actually animate when
+   something moves their EXISTING DOM node rather than recreating it -- see
+   App.playRaceReplay(), which updates these transforms directly instead of
+   regenerating this whole SVG every step. */
 function renderCircularTrackSvg(race, course) {
   const geom = circTrackGeometry(course);
-  const { vbW, vbH, cx, cy, iconSize } = geom;
+  const { vbW, vbH, iconSize } = geom;
   let svg = `<svg viewBox="0 0 ${vbW} ${vbH}" class="circtrack" role="img" aria-label="Circular track standings">`;
-  for (let row = 0; row < 6; row++) {
-    const S = geom.S, C = geom.curveCounts[row];
-    [0, 1].forEach(which => {
-      for (let col = 0; col < S; col++) {
-        // squarePos indexing matches squarePosToQ()'s own scheme (see there)
-        // so a replay trail (see App.playRaceReplay()) can find a given
-        // (lane, squarePos)'s cell by id.
-        const squarePos = which === 0 ? col : S + C + col;
-        const pts = straightCellPoints(geom, which, row, col).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`);
-        svg += `<polygon class="circcell" id="circcell-${row}-${squarePos}" points="${pts.join(" ")}"/>`;
-      }
+  geom.laneHexLists.forEach((ring, lane) => {
+    ring.forEach((hex, hexPos) => {
+      const { x, y } = hexToPixel(geom, hex.q, hex.r);
+      const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+      // Curve hexes get their own fill (see style.css) so the two curved
+      // end-caps read as visually distinct from the straightaways.
+      svg += `<polygon class="circcell${hex.isStraight ? "" : " curve"}" id="circcell-${lane}-${hexPos}" points="${pts}"/>`;
     });
-    [0, 1].forEach(which => {
-      for (let k = 0; k < C; k++) {
-        const squarePos = which === 0 ? S + k : 2 * S + C + k;
-        const pts = curveCellPoints(geom, which, row, k).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`);
-        svg += `<polygon class="circcell" id="circcell-${row}-${squarePos}" points="${pts.join(" ")}"/>`;
-      }
-    });
-  }
-  // Starting line: each lane gets its own mark at its actual staggered
-  // starting square (see laneStartSquarePos()/RULE_CHANGES.md), not one straight
-  // line across every lane -- outer lanes start further around the first
-  // curve, same as a real track's staggered start grid, so a single radial
-  // line would only be accurate for lane 1. Drawn at the LEFTMOST side of that
-  // square (its leading edge, in the direction of CCW travel) -- squarePos N
-  // itself is the square's trailing/right edge, so the leading/left edge is
-  // one square further, at N+1. Computed directly against the DECORATIVE
-  // straight grid (col*squareSpacing), not by converting squarePos through
-  // the gameplay lap fraction (stadiumPerimeter(r)/laneSquares[lane]) like
-  // circRacerTransform does elsewhere -- that fraction is only the AVERAGE
-  // square size across the whole lap and doesn't exactly match the straight's
-  // own square width (straight and curve squares are paced differently per
-  // lane -- see curveSplitForCourse()), so it left the tick a hair off the
-  // real square boundary. Every starting square is within the shared
-  // straight (see laneStartSquarePos()), so indexing the straight grid
-  // directly is both exact and simpler.
-  geom.radii.forEach((r, laneIdx0) => {
-    const col = Math.min(laneStartSquarePos(laneIdx0) + 1, geom.S);
-    const Q = col * geom.squareSpacing;
-    const pt = stadiumPoint(cx, cy, r, Q);
-    const perp = stadiumTangent(Q) + Math.PI / 2;
-    const half = geom.rowGap * 0.45;
-    const x1 = pt.x + half * Math.cos(perp), y1 = pt.y + half * Math.sin(perp);
-    const x2 = pt.x - half * Math.cos(perp), y2 = pt.y - half * Math.sin(perp);
-    svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="circfinish"/>`;
   });
-  // Icon sized to sit inside a single square with margin to spare (see
+  // Starting line: each lane's own mark at its actual staggered starting hex
+  // (see laneStartHexPos()/RULE_CHANGES.md), not one straight line across
+  // every lane -- outer lanes start further around the first curve, same as
+  // a real track's staggered start grid. Drawn as that hex's own FRONT edge
+  // (hexFrontEdge()) -- the real spine facing the direction of travel --
+  // rather than a line cut through its center.
+  geom.laneHexLists.forEach((ring, laneIdx0) => {
+    const hexPos = Math.min(laneStartHexPos(laneIdx0), ring.length - 1);
+    const hex = ring[hexPos];
+    const next = ring[(hexPos + 1) % ring.length];
+    const [p1, p2] = hexFrontEdge(geom, hex, next);
+    svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
+  });
+  // Icon sized to sit inside a single hex with margin to spare (see
   // circTrackGeometry()'s iconSize). Name/lane/lap are hover-only via
   // <title> -- no permanent on-track labels to collide.
   race.participants.forEach(p => {
@@ -2284,7 +2120,7 @@ function renderCircularTrackSvg(race, course) {
 function renderStandings(race) {
   const course = getCourse(race.courseId);
   const circular = course.trackType === "circular";
-  const laneSquares = circular ? laneSquaresArray(course) : null;
+  const laneHexes = circular ? laneHexesArray(course) : null;
   const maxPossible = Math.max(1, course.legs.length * race.participants.length);
   const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
   let html = `<section class="card"><div class="row spread"><h3>Standings</h3>
@@ -2299,12 +2135,12 @@ function renderStandings(race) {
     const icon = p.type === "hero" ? getShip(p.shipId) : p;
     const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
     // Distance Tracking (see RULE_CHANGES.md): progress is toward the fixed
-    // finish line (lane 1's own starting line), not raw squares moved --
+    // finish line (lane 1's own starting line), not raw hexes moved --
     // an outer lane's required MOVEMENT is its own lap distance times laps,
     // minus its starting stagger, since the stagger head start is exactly
     // what lets it reach that same physical line at the same time as lane 1
     // despite a longer lane.
-    const req = circular ? Math.max(1, course.laps * laneSquares[p.lane - 1] - (p.startSquarePos || 0)) : maxPossible;
+    const req = circular ? Math.max(1, course.laps * laneHexes[p.lane - 1] - (p.startHexPos || 0)) : maxPossible;
     const pct = Math.min(100, Math.round((p.cumulative / req) * 100));
     const iconDiv = iconDivisionOf(icon);
     const iconImg = icon && icon.iconColor && icon.iconNumber && iconDiv
@@ -2356,7 +2192,7 @@ function renderFinalStandings(race) {
   sorted.forEach((p, i) => {
     const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
     const oocTag = p.type === "hero" && p.out ? ` <span class="tag danger">OOC</span>` : "";
-    const detail = circular ? `${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} squares` : `${p.cumulative} pts`;
+    const detail = circular ? `${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} hexes` : `${p.cumulative} pts`;
     html += `<li>${i === 0 ? "🏆 " : ""}<b>${esc(label)}</b> — ${detail}${oocTag}</li>`;
   });
   html += `</ol>`;
@@ -2388,7 +2224,7 @@ function renderDeclarations(race) {
         // one Slipped don't look identical at a glance (a Slip through a curve
         // changes the Pilot's net; a Slip within a straightaway doesn't, and a
         // Slip never costs Movement Points -- see finishLeg()).
-        const slipTag = ps.slip ? ` <span class="tag">Slipped ${ps.slip} ${ps.slipSquares} (${netLabel(ps.slipAdvantage || 0)})</span>` : "";
+        const slipTag = ps.slip ? ` <span class="tag">Slipped ${ps.slip} ${ps.slipHexes} (${netLabel(ps.slipAdvantage || 0)})</span>` : "";
         const pilotCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(pilotExtraNet(ps))}</td>` : "";
         html += `<tr><td>${iconThumbImg(ship)} ${esc(ship.name)}</td><td>${ps.accel}-G</td><td>${netLabel(ps.netLegAcc)}</td>${pilotCell}
           <td>${declaredManeuversText(ps)}</td><td>${netLabel(-sumPosObj(ps.maneuverReceivedByPos))}</td><td>${netLabel(-sumPosObj(ps.maneuverInstigatedByPos))}</td></tr>`;
@@ -2431,16 +2267,16 @@ function renderDeclModal(race, pid) {
   const cls = getShipClass(ship.shipClass);
   const course = getCourse(race.courseId);
   // House rule (see RULE_CHANGES.md): on a Circular Track, a Racing Maneuver
-  // can only target a ship within MANEUVER_RANGE_SQUARES squares -- see
-  // squaresWithinManeuverRange(). Straight/Legs courses have no squares, so
+  // can only target a ship within MANEUVER_RANGE_HEXES hexes -- see
+  // hexesWithinManeuverRange(). Straight/Legs courses have no hexes, so
   // targeting stays unrestricted there.
   const maneuverGeom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-  const others = race.participants.filter(x => x.id !== pid && !x.out && (!maneuverGeom || squaresWithinManeuverRange(maneuverGeom, p, x))); // can't target a ship that's out of the race, or (Circular Track) out of range
+  const others = race.participants.filter(x => x.id !== pid && !x.out && (!maneuverGeom || hexesWithinManeuverRange(maneuverGeom, p, x))); // can't target a ship that's out of the race, or (Circular Track) out of range
   const crewIds = [...new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean))];
   // Circular Track Slip (see RULE_CHANGES.md): a Slip costs no Movement
   // Points, but its magnitude is capped by both how many lanes are
   // physically available in that direction AND the declared Acceleration --
-  // a ship can't Slip more squares than its own declared G rate this Leg.
+  // a ship can't Slip more hexes than its own declared G rate this Leg.
   // Direction availability (whether "Slip Left"/"Slip Right" even appears)
   // stays lane-only; only the magnitude cap for the chosen direction also
   // considers Accel.
@@ -2477,9 +2313,9 @@ function renderDeclModal(race, pid) {
           ${slipMaxLeft > 0 ? `<option value="left" ${ps.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
           ${slipMaxRight > 0 ? `<option value="right" ${ps.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
         </select>
-        ${ps.slip ? ` <input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, ps.slipSquares || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipSquares',this.value)" style="width:56px"> square(s) / ${slipMax} max` : ""}
+        ${ps.slip ? ` <input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, ps.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px"> hex(es) / ${slipMax} max` : ""}
       </div>
-      <p class="muted" style="margin:-4px 0 10px">Your Slip squares are worked in with your ordinary movement wherever it covers the most real ground, not always first or last. Touching a curve anywhere along the way grants +1 Advantage per square outward or -1 Disadvantage per square inward.</p>` : ""}
+      <p class="muted" style="margin:-4px 0 10px">Your Slip hexes are worked in with your ordinary movement wherever it covers the most real ground for the Leg, not always first or last. Touching a curve anywhere along the way grants +1 Advantage per hex outward or -1 Disadvantage per hex inward.</p>` : ""}
       <div class="formrow" style="align-items:flex-start"><label>Racing Maneuvers</label><div style="flex:1;min-width:0">
         <p class="muted" style="margin:0 0 8px">Each position may run one Maneuver against the <b>same position</b> on chosen ships.</p>
         ${POSITIONS.map(pos => {
@@ -2720,7 +2556,7 @@ function renderPhaseRollBlock(pid, ps, disp, tn, phase, grantTargets, forcedTarg
   if (res.skipped) {
     html += `<p><b>Played It Safe</b> — counts as a Failure.</p>`;
   } else {
-    html += `<p>Rolled ${rc.dice.join(", ")} → chosen ${rc.chosen} + ${disp[phase].finalScore} = <b>${rc.total}</b> vs TN ${tn} → <b>${outcomeLabel(rc)}</b>${phase === "pilot" ? ` (${rc.successCount} success dice)` : ""}</p>`;
+    html += `<p>Rolled ${rc.dice.join(", ")} → chosen ${rc.chosen} + ${disp[phase].finalScore} = <b>${rc.total}</b> vs TN ${tn} → <b>${outcomeLabel(rc)}</b></p>`;
   }
   if (phase === "pilot" && res) {
     // House rule (see RULE_CHANGES.md): the Leg Ranking Score is Speed Bonus
@@ -2737,15 +2573,15 @@ function renderPhaseRollBlock(pid, ps, disp, tn, phase, grantTargets, forcedTarg
       rankTotalDisp += ` ÷2 (${rc.isFumble ? "Fumble" : "Failed"}, rounded up) = ${previewMovement}`;
     }
     if (circular && ps.slipAdvantage < 0) {
-      const slingshotSquares = Math.min(ps.slipSquares || 0, previewMovement);
-      if (slingshotSquares > 0) {
-        previewMovement += slingshotSquares;
-        rankTotalDisp += ` + Slingshot ${slingshotSquares} (${slingshotSquares} square${slingshotSquares > 1 ? "s" : ""} Slipped inward through the curve) = ${previewMovement}`;
+      const slingshotHexes = Math.min(ps.slipHexes || 0, previewMovement);
+      if (slingshotHexes > 0) {
+        previewMovement += slingshotHexes;
+        rankTotalDisp += ` + Slingshot ${slingshotHexes} (${slingshotHexes} hex${slingshotHexes > 1 ? "es" : ""} Slipped inward through the curve) = ${previewMovement}`;
       }
     }
     // The "who won the Leg" framing is Straight -- Legs-specific (points-based
     // standings); on a Circular Track this SAME score becomes movement in
-    // squares (see finishLeg()), not a Leg win/loss, so the caveat doesn't apply.
+    // hexes (see finishLeg()), not a Leg win/loss, so the caveat doesn't apply.
     const rankingNote = circular ? "" : " (used only to determine who won the Leg — the d20 roll and Skill Score above do not count toward it)";
     html += `<p class="muted">Leg Ranking Score: ${parts} = <b>${rankTotalDisp}</b>${rankingNote}</p>`;
   }
@@ -2877,6 +2713,52 @@ function renderLog(race) {
   return html;
 }
 
+/* ---------- Introduction ---------- */
+function renderIntroduction() {
+  return `<section class="card">
+    <p class="flavortext">Engines screaming at the edge of failure. Pilots threading impossibly narrow corridors of space. Crews gambling everything on a single, perfect run.</p>
+    <p class="flavortext">Welcome to GASCAR.</p>
+    <p>This volume pulls back the curtain on the most dangerous sport in civilized space, where sublight racers tear through asteroid belts, skim planetary atmospheres, and chase victory across entire star systems under the unforgiving laws of physics and competition.</p>
+    <p>Inside, you'll find the full machinery of GASCAR: the history and racing divisions, the crews who make the impossible routine, and the ships that redefine what "safe operating limits" mean. From razor-edged Spark-class Skiffs to system-spanning Nova-class Clippers, and the brutal, ground-hugging Flash-class Skimmers that started it all, every class is built to win or break trying.</p>
+    <p>Meet five distinct race crew specialists built on the new Archetype Racer Crewman, each with the skills, instincts, and nerve required to survive high-G burns and split-second decisions. Explore a lineup of cutting-edge racing machines, each tuned for a different philosophy of speed, precision, endurance, aggression, or raw power.</p>
+    <p>But racing is more than machines and men. Sponsors pull strings, bend rules, and sometimes break them outright. Circuits span worlds, each racecourse a carefully engineered gauntlet of hazards, strategy, and spectacle. And behind it all lies a complete system for designing abstract racecourses and running high-stakes competitions where every Leg counts and every mistake can be final.</p>
+    <p>And, of course, no Warp Space product would be complete without Plot Hooks… nearly 30 of them here.</p>
+    <p>Whether you're building a team, running a race, or simply trying to keep your ship from tearing itself apart at 18-G, this book gives you everything you need.</p>
+    <p class="flavortext">Strap in.</p>
+    <p class="flavortext">The corridor is narrow. The engines are hot.</p>
+    <p class="flavortext">And for a few fleeting moments… you may just be the fastest thing in the system.</p>
+
+    <h3>GASCAR Divisions, Circuits, and Races</h3>
+    <p>The Galactic Association for Spaceship Competitive Astro-Racing, known as GASCAR, is the primary regulatory and promotional authority for organized spaceship racing across the Federation. Founded several centuries after the expansion of reliable sublight travel pre-A.C., the organization arose from a loose collection of engineering clubs, courier guilds, and thrill-seeking pilots who began staging informal velocity competitions between planets, moons, and orbital stations. As both the technology, the crowds, and the explosions grew larger, the need for standardized safety rules, race corridors, and ship classifications eventually gave rise to GASCAR.</p>
+    <p class="introcaption muted">GASCAR followed mankind into the Eos Galaxy</p>
+    <p>Unlike military flight demonstrations or commercial courier trials, GASCAR races are conducted entirely under sublight propulsion and take place within the bounds of a single star system. Racecourses typically weave through complex gravitational environments-skimming planetary magnetospheres, threading asteroid belts, and diving through tightly controlled orbital corridors. The result is a form of competition that rewards not only raw acceleration, but also precise navigation, sensor awareness, and exceptional piloting skill.</p>
+    <p>At the top of GASCAR's organizational structure are the Divisions. Each Division defines a set of performance parameters that every competing ship must meet. Within each Division, GASCAR sanctions numerous race Circuits, each consisting of a season of multiple races spread across Imperial space. Every Circuit season culminates in the Division Championship, a premier event hosted each year by a different star system.</p>
+    <p>Because the width and breath of the Imperium is so large, circuits tend to follow a circular route around or through a sector or two. They may have a race in one system, and a week later, they are 20 lightyears away, racing again in another system.</p>
+    <p>Spark and Comet Division races are often described as frantic and technical, with small craft darting through obstacles at extreme speeds. Races last less than 12 hours, through some may take place over multiple days where each Leg can last up to 12 hours. Spark and Comet seasons typically last one year</p>
+    <p>Meteor Division races emphasize sustained acceleration and tactical course management lasting long enough to stretch the limits of the class's 100-day operating duration, though most last less than 30 days. A Meteor season typically lasts two years.</p>
+    <p>Nova Division races emphasize bursts of high acceleration and strategic course management lasting long enough to stretch the limits of the class's 200-day operating duration. Nova Division racers compete in longer endurance events where precision, thermal management, and engine discipline become decisive factors. Races average 150 days. A Nova season typically spans five years.</p>
+
+    <h3>Licensing and Public Perception</h3>
+    <p>GASCAR itself does not manufacture ships nor sponsor individual teams. Instead, it licenses racing corridors, certifies vessel configurations, and enforces strict engineering and safety standards designed to prevent the sport from devolving into uncontrolled experimental rocketry. Even so, racing vessels routinely push the limits of known propulsion technology, which many consider TL8 due to their high-tech nature. Engines run hotter, hull frames are lighter, and automation systems are more aggressive than those found on conventional spacecraft.</p>
+    <p>The spectacle has made GASCAR one of the most widely followed sporting institutions in civilized space. Entire economies form around major race events, from engineering sponsors and sensor-tracking broadcasters to betting syndicates and celebrity pilots whose reputations rival those of military aces.</p>
+    <p>For the crews who compete, however, the appeal is simpler. A GASCAR race represents the purest contest of speed and skill available to a pilot: a narrow corridor of space, engines burning plaid, and the knowledge that for a few extraordinary minutes the fastest thing in the system might just be you.</p>
+
+    <h3>Flash Division</h3>
+    <p>Not all GASCAR competition takes place in the vacuum of space. Across the Federation, a parallel form of racing has developed using gravitic surfacecraft known as skimmers. These small anti-gravity racers compete in low-altitude racecourses that weave through planetary terrain, urban skylines, canyon systems, and natural hazards. Though technically a separate subclass of competition, most Flash races operate under the broader guidance and regulatory framework of GASCAR.</p>
+    <p>Flash racers are tightly restricted by design. No craft may exceed five tons displacement, and they are not allowed to break the local speed of sound. In practice this caps most racers at roughly 750 miles per hour depending on atmospheric conditions. These racers are also granted a special exemption from standard civilian anti-gravity regulations. While most civilian anti-gravity vehicles are limited to operating within three yards of the ground, Flash Division skimmers are permitted to climb as high as one hundred yards above the surface during a race. The restriction on speed still exists for both safety and environmental reasons; sonic booms through populated areas or fragile terrain would make many racecourses impossible to operate.</p>
+    <p>Each world typically hosts several Flash races, which together feed into larger regional Flash Circuits, with racecourses adapted to regional geography. Desert worlds favor long canyon runs and salt-flat sprint tracks. Ocean planets often use island chains and floating beacons. Urban worlds weave their racecourses through skyscraper corridors and elevated infrastructure. While the terrain varies widely, all local leagues (or local race series) share common GASCAR standards for checkpoint marking, safety enforcement, and race officiation.</p>
+    <p>For many pilots, the local skimmer leagues represent the first step in a professional racing career. The craft are smaller, the races shorter, and the entry costs dramatically lower than orbital competitions. Yet the danger remains very real. At near-sonic speeds only a few dozen yards above the ground, a pilot must rely on reflexes and precision rather than raw acceleration. More than one famous Spark-class racer began his career threading a skimmer through canyon walls at seven hundred miles an hour.</p>
+    <p>Though considered the grassroots division of GASCAR, Flash Division Circuits maintain passionate followings and produce some of the most aggressive drivers in the sport. Many veterans of the spaceborne divisions quietly admit that if a driver can master skimmer racing, the transition to space is merely a matter of learning to fall upward.</p>
+
+    <h3>Sponsors</h3>
+    <p>Sponsors are a mix of noble houses, corporations, and the occasional slightly questionable organization who somehow still has their logo on a championship hull. Sponsors are both beneficial and detrimental to their ships. To reflect this, players may give a +1 bonus to Pilot, Navigator, Spotter, or Engineer; to compensate, they must take a -1 penalty someplace else.</p>
+
+    <h3>Combat</h3>
+    <p>Although GASCAR ships can carry weapons, their use in sanctioned competition is strictly prohibited. Beam weapons, missiles, railguns, and slug throwers are universally condemned, and every race is monitored through ship telemetry to reconstruct incidents. Electronic warfare can disable or corrupt that telemetry, however, making sabotage or attacks possible. If your campaign reaches that level, use the Warp Space: Ships & Combat rules.</p>
+    <p>For simplicity, assume every ships carries a basic Foreign Object Detection and Removal (FODaR) system for clearing debris from the course. These low-powered systems are not intended for combat, but clever pilots may try to misuse them. Resolve such actions using the Racing Maneuvers: Attack rules.</p>
+  </section>`;
+}
+
 /* ---------- Reference ---------- */
 function renderInstructions() {
   return `<section class="card"><h2>How to Use This App</h2>
@@ -2894,25 +2776,32 @@ function renderInstructions() {
 
     <h3>4. Racecourse — design a race</h3>
     <p>Set the course's Division (which Ships are eligible to enter) and pick a Track. <b>Straight — Legs</b> also asks for a Type — Drag Race is always 1 Leg; Short, Medium, and Long roll dice (2d5 / 2d10 / 2d20) to determine how many Legs the race has. Generate or hand-edit each Leg's Tier and TN; a course feature/modifier can nudge the TN up or down from the Tier-based baseline.</p>
-    <p><b>Circular — Distance Tracking</b> is an alternate way to run the race: the course has 6 lanes, each 4 squares longer per lap than the one inside it (inner lane defaults to 50 squares), and you set how many laps finish the race. Each Leg, a Hero moves squares equal to their own <b>Leg Ranking Score</b> (Speed Bonus, +1 per Critical Success Level, -1 per Fumble Level) — but a <b>Failed or Fumbled Pilot Task Check halves that Leg's Movement, rounded up</b>, applied before Slip is worked out (stacks with, doesn't replace, the usual -1/level Fumble hit to the Leg Ranking Score itself). NPCs move off the Base Leg Result (the Heroes' average Speed Bonus alone) instead and are never halved. The race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip squares are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble/halving that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per square slipped outward or costs −1 Disadvantage per square slipped inward. An inward Slip that touches a curve <b>also</b> grants <b>+1 bonus Movement per square actually Slipped</b> (Slingshot), on top of ordinary movement, pure free speed for cutting the inside line — this only fires for a Slip actually declared and executed that Leg, not just for sitting in the inside lane. Ships can only Slip into a square that shares a corner or partial side with their current one. If two or more ships end a Leg sharing the same square (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage per ship sharing that square (2 ships sharing costs 2 D each, 3 ships costs 3 D each, and so on).</p>
+    <p><b>Circular — Distance Tracking</b> is an alternate way to run the race, on a real hex-grid track: the course has 6 lanes, each exactly 6 hexes longer per lap than the one inside it (an exact property of the hex grid, not a chosen number; inner lane defaults to roughly 50 hexes), and you set how many laps finish the race. Each Leg, a Hero moves hexes equal to their own <b>Leg Ranking Score</b> (Speed Bonus, +1 per Critical Success Level, -1 per Fumble Level) — but a <b>Failed or Fumbled Pilot Task Check halves that Leg's Movement, rounded up</b>, applied before Slip is worked out (stacks with, doesn't replace, the usual -1/level Fumble hit to the Leg Ranking Score itself). NPCs move off the Base Leg Result (the Heroes' average Speed Bonus alone) instead and are never halved. The race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip hexes are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble/halving that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per hex slipped outward or costs −1 Disadvantage per hex slipped inward. An inward Slip that touches a curve <b>also</b> grants <b>+1 bonus Movement per hex actually Slipped</b> (Slingshot), on top of ordinary movement, pure free speed for cutting the inside line — this only fires for a Slip actually declared and executed that Leg, not just for sitting in the inside lane. Ships can only Slip into an adjacent lane's hex that's actually next to their current one. If two or more ships end a Leg sharing the same hex (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage per ship sharing that hex (2 ships sharing costs 2 D each, 3 ships costs 3 D each, and so on).</p>
 
     <h3>5. Race — run it</h3>
     <p>Race Setup filters selectable Ships to the chosen course's Division, and you can add NPC racers alongside your Heroes. Each Leg then walks through, in order:</p>
     <ol>
-      <li><b>Declarations</b> — every Ship sets its Acceleration (capped by its Class's Max Thrust, reduced by any active Fumble penalties) and may run one Racing Maneuver per position against a target's same position. On a Circular Track, a Maneuver can only target a ship within 2 squares; straight/Legs courses have no squares, so targeting is unrestricted there.</li>
+      <li><b>Declarations</b> — every Ship sets its Acceleration (capped by its Class's Max Thrust, reduced by any active Fumble penalties) and may run one Racing Maneuver per position against a target's same position. On a Circular Track, a Maneuver can only target a ship within 2 hexes; straight/Legs courses have no hexes, so targeting is unrestricted there.</li>
       <li><b>Phase I (Conditions)</b> — apply per-crewman conditions (Wounded, Under Fire, etc.); each one is Disadvantage on every position that crewman holds. Lock conditions once set so they hold for the whole Leg.</li>
       <li><b>Resistance</b> — every crewman rolls to resist G-forces from the declared Acceleration vs. the Damper Rating; a failed roll costs Disadvantage on that crewman's positions for the rest of the Leg.</li>
       <li><b>Engineer → Spotter → Navigator</b> — each rolls their Task Check and grants Advantage/Disadvantage to a chosen Ship (their own or a rival's); a Critical Success or Fumble can offer a bigger or different choice.</li>
       <li><b>Pilot</b> — rolls last. The Pilot's TN check (Score + accumulated Advantage/Disadvantage) determines pass/fail and Critical/Fumble, but who actually <i>wins</i> the Leg is decided separately: Speed Bonus (= declared Acceleration) plus 1 per Critical Success level, minus 1 per Fumble level.</li>
       <li><b>NPCs</b> auto-roll off the Base Leg Result once every Hero has finished. <b>Standings</b> then shows finishing order for the Leg; a Ship reduced to 0 HP is marked OOC (Out of Commission) and stays frozen at its crash position for the rest of the race.</li>
     </ol>
-    <p>On a Circular Track, <b>Show Last Leg</b>/<b>Show Entire Race</b> (above the Standings track) replay each Ship's movement at half speed, dropping a small colored dot at the center of every square it passes through so its path stays visible on the track. Click anywhere to clear the trail.</p>
+    <p>On a Circular Track, <b>Show Last Leg</b>/<b>Show Entire Race</b> (above the Standings track) replay each Ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through so its path stays visible on the track. Click anywhere to clear the trail.</p>
 
     <p class="muted">The <b>Reference</b> tab has Division stat tables, the full Racing Maneuvers list, NPC Performance, both Fumble Charts, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
   </section>`;
 }
 function renderReference() {
   let html = `<div class="grid2">`;
+  html += `<section class="card"><h2>Data</h2>
+    <p class="muted">Everything is saved automatically to this browser's local storage — closing the tab or the browser is safe. But clearing your browser's cache/site data (or opening the app in a different browser or on a different computer) will erase it, since nothing is uploaded anywhere. Use <b>Export JSON</b> to save a backup file you control, and <b>Import JSON</b> to restore it.</p>
+    <div class="row"><button class="ghost" onclick="App.exportData()">Export JSON</button>
+    <label class="ghost filebtn">Import JSON<input type="file" accept="application/json" onchange="App.importData(this.files[0])"></label>
+    <button class="danger" onclick="App.resetAll()">Reset All Data</button></div>
+  </section>`;
+
   html += `<section class="card"><h2>Name Generators</h2>
     <div class="row"><button onclick="App.rollRefRaceName()">🎲 Race Name</button><span id="refRaceName" class="tag"></span></div>
     <div class="row"><button onclick="App.rollRefShipName()">🎲 Ship Name</button><span id="refShipName" class="tag"></span></div>
@@ -2923,7 +2812,7 @@ function renderReference() {
     ${GDATA.DIVISIONS.map(d => { const c = GDATA.SHIP_CLASSES[d]; return `<tr><td>${d}</td><td>${c.tier}</td><td>${c.common}</td><td>${c.maxThrust}-G</td><td>${c.damper}-G</td><td>${c.crew || 1}</td></tr>`; }).join("")}
   </table></section>`;
 
-  html += `<section class="card"><h2>Racing Maneuvers</h2>
+  html += `<section class="card" style="grid-row: span 2;"><h2>Racing Maneuvers</h2>
     <p class="muted">Each position runs its own Maneuver during Declarations against a target's <b>same</b> position (Pilot always instigates). Target position only matters against Hero ships — against an NPC, it applies as normal and stacks cumulatively with other positions' Maneuvers on that same NPC.</p>
     <table class="mktable">
     <tr><th>Position</th><th>Maneuver</th><th>Description</th><th>Disadvantage</th></tr>
@@ -2945,19 +2834,12 @@ function renderReference() {
     ${GDATA.SPACEFLIGHT_FUMBLES.map((f, i) => `<tr><td>${i + 1}</td><td>${esc(f.text)}</td></tr>`).join("")}
   </table></section>`;
 
-  html += `<section class="card"><h2>Data</h2>
-    <p class="muted">Everything is saved automatically to this browser's local storage — closing the tab or the browser is safe. But clearing your browser's cache/site data (or opening the app in a different browser or on a different computer) will erase it, since nothing is uploaded anywhere. Use <b>Export JSON</b> to save a backup file you control, and <b>Import JSON</b> to restore it.</p>
-    <div class="row"><button class="ghost" onclick="App.exportData()">Export JSON</button>
-    <label class="ghost filebtn">Import JSON<input type="file" accept="application/json" onchange="App.importData(this.files[0])"></label>
-    <button class="danger" onclick="App.resetAll()">Reset All Data</button></div>
-  </section>`;
-
   html += `</div>`;
   return html;
 }
 
 // Replay path trail (see APP_CHANGES.md): as App.playRaceReplay() steps a
-// ship through a Leg, a dot is dropped at the center of each square it
+// ship through a Leg, a dot is dropped at the center of each hex it
 // passes through, in a per-ship color from this palette (cycling by
 // participant index, so it stays stable across different Legs/replays for
 // the same ship). Colors chosen to read clearly against the dark track
@@ -2973,15 +2855,15 @@ function replayTrailColorFor(participantIdx) { return REPLAY_TRAIL_COLORS[partic
 // where the SAME SVG is still on screen and the user clicks to explicitly
 // clear the trail without triggering a re-render.
 let REPLAY_TRAIL_DOTS = [];
-function paintReplayTrailDot(geom, laneIdx0, squarePos, color) {
+function paintReplayTrailDot(geom, laneIdx0, hexPos, color) {
   const svg = document.querySelector(".circtrack");
   if (!svg) return;
-  const Q = squarePosToQ(geom, laneIdx0, squarePos);
-  const { x, y } = stadiumPoint(geom.cx, geom.cy, geom.radii[laneIdx0], Q);
+  const hex = geom.laneHexLists[laneIdx0][hexPos];
+  const { x, y } = hexToPixel(geom, hex.q, hex.r);
   const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   dot.setAttribute("cx", x.toFixed(1));
   dot.setAttribute("cy", y.toFixed(1));
-  dot.setAttribute("r", (geom.rowGap * 0.16).toFixed(1));
+  dot.setAttribute("r", (geom.hexSize * 0.16).toFixed(1));
   dot.setAttribute("class", "replaytraildot");
   dot.style.fill = color;
   svg.appendChild(dot);
@@ -3311,10 +3193,10 @@ const App = {
   rollDraftName() { document.getElementById("cName").value = rollRaceName(); },
   draftDivChanged() { },
   setDraftTrackType(val) { STATE._draftTrackType = val; render(); },
-  previewLaneSquares(val) {
+  previewLaneHexes(val) {
     const inner = clampInt(val, 1, 999, 50);
-    laneSquaresArray({ lanes: 6, innerSquares: inner }).forEach((h, i) => {
-      const cell = document.getElementById(`laneSquareCol${i}`);
+    laneHexesArray({ lanes: 6, innerHexes: inner }).forEach((h, i) => {
+      const cell = document.getElementById(`laneHexCol${i}`);
       if (cell) cell.textContent = h;
     });
   },
@@ -3331,9 +3213,9 @@ const App = {
       // Circular Track / Distance Tracking (see RULE_CHANGES.md): there's no
       // pre-built Leg list -- every Leg of every race on this course is rolled
       // fresh, on the spot, by rollCircularLeg() (see initLegState()).
-      const innerSquares = clampInt(document.getElementById("cInnerSquares").value, 1, 999, 50);
+      const innerHexes = clampInt(document.getElementById("cInnerHexes").value, 1, 999, 50);
       const laps = clampInt(document.getElementById("cLaps").value, 1, 999, 3);
-      STATE.courses.push({ id: uid("course"), name, division, trackType, lanes: 6, innerSquares, laps, legMode: mode, legs: [] });
+      STATE.courses.push({ id: uid("course"), name, division, trackType, lanes: 6, innerHexes, laps, legMode: mode, legs: [] });
     } else {
       const type = document.getElementById("cType").value;
       const count = clampInt(document.getElementById("cLegs").value, 1, 60, 4);
@@ -3374,7 +3256,7 @@ const App = {
     if (!race) return;
     const course = getCourse(race.courseId);
     const circular = course.trackType === "circular";
-    const laneSquares = circular ? laneSquaresArray(course) : null;
+    const laneHexes = circular ? laneHexesArray(course) : null;
     const maxPossible = Math.max(1, course.legs.length * race.participants.length);
     const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
     if (!legsCompleted) return;
@@ -3388,7 +3270,7 @@ const App = {
     if (btnLast) btnLast.disabled = true;
     const geom = circular ? circTrackGeometry(course) : null;
     if (geom) ensureReplayTrailClickListener();
-    const tracks = geom ? race.participants.map(p => ({ p, perLeg: buildCircularLegWaypoints(p, laneSquares, geom) })) : null;
+    const tracks = geom ? race.participants.map(p => ({ p, perLeg: buildCircularLegWaypoints(p, geom) })) : null;
     if (geom) {
       race.participants.forEach((p, i) => {
         // Walk backward from the Leg just before fromLeg looking for this
@@ -3402,7 +3284,7 @@ const App = {
           const wp = perLeg[li];
           if (wp && wp.length) startPos = wp[wp.length - 1];
         }
-        if (!startPos) startPos = { lane: p.startLane || 1, squarePos: p.startSquarePos || 0 };
+        if (!startPos) startPos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0 };
         const g = document.getElementById(`circracer-${p.id}`);
         if (g) g.setAttribute("transform", circRacerTransform(geom, startPos).transform);
       });
@@ -3411,13 +3293,13 @@ const App = {
     // Linear-board per-Leg cadence (straight courses); also matches the
     // .boardfill/.boardicon CSS transition (1.2s -- see style.css) so a
     // straight course's next Leg starts the instant the current one finishes,
-    // with no idle gap/pause. squareStepDelay is the circular track's
-    // per-SQUARE hop cadence -- kept in sync with .circracer's own transition
-    // duration (see style.css) for the same no-pause reason, just much
-    // shorter since each hop covers one square instead of a whole Leg.
-    // Both run at half speed of their original cadence (see APP_CHANGES.md).
+    // with no idle gap/pause. hexStepDelay is the circular track's per-hex
+    // hop cadence -- kept in sync with .circracer's own transition duration
+    // (see style.css) for the same no-pause reason, just much shorter since
+    // each hop covers one hex instead of a whole Leg. Both run at half speed
+    // of their original cadence (see APP_CHANGES.md).
     const stepDelay = 1200;
-    const squareStepDelay = 200;
+    const hexStepDelay = 200;
     function updateBoardsForLeg(legIdx) {
       race.participants.forEach(p => {
         const h = p.history || [];
@@ -3426,7 +3308,7 @@ const App = {
         // Distance Tracking: progress toward the fixed finish line (lane 1's
         // own starting line) -- see renderStandings() for why the starting
         // stagger is subtracted from the required distance.
-        const req = circular ? Math.max(1, course.laps * laneSquares[p.lane - 1] - (p.startSquarePos || 0)) : maxPossible;
+        const req = circular ? Math.max(1, course.laps * laneHexes[p.lane - 1] - (p.startHexPos || 0)) : maxPossible;
         const pct = Math.min(100, Math.round((sum / req) * 100));
         const fill = document.getElementById(`boardfill-${p.id}`);
         const pts = document.getElementById(`boardpts-${p.id}`);
@@ -3460,13 +3342,13 @@ const App = {
           const prevRotDeg = m ? parseFloat(m[1]) : null;
           g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
           // Path trail (see APP_CHANGES.md): drop a dot at the center of the
-          // square this ship just moved into, in its own color, so each
-          // racer's path through the Leg stays visible on the track. Cleared
-          // by clicking anywhere.
-          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.squarePos || 0, replayTrailColorFor(i));
+          // hex this ship just moved into, in its own color, so each racer's
+          // path through the Leg stays visible on the track. Cleared by
+          // clicking anywhere.
+          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(i));
         });
         sub += 1;
-        if (sub < maxSteps) setTimeout(tick, squareStepDelay);
+        if (sub < maxSteps) setTimeout(tick, hexStepDelay);
         else done();
       }
       tick();
@@ -3551,26 +3433,26 @@ const App = {
       if (ps.slip) {
         const course = getCourse(STATE.race.courseId);
         const maxLane = Math.min(ps.slip === "left" ? p.lane - 1 : course.lanes - p.lane, ps.accel);
-        ps.slipSquares = clampInt(ps.slipSquares, 1, Math.max(1, maxLane), ps.slipSquares || 1);
+        ps.slipHexes = clampInt(ps.slipHexes, 1, Math.max(1, maxLane), ps.slipHexes || 1);
       }
       saveState(); render();
       return;
     } else if (field === "slip") {
       // Circular Track Slip (see RULE_CHANGES.md): changing direction defaults
-      // the magnitude to 1 square and re-renders so the magnitude input (and its
+      // the magnitude to 1 hex and re-renders so the magnitude input (and its
       // max, which depends on direction) shows/updates. lockDeclarations()
       // re-clamps the final magnitude authoritatively at lock time.
       ps.slip = val;
-      ps.slipSquares = val ? (ps.slipSquares || 1) : 0;
+      ps.slipHexes = val ? (ps.slipHexes || 1) : 0;
       saveState(); render();
       return;
-    } else if (field === "slipSquares") {
+    } else if (field === "slipHexes") {
       const p = STATE.race.participants.find(x => x.id === pid);
       const course = getCourse(STATE.race.courseId);
       // Capped by both the lanes actually available AND the declared
       // Acceleration (see RULE_CHANGES.md).
       const maxLane = Math.min(ps.slip === "left" ? p.lane - 1 : course.lanes - p.lane, ps.accel);
-      ps.slipSquares = clampInt(val, 1, Math.max(1, maxLane), ps.slipSquares || 1);
+      ps.slipHexes = clampInt(val, 1, Math.max(1, maxLane), ps.slipHexes || 1);
     } else ps[field] = val;
     saveState();
   },
@@ -3593,7 +3475,7 @@ const App = {
     const p = race.participants.find(x => x.id === pid);
     const course = getCourse(race.courseId);
     const geom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-    const others = race.participants.filter(x => x.id !== pid && !x.out && (!geom || squaresWithinManeuverRange(geom, p, x)));
+    const others = race.participants.filter(x => x.id !== pid && !x.out && (!geom || hexesWithinManeuverRange(geom, p, x)));
     const cur = ps.maneuverTargets[pos] || [];
     const allOn = others.every(o => cur.includes(o.id));
     ps.maneuverTargets[pos] = allOn ? [] : others.map(o => o.id);
