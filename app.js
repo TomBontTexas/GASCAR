@@ -1101,6 +1101,11 @@ function finishLeg() {
       participant.hexPos = path.finalHexPos;
       participant.laps = (participant.laps || 0) + path.lapsGained;
       participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: totalMovement, lane: participant.lane, laps: participant.laps, hexPos: participant.hexPos, slipHexes: actualSlipHexes, slingshotBonus });
+      // The Race Log's own Movement column (see renderLog()) reads r.movement
+      // straight off this same row object -- bump it to the actual total
+      // (including the Slingshot bonus) so the log shows what the ship
+      // really moved this Leg, not just the pre-bonus base amount.
+      r.movement = totalMovement;
     } else {
       participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: r.movement });
     }
