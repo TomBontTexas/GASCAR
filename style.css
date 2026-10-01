@@ -151,6 +151,16 @@ button.danger:hover { background: #ff6b66; }
 .filebtn input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
 .collapse-btn { width: 2em; padding: 0; flex: 0 0 auto; }
 
+/* Numeric steppers: a -/+ button flanks every number input instead of
+   relying on the browser's native spin arrows, which read too small to hit
+   reliably (especially on touch) and look inconsistent across browsers. */
+.numstep { display: inline-flex; align-items: center; gap: 4px; }
+.numstep input[type=number] { text-align: center; -moz-appearance: textfield; }
+.numstep input[type=number]::-webkit-outer-spin-button,
+.numstep input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.numstep-btn { width: 1.8em; padding: 0; flex: 0 0 auto; font-weight: 700; }
+.numstep:has(input:disabled) .numstep-btn { opacity: 0.4; pointer-events: none; }
+
 .iconthumb { width: 42px; height: 42px; object-fit: contain; flex: 0 0 auto; position: relative; transition: transform 0.15s ease; }
 .iconthumb:hover { transform: scale(2); z-index: 5; }
 .iconpicker { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }

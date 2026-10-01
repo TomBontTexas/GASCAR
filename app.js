@@ -17,6 +17,15 @@ function clampInt(v, lo, hi, fallback) { const n = parseInt(v, 10); if (isNaN(n)
 // Right-pad with non-breaking spaces so <option> text keeps its columns (native
 // options collapse ordinary runs of whitespace). Pair with a monospace font.
 function padNbsp(s, n) { s = String(s); return s + " ".repeat(Math.max(0, n - s.length)); }
+// Wraps an existing <input type="number" ...> tag string with a -/+ button on
+// either side, replacing the browser's native spin arrows everywhere in the
+// app (see style.css's .numstep) -- used by every number input. The buttons
+// call App.stepNum(), which finds the input inside the same wrapper and
+// dispatches real 'input'/'change' events, so each input's own existing
+// onchange/oninput handler (passed through unchanged here) still fires.
+function numStepper(inputHtml) {
+  return `<span class="numstep"><button type="button" class="ghost numstep-btn" onclick="App.stepNum(this,-1)">−</button>${inputHtml}<button type="button" class="ghost numstep-btn" onclick="App.stepNum(this,1)">+</button></span>`;
+}
 
 /* Core Task Check: roll (|net|+1) d20s, keep highest (net>=0) or lowest (net<0), add score.
    Returns success/critical/fumble info per the book's Advantage/Disadvantage rules. */
@@ -1251,7 +1260,7 @@ function renderCantina() {
         ${collapsed ? "" : `<button class="ghost" title="Random Hero name" onclick="App.rerollCrewName('${c.id}')">🎲</button>`}
         ${collapsed
           ? ""
-          : `<label>Unspent XP <input type="number" style="width:56px" value="${c.unspentPoints || 0}" onchange="App.updateUnspentPoints('${c.id}',this.value)"></label>`}
+          : `<label>Unspent XP ${numStepper(`<input type="number" style="width:56px" value="${c.unspentPoints || 0}" onchange="App.updateUnspentPoints('${c.id}',this.value)">`)}</label>`}
         ${crewSkillHeaderHtml(c, total)}
         <button class="danger" style="margin-left:auto" onclick="App.deleteCrew('${c.id}')">Delete</button>
       </div>`;
@@ -1263,8 +1272,8 @@ function renderCantina() {
           const s = c.skills[pos];
           return `<tr>
             <td>${label}</td>
-            <td><input type="number" style="width:56px" value="${s.score}" onchange="App.updateSkill('${c.id}','${pos}','score',this.value)"></td>
-            <td><input type="number" style="width:56px" value="${s.adv}" onchange="App.updateSkill('${c.id}','${pos}','adv',this.value)"></td>
+            <td>${numStepper(`<input type="number" style="width:56px" value="${s.score}" onchange="App.updateSkill('${c.id}','${pos}','score',this.value)">`)}</td>
+            <td>${numStepper(`<input type="number" style="width:56px" value="${s.adv}" onchange="App.updateSkill('${c.id}','${pos}','adv',this.value)">`)}</td>
             <td><b>${formatMk(s.score, s.adv)}</b></td>
             <td>${skillCost(s.score, s.adv)}</td>
           </tr>`;
@@ -1479,7 +1488,7 @@ function renderShipClassCard(sc) {
             ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === sc.division ? "selected" : ""}>${d}</option>`).join("")}
           </select></label>
         <button class="ghost" title="Reset all stats to the book ${sc.division}-class ship" onclick="App.applyShipClassDefault('${sc.id}')">Default</button>
-        <label>Acc <input type="number" style="width:56px" min="0" max="${maxThrustCap(sc.division)}" value="${sc.maxThrust}" onchange="App.updateShipClassMaxThrust('${sc.id}',this.value)"></label>
+        <label>Acc ${numStepper(`<input type="number" style="width:56px" min="0" max="${maxThrustCap(sc.division)}" value="${sc.maxThrust}" onchange="App.updateShipClassMaxThrust('${sc.id}',this.value)">`)}</label>
         <span class="tag">Tier ${divStats.tier}</span>
         <span class="tag">Damper ${divStats.damper}</span>
         <span class="tag">Min Crew ${divStats.crew}</span>
@@ -1494,8 +1503,8 @@ function renderShipClassCard(sc) {
         ${[["Spotter", "sensors", "sensorsAdv"], ["Navigator", "nav", "navAdv"], ["Pilot", "control", "controlAdv"]].map(([label, scoreKey, advKey]) => `
           <tr>
             <td>${label}</td>
-            <td><input type="number" style="width:56px" value="${sc.ai[scoreKey]}" ${isSpark ? "disabled title=\"Spark locks Ship AI Score at 0\"" : ""} onchange="App.updateShipClassAI('${sc.id}','${scoreKey}',this.value)"></td>
-            <td><input type="number" style="width:56px" value="${sc.ai[advKey]}" onchange="App.updateShipClassAI('${sc.id}','${advKey}',this.value)"></td>
+            <td>${numStepper(`<input type="number" style="width:56px" value="${sc.ai[scoreKey]}" ${isSpark ? "disabled title=\"Spark locks Ship AI Score at 0\"" : ""} onchange="App.updateShipClassAI('${sc.id}','${scoreKey}',this.value)">`)}</td>
+            <td>${numStepper(`<input type="number" style="width:56px" value="${sc.ai[advKey]}" onchange="App.updateShipClassAI('${sc.id}','${advKey}',this.value)">`)}</td>
             <td><b>${formatMk(sc.ai[scoreKey], sc.ai[advKey])}</b></td>
             <td>${skillCost(sc.ai[scoreKey], sc.ai[advKey])}</td>
           </tr>`).join("")}
@@ -1505,7 +1514,7 @@ function renderShipClassCard(sc) {
           <select onchange="App.updateShipClassFrame('${sc.id}',this.value)">
             ${GDATA.FRAME_STRENGTH.map(f => `<option value="${f.name}" ${f.name === sc.frame ? "selected" : ""}>${f.name} (${signedCost(frameCost(divStats.tier, f.name))})</option>`).join("")}
           </select></label>
-        <label>Armor <input type="number" style="width:56px" min="0" value="${sc.armor}" onchange="App.updateShipClassArmor('${sc.id}',this.value)"></label>
+        <label>Armor ${numStepper(`<input type="number" style="width:56px" min="0" value="${sc.armor}" onchange="App.updateShipClassArmor('${sc.id}',this.value)">`)}</label>
         <label>Compartmentalization
           <select onchange="App.updateShipClassCompartment('${sc.id}',this.value)">
             ${GDATA.COMPARTMENTALIZATION.map(c => `<option value="${c.name}" ${c.name === sc.compartment ? "selected" : ""}>${c.name} (${signedCost(compartmentCost(divStats.tier, c.name))})</option>`).join("")}
@@ -1539,8 +1548,8 @@ function renderCourse() {
       </select></div>
     ${trackType === "circular" ? `
     <p class="muted">Circular Track (see RULE_CHANGES.md): 6 lanes on a real hex grid, each exactly 6 hexes longer per lap than the one inside it (an exact property of hex ring math, not a chosen number). Race runs Leg by Leg until a racer completes the required laps — there's no fixed Leg count.</p>
-    <div class="formrow"><label>Inner Lane Hexes (approx.)</label><input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)"></div>
-    <div class="formrow"><label>Laps to Finish</label><input id="cLaps" type="number" min="1" value="3"></div>
+    <div class="formrow"><label>Inner Lane Hexes (approx.)</label>${numStepper(`<input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)">`)}</div>
+    <div class="formrow"><label>Laps to Finish</label>${numStepper(`<input id="cLaps" type="number" min="1" value="3">`)}</div>
     <div class="formrow"><label>Apply Leg Modifier To</label>
       <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
     <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
@@ -1551,7 +1560,7 @@ function renderCourse() {
         ${GDATA.RACE_TYPES.map(t => `<option value="${t.name}"${t.name === "Medium" ? " selected" : ""}>${t.name} (${t.label})</option>`).join("")}
       </select></div>
     <div class="formrow"><label># Legs</label>
-      <input id="cLegs" type="number" min="1" value="4">
+      ${numStepper(`<input id="cLegs" type="number" min="1" value="4">`)}
       <button class="ghost" onclick="App.rollDraftLegCount()">🎲 by Type</button></div>
     <div class="formrow"><label>Apply Leg Modifier To</label>
       <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
@@ -1579,7 +1588,7 @@ function renderCourse() {
           <td>${esc(leg.feature)} <span class="muted">(d50: ${leg.d50})</span></td>
           <td>${leg.mod >= 0 ? "+" : ""}${leg.mod}</td>
           <td>${leg.tnTierMod}</td><td>${leg.tnTnMod}</td>
-          <td><input type="number" style="width:56px" value="${leg.finalTN}" onchange="App.setFinalTN('${c.id}',${i},this.value)"></td>
+          <td>${numStepper(`<input type="number" style="width:56px" value="${leg.finalTN}" onchange="App.setFinalTN('${c.id}',${i},this.value)">`)}</td>
           <td><button class="ghost" onclick="App.rerollLeg('${c.id}',${i})">🎲</button></td>
         </tr>`;
       });
@@ -2305,7 +2314,7 @@ function renderDeclModal(race, pid) {
         }).join("")}
       </table>
       <div class="formrow"><label>Acceleration (G)</label>
-        <input type="number" min="1" max="${effectiveMaxThrust(p, cls)}" value="${ps.accel}" onchange="App.setDecl('${pid}','accel',this.value)">
+        ${numStepper(`<input type="number" min="1" max="${effectiveMaxThrust(p, cls)}" value="${ps.accel}" onchange="App.setDecl('${pid}','accel',this.value)">`)}
         <span class="muted">/ ${effectiveMaxThrust(p, cls)}-G max${effectiveMaxThrust(p, cls) < cls.maxThrust ? " (reduced by Fumble)" : ""}</span></div>
       ${course.trackType === "circular" ? `<div class="formrow"><label>Slip (currently Lane ${p.lane})</label>
         <select onchange="App.setDecl('${pid}','slip',this.value)">
@@ -2313,7 +2322,7 @@ function renderDeclModal(race, pid) {
           ${slipMaxLeft > 0 ? `<option value="left" ${ps.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
           ${slipMaxRight > 0 ? `<option value="right" ${ps.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
         </select>
-        ${ps.slip ? ` <input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, ps.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px"> hex(es) / ${slipMax} max` : ""}
+        ${ps.slip ? ` ${numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, ps.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px">`)} hex(es) / ${slipMax} max` : ""}
       </div>
       <p class="muted" style="margin:-4px 0 10px">Your Slip hexes are worked in with your ordinary movement wherever it covers the most real ground for the Leg, not always first or last. Touching a curve anywhere along the way grants +1 Advantage per hex outward or -1 Disadvantage per hex inward.</p>` : ""}
       <div class="formrow" style="align-items:flex-start"><label>Racing Maneuvers</label><div style="flex:1;min-width:0">
@@ -2882,6 +2891,25 @@ function ensureReplayTrailClickListener() {
 
 /* ============================== Actions (exposed as window.App) ============================== */
 const App = {
+  /* Shared */
+  // Handles every .numstep -/+ button click (see numStepper()): finds the
+  // one <input> in the same wrapper, steps its value by delta*step clamped
+  // to the input's own min/max, then dispatches real 'input' and 'change'
+  // events -- some fields wire up oninput (e.g. the course builder's live
+  // preview), others onchange, so firing both lets either keep working
+  // completely unchanged.
+  stepNum(btn, delta) {
+    const input = btn.parentElement.querySelector("input");
+    if (!input || input.disabled) return;
+    const step = parseFloat(input.step) || 1;
+    const min = input.min !== "" ? parseFloat(input.min) : -Infinity;
+    const max = input.max !== "" ? parseFloat(input.max) : Infinity;
+    const v = Math.max(min, Math.min(max, (parseFloat(input.value) || 0) + delta * step));
+    input.value = v;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  },
+
   /* Crew */
   addPresetCrew() {
     const idx = parseInt(document.getElementById("presetCrew").value, 10);
