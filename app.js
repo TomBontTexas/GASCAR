@@ -53,7 +53,10 @@ function formatMk(score, net) {
 }
 function netLabel(net) {
   if (!net) return "—";
-  return (net > 0 ? "+" : "") + net + (net > 0 ? "A" : "D") + (Math.abs(net) > 1 ? "s" : "");
+  // Repeated letters (A/AA/D/DD), matching formatMk()'s on-a-skill notation
+  // -- "+1A" read too easily as "+1 AND Advantage" (a numeric bonus on top
+  // of Advantage) rather than "1 Level of Advantage".
+  return (net > 0 ? "+" : "-") + (net > 0 ? "A".repeat(net) : "D".repeat(-net));
 }
 function signedCost(n) { return n > 0 ? `+${n}` : String(n); }
 
