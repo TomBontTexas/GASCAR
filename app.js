@@ -3565,16 +3565,26 @@ const App = {
     const table = course.division === "Flash" ? GDATA.FLASH_FUMBLES : GDATA.SPACEFLIGHT_FUMBLES;
     const entry = table[rollD(10) - 1];
     const ps = race.legState.perShip[pid];
-    ps.fumbleText = entry.text;
     const participant = race.participants.find(p => p.id === pid);
     const wasOut = !!participant.out;
     applyFumbleAffects(pid, entry);
+    const justWentOut = participant.out && !wasOut;
+    // A Fumble's own affects still all apply as written (e.g. a future-Leg
+    // crew Disadvantage, harmlessly unused once the ship can't declare
+    // again) -- this only decides what TEXT to show. If this same roll's HP
+    // damage is what just knocked the ship OOC, the entry's narrated
+    // future-Leg penalty/last-place language no longer describes anything
+    // that will happen, so entries that combine HP damage with that kind of
+    // language carry an oocText (see data.js) trimmed down to just the
+    // crash itself.
+    const displayText = justWentOut && entry.oocText ? entry.oocText : entry.text;
+    ps.fumbleText = displayText;
     // A destroyed ship stays in the race until the Leg ends (see finishLeg) --
     // don't end the race here even if it was the last living Hero.
     saveState(); render();
     // Announce a kill with the Fumble description that caused it.
-    if (participant.out && !wasOut) {
-      alert(`💥 ${shipName(participant.shipId)} is Out of Commission (OOC) and out of the race!\n\n${entry.text}`);
+    if (justWentOut) {
+      alert(`💥 ${shipName(participant.shipId)} is Out of Commission (OOC) and out of the race!\n\n${displayText}`);
     }
   },
   doBaseResult() {
