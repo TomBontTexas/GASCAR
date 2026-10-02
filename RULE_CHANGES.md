@@ -17,6 +17,58 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-01 — NPCs automate their own Maneuvers and (Circular Track) Slip
+- **New rule:** every NPC now has an **Aggression** score, 1-10, set by the
+  Racemaster when adding it in Race Setup (a Randomize button is available).
+  **Aggression is public knowledge** — shown next to the NPC's name on
+  Standings and in the Declarations table, same as any other visible race
+  info. A 10 is reckless and always looking for a fight; a 1 plays it safe
+  and rarely acts at all.
+- **Leg Aggression** = Aggression + (current standings position − 1), 1 =
+  leading. A ship further back is willing to gamble more than its base
+  personality alone would suggest, regardless of how timid or vicious it
+  is; exact ties in position are broken randomly.
+- **Maneuvers:** each of the NPC's 4 crew positions (Pilot/Navigator/
+  Spotter/Engineer) independently rolls d20 ≤ its Leg Aggression. On a
+  success, margin = Leg Aggression − roll decides which tier it reaches:
+  margin 0-2 → D, 3-5 → DD, 6-9 → DDD, 10+ → Attack (Pilot only — the other
+  three positions have no 4th tier and cap at DDD). Each position/tier
+  combination is exactly one named Maneuver, same table Heroes use. Target
+  is whoever's immediately ahead of the NPC in the current standings — the
+  ship actually blocking its way forward — filtered to Maneuver range (2
+  hexes) on a Circular Track, falling back to the nearest legal rival ahead
+  or skipping the Maneuver if nobody qualifies.
+- **Slip (Circular Track only):** the Pilot makes one more, independent d20
+  ≤ Leg Aggression roll to decide whether it attempts a Slip at all this
+  Leg — rolled regardless of whether this Leg's movement will even touch a
+  curve, since closing lane distance toward a rival has value on its own.
+  On a success, amount = `max(1, floor(margin / 2))` lanes (a bare success
+  always Slips at least 1).
+  - **Hunting:** if the NPC has a legal Maneuver target that isn't already
+    within Maneuver range, it rolls one more d20 ≤ Leg Aggression. On a
+    success, the Slip's direction is aimed at closing the lane gap toward
+    that target instead of the plain lean below, capped at whichever is
+    smaller: the roll's own allowance, or the lanes actually needed to
+    reach range (never overshoots trying to force it).
+  - **Plain lean** (used whenever hunting doesn't apply, isn't rolled, or
+    fails): `margin / Leg Aggression ≥ 0.5` leans inward (chasing Slingshot
+    speed, accepting the Disadvantage), otherwise outward (banking the free
+    Advantage) — scaled to the ship's own Leg Aggression rather than a flat
+    number, so it means the same thing for a timid ship and a reckless one.
+  - Either way, the final amount is still capped by how many lanes are
+    physically available in that direction.
+- **NPC Performance rolls are now genuinely symmetric:** an NPC's roll used
+  to only ever apply Disadvantage (from Maneuvers run against it). It now
+  sums Maneuvers received (always Disadvantage) with its own Slip's A/D
+  (Advantage if outward touching a curve, Disadvantage if inward) into one
+  net value, and rolls `|net|+1` d6s keeping the highest on Advantage or
+  the lowest on Disadvantage — the same shape a Hero's own Task Check
+  already uses, just with d6s instead of d20s and no Crit/Fumble escalation
+  (still just the one extreme die picks the NPC Performance row).
+- **Where:** `app.js` → `standingsPositions()`, `legAggressionFor()`,
+  `npcManeuverTierForMargin()`, `npcManeuverFor()`, `autoDeclareNpc()`,
+  `autoDeclareNpcSlip()` (called from `lockDeclarations()`), `rollNpc()`.
+
 ### 2026-08-24 — Circular Track rebuilt on a real hex grid (supersedes the entire square-grid system below, from "each square of Slip..." (2026-08-19) through "10 extra squares added..." (2026-08-19))
 - **Why:** an earlier attempt at a hex-based track (evidence still visible as
   the `hexPos`/`innerHexes` field names this migration reintroduces) had

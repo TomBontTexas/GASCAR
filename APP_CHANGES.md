@@ -15,6 +15,49 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-01 — NPC automation: Maneuvers, Slip, and symmetric Performance rolls
+- **New feature:** NPCs now declare their own Maneuvers and (Circular Track)
+  Slip automatically, driven by a per-NPC Aggression score — see
+  RULE_CHANGES.md for the full mechanic. Previously an NPC did nothing at
+  Declarations at all; it only auto-rolled its Leg result once every Hero
+  had finished.
+- **Data model:** NPC participants now carry `aggression` (1-10, set at Race
+  Setup, defaults to 5 for any NPC saved before this existed). `npcState`
+  (per-Leg, in `legState`) grew `maneuvers`/`maneuverTargetId`/`slip`/
+  `slipHexes`/`slipAdvantage`/`huntedThisLeg`, mirroring a Hero's `ps` shape
+  closely enough that `declaredManeuversText()` and `finishLeg()`'s circular
+  Slip block (now `ls.perShip[r.id] || ls.npcState[r.id]`) treat either
+  uniformly without new branching.
+- **A few implementation calls made where the design discussion didn't
+  specify an exact number, flagged here for visibility:**
+  - An NPC has no Ship Class of its own, so **Pilot Attack's Tier cost uses
+    the race course's own Division's book Tier** (`GDATA.SHIP_CLASSES[division].tier`),
+    not a per-NPC value.
+  - **No self-cost for an NPC's own instigated Maneuvers** (a Hero's
+    acting position takes some Disadvantage too, from `maneuverInstigatedByPos`)
+    — NPCs have only the one flat Performance roll, with no per-position
+    Task Check for a self-cost to land on, so it's simply not applied.
+  - **Hunting's "lanes needed to reach range" is approximated** as
+    `max(0, lane gap − 2)` (2 = `MANEUVER_RANGE_HEXES`) rather than
+    simulating exact post-Slip hex positions — close enough to reliably
+    close to striking distance without the cost of a full search.
+  - **An NPC's Slip curve-touch check only looks at the hexes the lane
+    change itself passes through**, not a full Leg's worth of projected
+    forward movement the way a Hero's declared Acceleration lets
+    `lockDeclarations()` project — NPCs don't declare an Acceleration, so
+    there's no equivalent known quantity to project through at declare time.
+- Reference page (`renderReference()`'s Racing Maneuvers section) is
+  unaffected — NPCs use the exact same Maneuver table Heroes do.
+- Verified with ~100 headless-browser checks: the margin→tier bands, Attack
+  gating, target selection (including Maneuver-range filtering and fallback),
+  Slip amount/direction/hunting logic (including the lane-availability
+  clamp), the generalized symmetric `rollNpc()` dice, `finishLeg()` actually
+  moving an NPC's lane from its declared Slip, a full Leg cycle through the
+  real `App.lockDecl()`/`doBaseResult()`/`doFinishLeg()` actions with a mix
+  of Heroes and NPCs, the new Race Setup/Declarations/Standings UI, and a
+  Hero-only race (zero NPCs) to confirm no regression to the existing
+  pipeline.
+
 ### 2026-08-25 — Fixed three more hex Slip bugs: wrong distance metric, a wrap-seam exploit, wrong scoring through curves
 - **Bug #1, found via a user-annotated screenshot (numbered 1-7 showing the
   ship should have ended much farther along than it did):** the previous

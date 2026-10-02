@@ -627,7 +627,17 @@ function initLegState(race) {
   });
   const npcState = {};
   race.participants.filter(p => p.type === "npc").forEach(p => {
-    npcState[p.id] = { maneuverReceivedD: 0 };
+    // NPC automation (see RULE_CHANGES.md): maneuvers/slip/slipHexes/
+    // slipAdvantage/huntedThisLeg mirror a Hero's ps shape closely enough
+    // that declaredManeuversText() and finishLeg()'s circular Slip block
+    // (ls.perShip[r.id] || ls.npcState[r.id]) can treat either uniformly.
+    npcState[p.id] = {
+      maneuverReceivedD: 0,
+      maneuvers: { pilot: "", navigator: "", spotter: "", engineer: "" },
+      maneuverTargetId: null,
+      slip: "", slipHexes: 0, slipAdvantage: 0,
+      huntedThisLeg: false
+    };
   });
   race.legState = {
     leg, declLocked: false, perShip, npcState,
@@ -690,7 +700,7 @@ function breakTieOrder(tiedShips) {
   }
   return result;
 }
-function startRace(courseId, shipIds, npcNames) {
+function startRace(courseId, shipIds, npcs) {
   const course = getCourse(courseId);
   const circular = course.trackType === "circular";
   const participants = [];
@@ -710,10 +720,14 @@ function startRace(courseId, shipIds, npcNames) {
   // any color, whichever hull number -- distinct from every Hero ship and
   // every other NPC in this same race, so no two bars on the board look alike.
   // NPC icons come from the course's Division (all racers in a race share it).
-  npcNames.forEach(n => {
+  npcs.forEach(n => {
     const pick = pickRandomUnusedIcon(usedIcons);
     if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
-    participants.push({ id: uid("npc"), type: "npc", name: n, cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "" });
+    // Aggression (see RULE_CHANGES.md): 1-10, public knowledge, drives this
+    // NPC's whole automated behavior (Maneuvers, Slip) via its Leg
+    // Aggression (aggression + standings position - 1, computed fresh each
+    // Leg in lockDeclarations()).
+    participants.push({ id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5), cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "" });
   });
   // Circular Track / Distance Tracking (see RULE_CHANGES.md): every racer starts
   // in a lane, round-robin, and tracks laps completed + hex position within
@@ -747,6 +761,140 @@ function startRace(courseId, shipIds, npcNames) {
   initLegState(race);
   STATE.race = race;
   saveState();
+}
+// NPC automation (see RULE_CHANGES.md): standings position among still-active
+// (not destroyed) racers, 1 = leading, used to compute each NPC's Leg
+// Aggression. Exact ties are broken randomly -- each tied racer gets its own
+// distinct position, not a shared rank, per the Racemaster's own call.
+function standingsPositions(race) {
+  const active = race.participants.filter(p => !p.out);
+  const shuffled = [...active].sort(() => Math.random() - 0.5);
+  shuffled.sort((a, b) => b.cumulative - a.cumulative);
+  const positions = {};
+  shuffled.forEach((p, i) => { positions[p.id] = i + 1; });
+  return positions;
+}
+// An NPC's own Aggression (1-10, public, set at Race Setup) plus its current
+// standings position - 1 -- a ship further back is more willing to gamble,
+// regardless of its base personality. Falls back to 5 for any NPC saved
+// before this field existed.
+function legAggressionFor(p, positions) {
+  return (p.aggression || 5) + ((positions[p.id] || 1) - 1);
+}
+// Margin = leg aggression - roll, only meaningful on a success (roll <= leg
+// aggression). Picks which Maneuver tier an NPC's position check reaches --
+// margin 0-2 -> D, 3-5 -> DD, 6-9 -> DDD, 10+ -> Attack (Pilot only; the
+// caller caps non-Pilot positions at DDD since they have no 4th tier).
+function npcManeuverTierForMargin(margin) {
+  if (margin >= 10) return 4;
+  if (margin >= 6) return 3;
+  if (margin >= 3) return 2;
+  return 1;
+}
+function npcManeuverFor(position, tier) {
+  if (tier >= 4 && position === "pilot") return GDATA.MANEUVERS.find(m => m.position === "pilot" && m.disadv === "Tier");
+  return GDATA.MANEUVERS.find(m => m.position === position && m.disadv === Math.min(tier, 3));
+}
+// Automates one NPC's Maneuvers (all 4 positions, each an independent d20 <=
+// leg aggression check) and, on a Circular Track, its Slip -- see
+// RULE_CHANGES.md for the full mechanic. Called from lockDeclarations() once
+// standings positions are known for this Leg.
+function autoDeclareNpc(race, p, legAggression, course, maneuverGeom, positions) {
+  const ls = race.legState, ns = ls.npcState[p.id];
+  ns.maneuvers = { pilot: "", navigator: "", spotter: "", engineer: "" };
+  ns.maneuverTargetId = null;
+  ns.slip = ""; ns.slipHexes = 0; ns.slipAdvantage = 0; ns.huntedThisLeg = false;
+
+  // Legal targets: the same rule Heroes use (excludes self, destroyed ships,
+  // and -- on a Circular Track -- anyone out of Maneuver range).
+  const legalTargets = race.participants.filter(x => x.id !== p.id && !x.out && (!maneuverGeom || hexesWithinManeuverRange(maneuverGeom, p, x)));
+  // "Logical" target: whoever's immediately ahead of this NPC in the
+  // standings -- that's who's actually blocking its way forward -- falling
+  // back through the ordered field (closest-ahead first) to the nearest one
+  // that's actually legal, or none if nobody ahead qualifies.
+  const aheadOrder = race.participants
+    .filter(x => x.id !== p.id && !x.out && positions[x.id] < positions[p.id])
+    .sort((a, b) => positions[b.id] - positions[a.id]);
+  const target = aheadOrder.find(x => legalTargets.includes(x)) || null;
+
+  const divStats = GDATA.SHIP_CLASSES[course.division] || GDATA.SHIP_CLASSES.Comet;
+  const tier = divStats.tier; // NPCs have no Ship Class of their own -- use the course Division's book Tier for Attack's -Tier cost
+  if (target) {
+    POSITIONS.forEach(pos => {
+      const roll = rollD(20);
+      if (roll > legAggression) return;
+      const margin = legAggression - roll;
+      const mv = npcManeuverFor(pos, npcManeuverTierForMargin(margin));
+      if (!mv) return;
+      ns.maneuvers[pos] = mv.name;
+      ns.maneuverTargetId = target.id;
+      const dAmount = mv.disadv === "Tier" ? tier : mv.disadv;
+      if (ls.perShip[target.id]) {
+        const t = ls.perShip[target.id];
+        t.maneuverReceivedByPos = t.maneuverReceivedByPos || { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
+        t.maneuverReceivedByPos[pos] += dAmount;
+      } else if (ls.npcState[target.id]) {
+        ls.npcState[target.id].maneuverReceivedD += dAmount;
+      }
+    });
+  }
+
+  if (course.trackType === "circular") autoDeclareNpcSlip(race, p, legAggression, course, maneuverGeom, target);
+}
+// NPC Slip (Circular Track only, see RULE_CHANGES.md): one more independent
+// d20 <= leg aggression roll decides whether the Pilot attempts a Slip at
+// all this Leg -- regardless of whether this Leg's movement will even touch
+// a curve, since closing lane distance toward a target has value on its own.
+function autoDeclareNpcSlip(race, p, legAggression, course, geom, target) {
+  const ns = race.legState.npcState[p.id];
+  const roll = rollD(20);
+  if (roll > legAggression) return;
+  const margin = legAggression - roll;
+  const amount = Math.max(1, Math.floor(margin / 2));
+  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
+
+  let dir = null, hexes = 0;
+  const alreadyInRange = target && hexesWithinManeuverRange(geom, p, target);
+  if (target && !alreadyInRange) {
+    // Hunting progression: if this succeeds, the Slip is aimed at closing
+    // the lane gap toward the target instead of the plain lean below,
+    // capped at this roll's own allowance -- never overshoot trying to
+    // force it.
+    if (rollD(20) <= legAggression) {
+      const towardLeft = target.lane < p.lane;
+      const laneGap = Math.abs(target.lane - p.lane);
+      const neededLanes = Math.max(0, laneGap - MANEUVER_RANGE_HEXES);
+      const huntAmount = Math.min(amount, neededLanes, towardLeft ? maxLeft : maxRight);
+      if (huntAmount > 0) { dir = towardLeft ? "left" : "right"; hexes = huntAmount; ns.huntedThisLeg = true; }
+    }
+  }
+  if (dir === null) {
+    // Plain lean: how decisively this roll beat the ship's OWN leg
+    // aggression (not an absolute number, so it means the same thing for a
+    // timid ship and a reckless one) decides inward (chase Slingshot speed,
+    // accept Disadvantage) vs outward (bank the free Advantage).
+    const inward = (margin / legAggression) >= 0.5;
+    dir = inward ? "left" : "right";
+    hexes = Math.min(amount, dir === "left" ? maxLeft : maxRight);
+  }
+  if (hexes <= 0) return; // no room to slip that way -- nothing happens
+
+  ns.slip = dir; ns.slipHexes = hexes;
+  // NPCs don't declare an Acceleration the way Heroes do, so there's no
+  // known future movement to project a curve-touch check through (see
+  // lockDeclarations()'s Hero Slip block) -- instead walk just the `hexes`
+  // diagonal steps of the lane change itself, checking each landing hex.
+  const dirVal = dir === "left" ? -1 : 1;
+  let touchesCurve = !isHexOnStraight(geom, p.lane - 1, p.hexPos || 0);
+  let curLaneIdx0 = p.lane - 1, curHexPos = p.hexPos || 0;
+  for (let i = 0; i < hexes && !touchesCurve; i++) {
+    const sn = geom.slipNeighbors[curLaneIdx0][curHexPos];
+    const candidates = dirVal > 0 ? sn.outward : sn.inward;
+    if (!candidates.length) break;
+    curLaneIdx0 += dirVal; curHexPos = candidates[0];
+    if (!isHexOnStraight(geom, curLaneIdx0, curHexPos)) touchesCurve = true;
+  }
+  ns.slipAdvantage = touchesCurve ? (dir === "right" ? hexes : -hexes) : 0;
 }
 function lockDeclarations() {
   const race = STATE.race, ls = race.legState;
@@ -841,6 +989,15 @@ function lockDeclarations() {
       if (targets.length > 1) selfD += (targets.length - 1); // +1 Disadvantage per additional target
       ps.maneuverInstigatedByPos[pos] += selfD;
     });
+  });
+  // NPC automation (see RULE_CHANGES.md): each active NPC now declares its
+  // own Maneuvers and (Circular Track) Slip, driven by its Leg Aggression --
+  // computed from this moment's standings, same as every Hero's Declaration
+  // just locked in above.
+  const maneuverGeom = course.trackType === "circular" ? circTrackGeometry(course) : null;
+  const positions = standingsPositions(race);
+  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
+    autoDeclareNpc(race, p, legAggressionFor(p, positions), course, maneuverGeom, positions);
   });
   ls.declLocked = true;
   saveState();
@@ -1005,8 +1162,13 @@ function rollNpc(pid) {
   // rolls one more d6, keeping the lowest (Disadvantage) or highest (Advantage) to
   // pick the NPC Performance row. No Crit/Fumble for NPCs, just the extreme die.
   const race = STATE.race, ls = race.legState;
-  const disadv = (ls.npcState[pid] && ls.npcState[pid].maneuverReceivedD) || 0;
-  const net = -disadv; // Racing Maneuvers only ever impose Disadvantage on NPC targets today
+  const ns = ls.npcState[pid] || {};
+  // NPC automation (see RULE_CHANGES.md): net now sums EVERY source of this
+  // Leg's A/D -- Maneuvers received (always Disadvantage) plus this NPC's
+  // own Slip (Advantage if outward touching a curve, Disadvantage if
+  // inward) -- so an NPC can finally land on the Advantage side, same as a
+  // Hero's rollCheck().
+  const net = (ns.slipAdvantage || 0) - (ns.maneuverReceivedD || 0);
   const diceCount = Math.abs(net) + 1;
   const dice = Array.from({ length: diceCount }, () => rollD(6));
   const chosen = net >= 0 ? Math.max(...dice) : Math.min(...dice);
@@ -1079,8 +1241,12 @@ function finishLeg() {
       // Circular Track Slip (see RULE_CHANGES.md): the Slip's hexes are
       // taken first, then the ship continues forward in its new lane -- see
       // resolveSlipPath(). A ship that didn't Slip this Leg (or rolled 0
-      // movement) just moves forward in its current lane as always.
-      const ps = ls.perShip[r.id];
+      // movement) just moves forward in its current lane as always. An NPC
+      // has no perShip entry -- its own automated Slip (see
+      // autoDeclareNpcSlip()) lives on npcState instead, in the same
+      // slip/slipHexes/slipAdvantage shape, so this falls back to it
+      // transparently.
+      const ps = ls.perShip[r.id] || ls.npcState[r.id];
       const originLaneIdx0 = participant.lane - 1;
       const declaredSlipHexes = (ps && ps.slip) ? (ps.slipHexes || 0) : 0;
       const actualSlipHexes = Math.min(declaredSlipHexes, Math.max(0, r.movement));
@@ -1681,9 +1847,15 @@ function renderRaceSetup() {
     ${eligible.length ? eligible.map(s => `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)} <span class="muted">(${s.cls})</span>${shipCrewComplete(s) ? "" : ` <span class="tag danger" title="${crewLockMessage(s)}">🔒 crew incomplete</span>`}</label>`).join("")
       : `<span class="muted">No ${division} Division ships built yet — build one in the Hangar Bay and set its Division to ${division}.</span>`}
   </div></div>`;
-  html += `<div class="formrow"><label>NPC Racers</label><div>
-    <input id="npcName" placeholder="NPC name"><button class="ghost" title="Random ship name" onclick="App.rollNpcName()">🎲</button><button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
-    <div id="npcList">${(STATE._draftNpcs || []).map((n, i) => `<span class="tag">${esc(n)} <a href="#" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join(" ")}</div>
+  html += `<div class="formrow" style="align-items:flex-start"><label>NPC Racers</label><div>
+    <div class="row">
+      <input id="npcName" placeholder="NPC name"><button class="ghost" title="Random ship name" onclick="App.rollNpcName()">🎲</button>
+      <label>Aggression ${numStepper(`<input id="npcAggression" type="number" min="1" max="10" value="${STATE._draftNpcAggression || 5}" style="width:48px">`)}</label>
+      <button class="ghost" title="Randomize Aggression" onclick="App.randomizeDraftNpcAggression()">🎲</button>
+      <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
+    </div>
+    <p class="muted" style="margin:0 0 6px">Aggression (1-10, public knowledge -- see Instructions) drives this NPC's automated Maneuvers and Slip during the race.</p>
+    <div id="npcList">${(STATE._draftNpcs || []).map((n, i) => `<span class="tag">${esc(n.name)} <span class="muted">(Aggr ${n.aggression})</span> <a href="#" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join(" ")}</div>
   </div></div>`;
   html += `<button onclick="App.beginRace()">Start Race</button></section>`;
   return html;
@@ -2165,7 +2337,10 @@ function renderStandings(race) {
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
     const circTag = circular ? ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}` : "";
-    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(icon)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}</span></span></span>
+    // NPC Aggression is public knowledge (see RULE_CHANGES.md) -- shown
+    // wherever else a racer's other public info (lane, lap, Initiative) is.
+    const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated Maneuvers and Slip">Aggr ${p.aggression || 5}</span>` : "";
+    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(icon)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
           <div class="boardbar"><div class="boardfill${p.out ? " dead" : ""}" id="boardfill-${p.id}" style="width:${pct}%"></div></div>
@@ -2248,8 +2423,15 @@ function renderDeclarations(race) {
       });
       Object.entries(ls.npcState).forEach(([pid, ns]) => {
         const p = race.participants.find(x => x.id === pid);
-        const laneCell = circular ? `<td>${p.lane}</td><td>—</td>` : "";
-        html += `<tr><td>${iconThumbImg(p)} ${esc(p.name)} <span class="muted">(NPC)</span></td><td>—</td><td>—</td>${laneCell}<td>—</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td></tr>`;
+        if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
+        // NPC automation (see RULE_CHANGES.md): Aggression is public
+        // knowledge, shown right on the name. The Slip tag and combined net
+        // (Maneuvers received + this NPC's own Slip A/D) mirror a Hero's row
+        // above as closely as the shared shapes allow.
+        const slipTag = ns.slip ? ` <span class="tag">Slipped ${ns.slip} ${ns.slipHexes} (${netLabel(ns.slipAdvantage || 0)})${ns.huntedThisLeg ? " 🎯" : ""}</span>` : "";
+        const laneCell = circular ? `<td>${p.lane}${slipTag}</td><td>—</td>` : "";
+        const net = (ns.slipAdvantage || 0) - (ns.maneuverReceivedD || 0);
+        html += `<tr><td>${iconThumbImg(p)} ${esc(p.name)} <span class="muted">(NPC, Aggr ${p.aggression || 5})</span></td><td>—</td><td>—</td>${laneCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(net)}</td><td>—</td></tr>`;
       });
       html += `</table>`;
     }
@@ -2796,14 +2978,14 @@ function renderInstructions() {
     <p><b>Circular — Distance Tracking</b> is an alternate way to run the race, on a real hex-grid track: the course has 6 lanes, each exactly 6 hexes longer per lap than the one inside it (an exact property of the hex grid, not a chosen number; inner lane defaults to roughly 50 hexes), and you set how many laps finish the race. Each Leg, a Hero moves hexes equal to their own <b>Leg Ranking Score</b> (Speed Bonus, +1 per Critical Success Level, -1 per Fumble Level) — but a <b>Failed or Fumbled Pilot Task Check halves that Leg's Movement, rounded up</b>, applied before Slip is worked out (stacks with, doesn't replace, the usual -1/level Fumble hit to the Leg Ranking Score itself). NPCs move off the Base Leg Result (the Heroes' average Speed Bonus alone) instead and are never halved. The race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip hexes are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble/halving that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per hex slipped outward or costs −1 Disadvantage per hex slipped inward. An inward Slip that touches a curve <b>also</b> grants <b>+1 bonus Movement per hex actually Slipped</b> (Slingshot), on top of ordinary movement, pure free speed for cutting the inside line — this only fires for a Slip actually declared and executed that Leg, not just for sitting in the inside lane. Ships can only Slip into an adjacent lane's hex that's actually next to their current one. If two or more ships end a Leg sharing the same hex (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage per ship sharing that hex (2 ships sharing costs 2 D each, 3 ships costs 3 D each, and so on).</p>
 
     <h3>5. Race — run it</h3>
-    <p>Race Setup filters selectable Ships to the chosen course's Division, and you can add NPC racers alongside your Heroes. Each Leg then walks through, in order:</p>
+    <p>Race Setup filters selectable Ships to the chosen course's Division, and you can add NPC racers alongside your Heroes — each one gets an <b>Aggression</b> score (1-10, a Randomize button is right there) that drives its behavior all race long; it's public information, shown next to its name on Standings and in Declarations. Each Leg then walks through, in order:</p>
     <ol>
-      <li><b>Declarations</b> — every Ship sets its Acceleration (capped by its Class's Max Thrust, reduced by any active Fumble penalties) and may run one Racing Maneuver per position against a target's same position. On a Circular Track, a Maneuver can only target a ship within 2 hexes; straight/Legs courses have no hexes, so targeting is unrestricted there.</li>
+      <li><b>Declarations</b> — every Ship sets its Acceleration (capped by its Class's Max Thrust, reduced by any active Fumble penalties) and may run one Racing Maneuver per position against a target's same position. On a Circular Track, a Maneuver can only target a ship within 2 hexes; straight/Legs courses have no hexes, so targeting is unrestricted there. NPCs declare automatically here too: each of its 4 crew positions independently rolls against its <b>Leg Aggression</b> (its own Aggression plus its current standings position minus 1 — a ship further back gambles more, regardless of personality) to see whether it runs a Maneuver, how hard, and against whoever's closest ahead of it; on a Circular Track its Pilot may also automatically Slip, sometimes hunting down a rival to get within Maneuver range.</li>
       <li><b>Phase I (Conditions)</b> — apply per-crewman conditions (Wounded, Under Fire, etc.); each one is Disadvantage on every position that crewman holds. Lock conditions once set so they hold for the whole Leg.</li>
       <li><b>Resistance</b> — every crewman rolls to resist G-forces from the declared Acceleration vs. the Damper Rating; a failed roll costs Disadvantage on that crewman's positions for the rest of the Leg.</li>
       <li><b>Engineer → Spotter → Navigator</b> — each rolls their Task Check and grants Advantage/Disadvantage to a chosen Ship (their own or a rival's); a Critical Success or Fumble can offer a bigger or different choice.</li>
       <li><b>Pilot</b> — rolls last. The Pilot's TN check (Score + accumulated Advantage/Disadvantage) determines pass/fail and Critical/Fumble, but who actually <i>wins</i> the Leg is decided separately: Speed Bonus (= declared Acceleration) plus 1 per Critical Success level, minus 1 per Fumble level.</li>
-      <li><b>NPCs</b> auto-roll off the Base Leg Result once every Hero has finished. <b>Standings</b> then shows finishing order for the Leg; a Ship reduced to 0 HP is marked OOC (Out of Commission) and stays frozen at its crash position for the rest of the race.</li>
+      <li><b>NPCs</b> auto-roll off the Base Leg Result once every Hero has finished — its own Maneuvers-received and (Circular Track) Slip this Leg can swing that roll toward Advantage or Disadvantage, same as a Hero's own Task Check. <b>Standings</b> then shows finishing order for the Leg; a Ship reduced to 0 HP is marked OOC (Out of Commission) and stays frozen at its crash position for the rest of the race.</li>
     </ol>
     <p>On a Circular Track, <b>Show Last Leg</b>/<b>Show Entire Race</b> (above the Standings track) replay each Ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through so its path stays visible on the track. Click anywhere to clear the trail.</p>
 
@@ -3411,11 +3593,14 @@ const App = {
     const input = document.getElementById("npcName");
     const v = input.value.trim();
     if (!v) return;
+    const aggression = clampInt(document.getElementById("npcAggression").value, 1, 10, 5);
     STATE._draftNpcs = STATE._draftNpcs || [];
-    STATE._draftNpcs.push(v);
+    STATE._draftNpcs.push({ name: v, aggression });
+    STATE._draftNpcAggression = aggression; // remembered for the next Add, like a default
     input.value = "";
     render();
   },
+  randomizeDraftNpcAggression() { document.getElementById("npcAggression").value = rollD(10); },
   removeDraftNpc(i) { STATE._draftNpcs.splice(i, 1); render(); },
   setRaceSetupCourse(id) {
     STATE._raceSetupCourse = id;
