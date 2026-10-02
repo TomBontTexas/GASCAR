@@ -3123,7 +3123,7 @@ function renderReference() {
   </section>`;
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
-    <tr><th>Division</th><th>Max Tier</th><th>Common Name</th><th>Max Thrust</th><th>Damper</th><th>Min Crew</th></tr>
+    <tr><th>Division</th><th>Max Tier</th><th>Common Name</th><th>Suggested Max Thrust</th><th>Damper</th><th>Crew</th></tr>
     ${GDATA.DIVISIONS.map(d => { const c = GDATA.SHIP_CLASSES[d]; return `<tr><td>${d}</td><td>${c.tier}</td><td>${c.common}</td><td>${c.maxThrust}-G</td><td>${c.damper}-G</td><td>${c.crew || 1}</td></tr>`; }).join("")}
   </table></section>`;
 
