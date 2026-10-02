@@ -15,6 +15,33 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-02 — Bug fix: NPC Leg Aggression's standings position now reflects real track position, not raw cumulative Movement
+- **Bug:** `standingsPositions()` (which `legAggressionFor()` uses to set each
+  NPC's Leg Aggression) ranked racers by raw `cumulative` — the running sum
+  of each Leg's Movement. That's a reasonable stand-in on a straight/Legs
+  course (cumulative IS the race score there), but on a Circular Track it can
+  diverge from where a ship actually sits: an outer lane's lap is physically
+  longer, a Slip's lane change is free (doesn't add to cumulative), and
+  Slingshot's bonus Movement isn't folded into cumulative either — so a ship
+  that spent more total Movement than another can still be sitting BEHIND it
+  on the real track, or two ships can be sitting on the exact same hex while
+  showing different cumulative totals. Found by the user reviewing an
+  exported race where two ships (one Hero, one NPC) occupied the identical
+  lane and hex but had different cumulative values, which `standingsPositions()`
+  was ranking as a clean 1st/2nd instead of recognizing the tie.
+- **Fix:** on a Circular Track, standings are now ranked by real track
+  position — laps completed plus a lane-length-normalized fraction through
+  the current lap (the same `hexLegOffset()` measure `resolveSlipPath()`
+  already uses to judge real progress fairly across lanes of different
+  length). Two ships on the same lane and hex now correctly tie (broken
+  randomly, same as any other tie) instead of being ordered by an unrelated
+  number. Straight/Legs courses are unaffected — `cumulative` is used as-is
+  there, since there's no lane geometry to normalize against.
+- Where: `app.js` — `standingsPositions(race, course)` (now takes `course`;
+  its one caller, in `lockDeclarations()`, was updated to pass it).
+
+---
+
 ### 2026-10-01 — Declarations table: columns reordered and rescoped to the Pilot, Crowded D made visible
 - Reordered the locked Declare Intentions table to build up left-to-right
   into a final **Pilot Total** at the far right: Accel, Crowded D, Net Leg

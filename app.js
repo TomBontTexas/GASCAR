@@ -767,10 +767,24 @@ function startRace(courseId, shipIds, npcs) {
 // (not destroyed) racers, 1 = leading, used to compute each NPC's Leg
 // Aggression. Exact ties are broken randomly -- each tied racer gets its own
 // distinct position, not a shared rank, per the Racemaster's own call.
-function standingsPositions(race) {
+// Ranked by REAL track position (laps completed + fraction through the
+// current lap, lane-length-normalized the same way resolveSlipPath() judges
+// real progress) on a Circular Track -- NOT raw cumulative Movement. A ship
+// can spend more total Movement than another and still be behind it: outer
+// lanes are longer, a Slip's lane change is free (doesn't add to cumulative),
+// and Slingshot's bonus Movement isn't folded into cumulative either, so
+// cumulative alone can diverge from where a ship actually sits on the track.
+// Straight/Legs courses have no lane geometry to normalize against, so
+// cumulative (there, literally the race score) is used as-is.
+function standingsPositions(race, course) {
   const active = race.participants.filter(p => !p.out);
+  const circular = course && course.trackType === "circular";
+  const ringParams = circular ? hexRingParamsForCourse(course) : null;
+  const trackProgress = p => circular
+    ? (p.laps || 0) * 6 + hexLegOffset(ringParams.innerRing, ringParams.straightLen, (p.lane || 1) - 1, p.hexPos || 0)
+    : p.cumulative;
   const shuffled = [...active].sort(() => Math.random() - 0.5);
-  shuffled.sort((a, b) => b.cumulative - a.cumulative);
+  shuffled.sort((a, b) => trackProgress(b) - trackProgress(a));
   const positions = {};
   shuffled.forEach((p, i) => { positions[p.id] = i + 1; });
   return positions;
@@ -996,7 +1010,7 @@ function lockDeclarations() {
   // computed from this moment's standings, same as every Hero's Declaration
   // just locked in above.
   const maneuverGeom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-  const positions = standingsPositions(race);
+  const positions = standingsPositions(race, course);
   race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
     autoDeclareNpc(race, p, legAggressionFor(p, positions), course, maneuverGeom, positions);
   });
@@ -2406,9 +2420,24 @@ function renderFinalStandings(race) {
   return html;
 }
 
-function declaredManeuversText(ps) {
-  const parts = POSITIONS.filter(pos => ps.maneuvers && ps.maneuvers[pos]).map(pos => `${POS_LABEL[pos]}: ${ps.maneuvers[pos]}`);
-  return parts.length ? parts.join(", ") : "—";
+// Abbreviated position labels for the Declarations table's cramped Maneuver
+// column only -- POS_LABEL's full names ("Navigator", "Spotter") run too
+// wide once the target name is appended too.
+const POS_ABBR = { pilot: "Pil", navigator: "Nav", spotter: "Spt", engineer: "Eng" };
+function declaredManeuversText(ps, participants) {
+  const targetName = tid => {
+    const t = participants && participants.find(p => p.id === tid);
+    if (!t) return "?";
+    return t.type === "hero" ? shipName(t.shipId) : t.name;
+  };
+  const parts = POSITIONS.filter(pos => ps.maneuvers && ps.maneuvers[pos]).map(pos => {
+    // Heroes track one target list per position; NPCs share a single target
+    // across every position that rolled a Maneuver this Leg (see autoDeclareNpc()).
+    const targetIds = ps.maneuverTargets ? (ps.maneuverTargets[pos] || []) : (ps.maneuverTargetId ? [ps.maneuverTargetId] : []);
+    const names = targetIds.map(targetName);
+    return `${POS_ABBR[pos]}: ${ps.maneuvers[pos]}${names.length ? ` (${names.join(", ")})` : ""}`;
+  });
+  return parts.length ? parts.join("<br>") : "—";
 }
 // Declarations table's Racer column: the icon is tall enough for three lines
 // of text beside it, so the name (split at the first word) and any short
@@ -2449,7 +2478,7 @@ function renderDeclarations(race) {
         const manInstPilot = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos.pilot) || 0;
         const maneuverNet = -manRecvPilot - manInstPilot;
         html += `<tr>${renderRacerCell(ship, "")}<td>${ps.accel}-G</td>${crowdedCell}<td>${netLabel(ps.netLegAcc)}</td>${laneSlipCell}
-          <td>${declaredManeuversText(ps)}</td><td>${netLabel(-manRecvPilot)}</td><td>${netLabel(-manInstPilot)}</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotPreviewTotal(ps))}</td></tr>`;
+          <td>${declaredManeuversText(ps, race.participants)}</td><td>${netLabel(-manRecvPilot)}</td><td>${netLabel(-manInstPilot)}</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotPreviewTotal(ps))}</td></tr>`;
       });
       Object.entries(ls.npcState).forEach(([pid, ns]) => {
         const p = race.participants.find(x => x.id === pid);
@@ -2466,7 +2495,7 @@ function renderDeclarations(race) {
         const laneSlipCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(ns.slipAdvantage || 0)}</td>` : "";
         const maneuverNet = -(ns.maneuverReceivedD || 0);
         const pilotTotal = (ns.slipAdvantage || 0) + maneuverNet;
-        html += `<tr>${renderRacerCell(p, `NPC, Aggr ${p.aggression || 5}`)}<td>—</td>${crowdedCell}<td>—</td>${laneSlipCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotTotal)}</td></tr>`;
+        html += `<tr>${renderRacerCell(p, `NPC, Aggr ${p.aggression || 5}`)}<td>—</td>${crowdedCell}<td>—</td>${laneSlipCell}<td>${declaredManeuversText(ns, race.participants)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotTotal)}</td></tr>`;
       });
       html += `</table>`;
       html += `<p class="muted" style="margin:4px 0 0">Pilot Total = Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net, all specific to the Pilot position. Doesn't include Phase I Conditions, Resistance, or Engineer/Spotter/Navigator grants, which are tracked in their own cards below.</p>`;
