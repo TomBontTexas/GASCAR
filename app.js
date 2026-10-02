@@ -55,8 +55,9 @@ function netLabel(net) {
   if (!net) return "—";
   // Repeated letters (A/AA/D/DD), matching formatMk()'s on-a-skill notation
   // -- "+1A" read too easily as "+1 AND Advantage" (a numeric bonus on top
-  // of Advantage) rather than "1 Level of Advantage".
-  return (net > 0 ? "+" : "-") + (net > 0 ? "A".repeat(net) : "D".repeat(-net));
+  // of Advantage) rather than "1 Level of Advantage". No leading +/- either:
+  // the letter itself (A vs D) already says which direction it is.
+  return net > 0 ? "A".repeat(net) : "D".repeat(-net);
 }
 function signedCost(n) { return n > 0 ? `+${n}` : String(n); }
 
