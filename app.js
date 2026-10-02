@@ -810,6 +810,34 @@ function npcManeuverFor(position, tier) {
   if (tier >= 4 && position === "pilot") return GDATA.MANEUVERS.find(m => m.position === "pilot" && m.disadv === "Tier");
   return GDATA.MANEUVERS.find(m => m.position === position && m.disadv === Math.min(tier, 3));
 }
+// Attack (see RULE_CHANGES.md): unlike every other Maneuver, it's a real
+// weapons hit, not a Task Check modifier -- it automatically deals Tier HP
+// damage (reduced by the target's Damage Resistance, same formula as a
+// Fumble's HP damage) to a HERO target instead of Disadvantage. NPCs have no
+// HP of their own to damage, so returns false for an NPC target, letting the
+// caller fall back to the ordinary Disadvantage every other Maneuver uses.
+function applyAttackDamage(race, targetId, tierAmount) {
+  const t = race.participants.find(p => p.id === targetId);
+  if (!t || t.type !== "hero") return false;
+  const cls = getShipClass(getShip(t.shipId).shipClass);
+  if (t.hp == null) { t.maxHp = cls.hp; t.hp = cls.hp; }
+  const dmg = Math.max(0, tierAmount - (cls.dr || 0));
+  t.hp = Math.max(0, t.hp - dmg);
+  if (t.hp === 0 && !t.out) { t.out = true; t.outLeg = race.legIndex; }
+  return true;
+}
+// A HERO's Attack against an NPC is an automatic kill (see RULE_CHANGES.md)
+// -- NPCs have no HP to damage gracefully, so instead of falling back to
+// Disadvantage like every other Hero-instigated Attack-vs-NPC case would,
+// it removes the NPC from the race outright, the same out/outLeg flag a
+// Fumble or falling a full Leg behind uses. NPC-instigated Attacks against
+// another NPC are NOT affected by this -- those still use the ordinary
+// Disadvantage fallback (see autoDeclareNpc()), since this is specifically
+// a Hero weapons-fire rule, not a blanket "Attack kills NPCs" one.
+function killNpc(race, npcId) {
+  const t = race.participants.find(p => p.id === npcId);
+  if (t && !t.out) { t.out = true; t.outLeg = race.legIndex; }
+}
 // Automates one NPC's Maneuvers (all 4 positions, each an independent d20 <=
 // leg aggression check) and, on a Circular Track, its Slip -- see
 // RULE_CHANGES.md for the full mechanic. Called from lockDeclarations() once
@@ -844,6 +872,7 @@ function autoDeclareNpc(race, p, legAggression, course, maneuverGeom, positions)
       ns.maneuvers[pos] = mv.name;
       ns.maneuverTargetId = target.id;
       const dAmount = mv.disadv === "Tier" ? tier : mv.disadv;
+      if (mv.name === "Attack" && applyAttackDamage(race, target.id, dAmount)) return; // Hero target -- HP damage applied instead of Disadvantage
       if (ls.perShip[target.id]) {
         const t = ls.perShip[target.id];
         t.maneuverReceivedByPos = t.maneuverReceivedByPos || { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
@@ -992,6 +1021,10 @@ function lockDeclarations() {
       const dAmount = mv.disadv === "Tier" ? tier : mv.disadv;
       const targets = (ps.maneuverTargets && ps.maneuverTargets[pos]) || [];
       targets.forEach(tid => {
+        if (mv.name === "Attack") {
+          if (applyAttackDamage(race, tid, dAmount)) return; // Hero target -- HP damage applied instead of Disadvantage
+          if (ls.npcState[tid]) { killNpc(race, tid); return; } // NPC target -- a Hero's Attack is an automatic kill
+        }
         // Hero target: Disadvantage lands on the SAME position. NPC target: no
         // per-position rolls, so it applies to the NPC's single roll as normal.
         if (ls.perShip[tid]) {

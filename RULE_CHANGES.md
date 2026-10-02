@@ -17,6 +17,62 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-02 — Attack vs. an NPC: a Hero's Attack now kills the NPC outright (refines the entry below)
+- **Earlier value (same day, see entry below):** Attack against an NPC fell
+  back to the old Disadvantage effect for EVERY instigator, Hero or NPC,
+  since NPCs have no HP to damage.
+- **Current value:** that fallback now applies **only to an NPC's own
+  Attack against another NPC**. A **Hero's** Attack against an NPC is an
+  **automatic kill** — the NPC is removed from the race outright (same
+  out/outLeg flag used elsewhere), not merely given Disadvantage. The
+  instigator's own cost is still unaffected either way: Attack always costs
+  the Pilot Tier levels of Disadvantage regardless of what happens to the
+  target.
+- **Net effect of Attack by matchup:**
+  | Instigator | Target | Effect on target |
+  |---|---|---|
+  | Hero | Hero | Tier HP damage |
+  | NPC | Hero | Tier HP damage |
+  | Hero | NPC | **Killed outright** |
+  | NPC | NPC | Tier Disadvantage (unchanged fallback) |
+- **Why:** a Hero's weapons fire is meant to be a genuine threat, and NPCs
+  have no graduated HP pool to wear down gracefully — Disadvantage was a
+  weak consolation effect for what's supposed to be a kill shot. NPC-on-NPC
+  Attack keeps the softer fallback since that's automated background
+  skirmishing, not a player's own action landing a hit.
+- **Where:** `app.js` — `killNpc()` (new), called only from
+  `lockDeclarations()`'s Hero-instigated Maneuver loop (NOT from
+  `autoDeclareNpc()`, which keeps the Disadvantage fallback for NPC-vs-NPC).
+
+---
+
+### 2026-10-02 — New rule: Attack deals Tier HP damage instead of Disadvantage
+- **Earlier value:** Attack worked exactly like every other Racing Maneuver —
+  it added **Tier** levels of Disadvantage to the target's next Pilot Task
+  Check, same mechanical family as a Navigator's Tail Wag or a Spotter's
+  Sensor Blind, just a bigger number restricted to the Pilot position.
+- **Current value:** Attack now **automatically hits** (no roll, no
+  Disadvantage applied to the target) and instead deals **Tier HP damage**
+  directly to the target, reduced by the target's Damage Resistance — the
+  same damage formula a Fumble's HP damage uses. Reaching 0 HP this way
+  marks a Hero out of the race, same as a Fumble would. **The instigator's
+  own cost is unchanged** — running Attack still costs the Pilot Tier levels
+  of Disadvantage, win or lose.
+- **NPCs have no HP of their own.** An Attack against an NPC target falls
+  back to the old Disadvantage effect (Tier levels on the NPC's single
+  Performance roll), since there's no HP to damage. Attack against a Hero
+  always deals HP damage now; against an NPC it always applies Disadvantage.
+- **Why:** Attack is flavored as actually firing ship weapons ("Usually
+  illegal") — a real combat action, not interference with the target's
+  piloting. A plain Disadvantage hit undersold that; HP damage matches the
+  flavor and gives it a genuinely different role from the other 12
+  Maneuvers instead of just being a bigger version of the same thing.
+- **Where:** `app.js` — `applyAttackDamage()` (new), called from both
+  `lockDeclarations()`'s Hero-instigated Maneuver loop and `autoDeclareNpc()`.
+  `data.js` — Attack's `desc` text updated to describe the new effect.
+
+---
+
 ### 2026-10-01 — NPCs automate their own Maneuvers and (Circular Track) Slip
 - **New rule:** every NPC now has an **Aggression** score, 1-10, set by the
   Racemaster when adding it in Race Setup (a Randomize button is available).

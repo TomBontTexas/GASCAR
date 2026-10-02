@@ -252,7 +252,7 @@ GDATA.MANEUVERS = [
   { name: "Bump", desc: "A firm hit that forces a reactor power drop.", position: "engineer", disadv: 1 },
   { name: "Side Draft", desc: "Override the target's Damper correction to steal momentum and destabilize it.", position: "engineer", disadv: 2 },
   { name: "Slam", desc: "Heavy contact intended to significantly disrupt performance.", position: "engineer", disadv: 3 },
-  { name: "Attack", desc: "Fire ship weapons at opponent. Usually illegal.", position: "pilot", disadv: "Tier" }
+  { name: "Attack", desc: "Fire ship weapons at opponent. Automatically hits: a Hero target takes Tier HP damage, an NPC target is destroyed outright -- no Disadvantage to the target either way. Still costs the instigator Tier Disadvantage. Usually illegal.", position: "pilot", disadv: "Tier" }
 ];
 
 /* ---------- NPC Performance table (p.35, 1d6) ---------- */
