@@ -766,28 +766,34 @@ function startRace(courseId, shipIds, npcs) {
   STATE.race = race;
   saveState();
 }
+// Real track position on a Circular Track: laps completed plus a
+// lane-length-normalized fraction through the current lap (the same measure
+// resolveSlipPath() uses to judge real progress fairly across lanes of
+// different length) -- NOT raw cumulative Movement. A ship can spend more
+// total Movement than another and still be behind it: outer lanes are
+// longer, a Slip's lane change is free (doesn't add to cumulative), and
+// Slingshot's bonus Movement isn't folded into cumulative either, so
+// cumulative alone can diverge from where a ship actually sits on the
+// track. One full lap = 6 (the hex ring's 6 legs), so dividing by
+// `course.laps * 6` gives a 0-1 fraction of the whole race. Shared by
+// standingsPositions() (NPC Leg Aggression) and renderStandings() (the
+// Standings board's ordering and bar length).
+function trackProgress(p, ringParams) {
+  return (p.laps || 0) * 6 + hexLegOffset(ringParams.innerRing, ringParams.straightLen, (p.lane || 1) - 1, p.hexPos || 0);
+}
 // NPC automation (see RULE_CHANGES.md): standings position among still-active
 // (not destroyed) racers, 1 = leading, used to compute each NPC's Leg
 // Aggression. Exact ties are broken randomly -- each tied racer gets its own
 // distinct position, not a shared rank, per the Racemaster's own call.
-// Ranked by REAL track position (laps completed + fraction through the
-// current lap, lane-length-normalized the same way resolveSlipPath() judges
-// real progress) on a Circular Track -- NOT raw cumulative Movement. A ship
-// can spend more total Movement than another and still be behind it: outer
-// lanes are longer, a Slip's lane change is free (doesn't add to cumulative),
-// and Slingshot's bonus Movement isn't folded into cumulative either, so
-// cumulative alone can diverge from where a ship actually sits on the track.
 // Straight/Legs courses have no lane geometry to normalize against, so
 // cumulative (there, literally the race score) is used as-is.
 function standingsPositions(race, course) {
   const active = race.participants.filter(p => !p.out);
   const circular = course && course.trackType === "circular";
   const ringParams = circular ? hexRingParamsForCourse(course) : null;
-  const trackProgress = p => circular
-    ? (p.laps || 0) * 6 + hexLegOffset(ringParams.innerRing, ringParams.straightLen, (p.lane || 1) - 1, p.hexPos || 0)
-    : p.cumulative;
+  const progress = p => circular ? trackProgress(p, ringParams) : p.cumulative;
   const shuffled = [...active].sort(() => Math.random() - 0.5);
-  shuffled.sort((a, b) => trackProgress(b) - trackProgress(a));
+  shuffled.sort((a, b) => progress(b) - progress(a));
   const positions = {};
   shuffled.forEach((p, i) => { positions[p.id] = i + 1; });
   return positions;
@@ -2375,7 +2381,7 @@ function renderCircularTrackSvg(race, course) {
 function renderStandings(race) {
   const course = getCourse(race.courseId);
   const circular = course.trackType === "circular";
-  const laneHexes = circular ? laneHexesArray(course) : null;
+  const ringParams = circular ? hexRingParamsForCourse(course) : null;
   const maxPossible = Math.max(1, course.legs.length * race.participants.length);
   const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
   let html = `<section class="card"><div class="row spread"><h3>Standings</h3>
@@ -2386,17 +2392,20 @@ function renderStandings(race) {
   </div>`;
   if (circular) html += `<div class="circtrack-wrap" id="circtrackWrap">${renderCircularTrackSvg(race, course)}</div>`;
   html += `<div class="board" id="standingsBoard">`;
-  race.participants.forEach(p => {
+  // On a Circular Track, list racers in actual running order (1st to last by
+  // real track position), and size each bar by that same real position --
+  // not cumulative Movement, which (see trackProgress()) can diverge from
+  // where a ship actually sits once lane length, free Slip lane changes, and
+  // Slingshot bonus Movement are in the mix. Straight/Legs courses keep
+  // participant order and their own cumulative score (no single shared
+  // "race distance" to normalize bars against the same way).
+  const ordered = circular ? [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams)) : race.participants;
+  ordered.forEach(p => {
     const icon = p.type === "hero" ? getShip(p.shipId) : p;
     const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
-    // Distance Tracking (see RULE_CHANGES.md): progress is toward the fixed
-    // finish line (lane 1's own starting line), not raw hexes moved --
-    // an outer lane's required MOVEMENT is its own lap distance times laps,
-    // minus its starting stagger, since the stagger head start is exactly
-    // what lets it reach that same physical line at the same time as lane 1
-    // despite a longer lane.
-    const req = circular ? Math.max(1, course.laps * laneHexes[p.lane - 1] - (p.startHexPos || 0)) : maxPossible;
-    const pct = Math.min(100, Math.round((p.cumulative / req) * 100));
+    const pct = circular
+      ? Math.min(100, Math.round((trackProgress(p, ringParams) / (course.laps * 6)) * 100))
+      : Math.min(100, Math.round((p.cumulative / maxPossible) * 100));
     const iconDiv = iconDivisionOf(icon);
     const iconImg = icon && icon.iconColor && icon.iconNumber && iconDiv
       ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(iconDiv, icon.iconNumber, icon.iconColor))}" style="left:${pct}%" title="${esc(iconDiv)} ${esc(icon.iconColor)} ${esc(icon.iconNumber)}">`
@@ -2413,7 +2422,7 @@ function renderStandings(race) {
           ${iconImg}
         </div>
       </div>
-      <span class="boardpts" id="boardpts-${p.id}">${circular ? pct + "%" : p.cumulative}</span></div>`;
+      <span class="boardpts" id="boardpts-${p.id}">${circular ? "" : p.cumulative}</span></div>`;
   });
   html += `</div></section>`;
   return html;

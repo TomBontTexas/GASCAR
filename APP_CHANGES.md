@@ -15,6 +15,31 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-02 — Standings board (Circular Track): ordered by real position, bars sized by real position, no more percentage text
+- **Bug fix, same root cause as the Leg Aggression standings fix below:** the
+  Standings board's bars and ship-icon placement were sized by
+  `cumulative / (an estimated required Movement for the ship's CURRENT
+  lane)` — an estimate, not actual position, for the same reasons cumulative
+  can diverge from real track position (outer lanes are longer, a Slip's
+  lane change is free, Slingshot bonus Movement isn't in cumulative). The
+  board also always listed racers in raw participant-array order, not
+  running order.
+- **Fix:** on a Circular Track, the board now (1) lists racers in actual
+  running order, 1st to last, by real track position (the same
+  `trackProgress()` measure the Leg Aggression fix below uses), (2) sizes
+  each bar and places each ship icon by that same real position as a
+  fraction of the whole race (laps × 6), not the old per-lane estimate, and
+  (3) no longer shows a percentage number on the right -- the bar alone is
+  the display now. Straight/Legs courses are unaffected: original
+  participant order and the cumulative-score number are both unchanged.
+- Extracted the real-position math into a shared `trackProgress(p, ringParams)`
+  helper so the Leg Aggression ranking and the Standings board use the exact
+  same measure instead of two different approximations.
+- **Where:** `app.js` — `trackProgress()` (new, factored out of
+  `standingsPositions()`), `renderStandings()`.
+
+---
+
 ### 2026-10-02 — Bug fix: NPC Leg Aggression's standings position now reflects real track position, not raw cumulative Movement
 - **Bug:** `standingsPositions()` (which `legAggressionFor()` uses to set each
   NPC's Leg Aggression) ranked racers by raw `cumulative` — the running sum
