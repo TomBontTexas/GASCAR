@@ -2409,6 +2409,16 @@ function declaredManeuversText(ps) {
   const parts = POSITIONS.filter(pos => ps.maneuvers && ps.maneuvers[pos]).map(pos => `${POS_LABEL[pos]}: ${ps.maneuvers[pos]}`);
   return parts.length ? parts.join(", ") : "—";
 }
+// Declarations table's Racer column: the icon is tall enough for three lines
+// of text beside it, so the name (split at the first word) and any short
+// note (NPC, Aggression, etc.) each get their own line instead of running
+// together on one wide line -- lets the column itself stay narrow.
+function renderRacerCell(obj, noteText) {
+  const words = (obj.name || "").trim().split(/\s+/).filter(Boolean);
+  const line1 = esc(words[0] || "");
+  const line2 = esc(words.slice(1).join(" "));
+  return `<td class="racercell">${iconThumbImg(obj)}<span class="racerlines"><span>${line1}</span><span>${line2}</span><span class="muted">${noteText ? esc(noteText) : ""}</span></span></td>`;
+}
 function renderDeclarations(race) {
   const ls = race.legState;
   const course = getCourse(race.courseId);
@@ -2426,7 +2436,7 @@ function renderDeclarations(race) {
       // actually uses (see pilotPreviewTotal()). Other positions' own
       // Maneuver received/instigated amounts are tracked on their own cards
       // below, not repeated here.
-      html += `<table class="mktable"><tr><th>Racer</th><th>Accel</th>${circular ? "<th>Crowded D</th>" : ""}<th>Net Leg Acc</th>${circular ? "<th>Lane</th><th>Slip A/D</th>" : ""}<th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Maneuver Rec'd + Maneuver Inst'd, the Pilot's own.">Maneuver Net</th><th title="Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net -- the Pilot's own running total. Not the Pilot's final net: Conditions/Resistance/grants happen in later phases.">Pilot Total</th></tr>`;
+      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Accel</th>${circular ? "<th>Crowded D</th>" : ""}<th>Net Leg Acc</th>${circular ? "<th>Lane</th><th>Slip A/D</th>" : ""}<th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Maneuver Rec'd + Maneuver Inst'd, the Pilot's own.">Maneuver Net</th><th title="Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net -- the Pilot's own running total. Not the Pilot's final net: Conditions/Resistance/grants happen in later phases.">Pilot Total</th></tr>`;
       Object.entries(ls.perShip).forEach(([pid, ps]) => {
         const p = race.participants.find(x => x.id === pid);
         if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
@@ -2437,7 +2447,7 @@ function renderDeclarations(race) {
         const manRecvPilot = (ps.maneuverReceivedByPos && ps.maneuverReceivedByPos.pilot) || 0;
         const manInstPilot = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos.pilot) || 0;
         const maneuverNet = -manRecvPilot - manInstPilot;
-        html += `<tr><td>${iconThumbImg(ship)} ${esc(ship.name)}</td><td>${ps.accel}-G</td>${crowdedCell}<td>${netLabel(ps.netLegAcc)}</td>${laneSlipCell}
+        html += `<tr>${renderRacerCell(ship, "")}<td>${ps.accel}-G</td>${crowdedCell}<td>${netLabel(ps.netLegAcc)}</td>${laneSlipCell}
           <td>${declaredManeuversText(ps)}</td><td>${netLabel(-manRecvPilot)}</td><td>${netLabel(-manInstPilot)}</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotPreviewTotal(ps))}</td></tr>`;
       });
       Object.entries(ls.npcState).forEach(([pid, ns]) => {
@@ -2455,7 +2465,7 @@ function renderDeclarations(race) {
         const laneSlipCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(ns.slipAdvantage || 0)}</td>` : "";
         const maneuverNet = -(ns.maneuverReceivedD || 0);
         const pilotTotal = (ns.slipAdvantage || 0) + maneuverNet;
-        html += `<tr><td>${iconThumbImg(p)} ${esc(p.name)} <span class="muted">(NPC, Aggr ${p.aggression || 5})</span></td><td>—</td>${crowdedCell}<td>—</td>${laneSlipCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotTotal)}</td></tr>`;
+        html += `<tr>${renderRacerCell(p, `NPC, Aggr ${p.aggression || 5}`)}<td>—</td>${crowdedCell}<td>—</td>${laneSlipCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotTotal)}</td></tr>`;
       });
       html += `</table>`;
       html += `<p class="muted" style="margin:4px 0 0">Pilot Total = Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net, all specific to the Pilot position. Doesn't include Phase I Conditions, Resistance, or Engineer/Spotter/Navigator grants, which are tracked in their own cards below.</p>`;
@@ -3859,17 +3869,28 @@ document.addEventListener("DOMContentLoaded", () => {
    tag (not fetch, which is blocked cross-origin under file://) is what lets
    this also work when testing against the local file:// copy -- the same
    mechanism index.html already uses to load app.js itself. The cache-busting
-   query string forces a real re-read every time either way. */
+   query string forces a real re-read every time either way.
+   Also rechecks on every click (any button, tab, etc.) so an actively-used
+   tab picks up a new deploy almost immediately instead of waiting up to 5
+   minutes -- throttled to at most once per MIN_CHECK_GAP so a burst of
+   clicks (e.g. rolling dice repeatedly) still only costs one request, not
+   one per click. */
 function startUpdateCheck() {
+  const MIN_CHECK_GAP = 30 * 1000; // never actually check more than once per 30s, no matter how many clicks happen
+  let lastCheck = 0;
   const check = () => {
+    const now = Date.now();
+    if (now - lastCheck < MIN_CHECK_GAP) return;
+    lastCheck = now;
     const s = document.createElement("script");
-    s.src = "version.js?" + Date.now();
+    s.src = "version.js?" + now;
     s.onload = () => {
       if (typeof LATEST_APP_VERSION !== "undefined" && LATEST_APP_VERSION !== APP_VERSION) {
         document.getElementById("updateBannerText").textContent = `A new version (v${LATEST_APP_VERSION}) is available -- your open tab is still running v${APP_VERSION}.`;
         document.getElementById("updateBanner").hidden = false;
         clearInterval(intervalId);
         document.removeEventListener("visibilitychange", onVisible);
+        document.removeEventListener("click", check);
       }
       s.remove();
     };
@@ -3877,7 +3898,8 @@ function startUpdateCheck() {
     document.head.appendChild(s);
   };
   const onVisible = () => { if (!document.hidden) check(); };
-  const intervalId = setInterval(check, 5 * 60 * 1000); // every 5 minutes
+  const intervalId = setInterval(check, 5 * 60 * 1000); // fallback: every 5 minutes even with no clicks
   document.addEventListener("visibilitychange", onVisible);
+  document.addEventListener("click", check); // any click anywhere -- throttle above keeps this cheap
   setTimeout(check, 5000); // first check shortly after load, not competing with initial render
 }

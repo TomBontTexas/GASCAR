@@ -196,6 +196,13 @@ table.mktable { width: 100%; border-collapse: collapse; margin-top: 8px; font-si
 table.mktable th, table.mktable td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
 table.mktable th { background: #0d1526; color: var(--gold); font-weight: 600; }
 
+table.decltable th:nth-child(n+2), table.decltable td:nth-child(n+2) { text-align: center; }
+table.decltable th:first-child, table.decltable td.racercell { width: 1%; white-space: nowrap; }
+.racercell { display: flex; align-items: center; gap: 6px; }
+.racerlines { display: flex; flex-direction: column; justify-content: center; line-height: 1.25; max-width: 90px; }
+.racerlines span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.racerlines .muted { font-size: 0.72rem; }
+
 details { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
 details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding: 4px 0; }
 
