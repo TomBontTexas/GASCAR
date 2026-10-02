@@ -1061,6 +1061,20 @@ function pilotExtraNet(ps) {
   // entering this Leg, else 0.
   return (ps.netLegAcc || 0) + (ps.slipAdvantage || 0) + (ps.crowdedFieldD || 0);
 }
+// Display-only preview of the Pilot's own net, for the Declarations table's
+// "Pilot Total" column -- NOT used for the real roll (that stays
+// netForPosition(ps, disp, "pilot", pilotExtraNet(ps)), which already adds
+// the Pilot-specific Maneuver terms in on its own; folding them into
+// pilotExtraNet() too would double-count them there). Maneuvers ARE already
+// known by the time this table renders (applied during this same
+// lockDeclarations() call), so there's no reason for this preview to leave
+// them out the way it has to leave out Conditions/Resistance/grants, which
+// genuinely haven't happened yet.
+function pilotPreviewTotal(ps) {
+  const manRecv = (ps.maneuverReceivedByPos && ps.maneuverReceivedByPos.pilot) || 0;
+  const manSelf = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos.pilot) || 0;
+  return pilotExtraNet(ps) - manRecv - manSelf;
+}
 /* House rule (see RULE_CHANGES.md): Speed Bonus IS the Leg's declared Acceleration,
    1-for-1 -- it's the whole basis of the Leg-win ranking score (see rollPhase()'s
    pilot branch), independent of the Damper-based Advantage/Disadvantage used for
@@ -2406,34 +2420,53 @@ function renderDeclarations(race) {
   let html = header;
   if (ls.declLocked) {
     if (!collapsed) {
-      html += `<table class="mktable"><tr><th>Racer</th><th>Accel</th><th>Net Leg Acc</th>${circular ? "<th>Lane</th><th>Pilot Total</th>" : ""}<th>Maneuver</th><th>Rec'd D</th><th>Inst'd D</th></tr>`;
+      // House rule / UI: this table's A/D breakdown used to lump a Slip's
+      // own Advantage/Disadvantage into the same "Rec'd D" number as
+      // Disadvantage actually received from someone ELSE's Maneuver --
+      // correct arithmetic (both really do feed the same roll), but a
+      // genuinely misleading label whenever Slip was the only contributor
+      // (an NPC's own risky inward Slip isn't something it "received").
+      // Split into one column per real source, so the Net column's math is
+      // fully traceable instead of hiding behind one ambiguous number. This
+      // table's own Net is just these columns, NOT a ship's full Leg net --
+      // Phase I conditions, Resistance, and Engineer/Spotter/Navigator
+      // grants live in their own cards and aren't repeated here.
+      html += `<table class="mktable"><tr><th>Racer</th><th>Accel</th><th>Net Leg Acc</th>${circular ? `<th>Lane</th><th title="Net Leg Acc + Slip + Crowded Field + the Pilot's own Maneuver received/instigated -- everything known so far that's specific to the Pilot position. Not the Pilot's final net: Conditions/Resistance/grants happen in later phases.">Pilot Total</th>` : ""}<th>Maneuver</th><th>Maneuver Rec'd</th>${circular ? "<th>Slip A/D</th>" : ""}<th>Maneuver Inst'd</th><th title="${circular ? "Maneuver Rec'd + Slip A/D + Maneuver Inst'd, summed across all 4 positions -- a ship-wide reading, not the same scope as Pilot Total." : "Maneuver Rec'd + Maneuver Inst'd, summed across all 4 positions."}">Maneuver Net</th></tr>`;
       Object.entries(ls.perShip).forEach(([pid, ps]) => {
         const p = race.participants.find(x => x.id === pid);
         if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
         const ship = getShip(p.shipId);
-        // Pilot Total = Net Leg Acc + a Slip's signed A/D (see pilotExtraNet())
-        // -- shown explicitly so two ships with the same Net Leg Acc but only
-        // one Slipped don't look identical at a glance (a Slip through a curve
-        // changes the Pilot's net; a Slip within a straightaway doesn't, and a
-        // Slip never costs Movement Points -- see finishLeg()).
+        // Pilot Total = Net Leg Acc + a Slip's signed A/D + Crowded Field +
+        // the Pilot position's own Maneuver received/instigated (see
+        // pilotPreviewTotal()) -- shown explicitly so two ships with the
+        // same Net Leg Acc but only one Slipped (or only one maneuvered)
+        // don't look identical at a glance. Still not the Pilot's FULL
+        // eventual net -- Conditions/Resistance/grants happen in later
+        // phases and aren't known yet at Declaration-lock time.
         const slipTag = ps.slip ? ` <span class="tag">Slipped ${ps.slip} ${ps.slipHexes} (${netLabel(ps.slipAdvantage || 0)})</span>` : "";
-        const pilotCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(pilotExtraNet(ps))}</td>` : "";
+        const pilotCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(pilotPreviewTotal(ps))}</td>` : "";
+        const maneuverRecvD = sumPosObj(ps.maneuverReceivedByPos), maneuverInstD = sumPosObj(ps.maneuverInstigatedByPos);
+        const slipCell = circular ? `<td>${netLabel(ps.slipAdvantage || 0)}</td>` : "";
+        const net = (circular ? (ps.slipAdvantage || 0) : 0) - maneuverRecvD - maneuverInstD;
         html += `<tr><td>${iconThumbImg(ship)} ${esc(ship.name)}</td><td>${ps.accel}-G</td><td>${netLabel(ps.netLegAcc)}</td>${pilotCell}
-          <td>${declaredManeuversText(ps)}</td><td>${netLabel(-sumPosObj(ps.maneuverReceivedByPos))}</td><td>${netLabel(-sumPosObj(ps.maneuverInstigatedByPos))}</td></tr>`;
+          <td>${declaredManeuversText(ps)}</td><td>${netLabel(-maneuverRecvD)}</td>${slipCell}<td>${netLabel(-maneuverInstD)}</td><td>${netLabel(net)}</td></tr>`;
       });
       Object.entries(ls.npcState).forEach(([pid, ns]) => {
         const p = race.participants.find(x => x.id === pid);
         if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
         // NPC automation (see RULE_CHANGES.md): Aggression is public
-        // knowledge, shown right on the name. The Slip tag and combined net
-        // (Maneuvers received + this NPC's own Slip A/D) mirror a Hero's row
-        // above as closely as the shared shapes allow.
+        // knowledge, shown right on the name. No self-cost is tracked for an
+        // NPC's own instigated Maneuvers (it has no per-position Task Check
+        // for one to land on -- see APP_CHANGES.md), so that column is
+        // always "--" for an NPC row.
         const slipTag = ns.slip ? ` <span class="tag">Slipped ${ns.slip} ${ns.slipHexes} (${netLabel(ns.slipAdvantage || 0)})${ns.huntedThisLeg ? " 🎯" : ""}</span>` : "";
         const laneCell = circular ? `<td>${p.lane}${slipTag}</td><td>—</td>` : "";
+        const slipCell = circular ? `<td>${netLabel(ns.slipAdvantage || 0)}</td>` : "";
         const net = (ns.slipAdvantage || 0) - (ns.maneuverReceivedD || 0);
-        html += `<tr><td>${iconThumbImg(p)} ${esc(p.name)} <span class="muted">(NPC, Aggr ${p.aggression || 5})</span></td><td>—</td><td>—</td>${laneCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(net)}</td><td>—</td></tr>`;
+        html += `<tr><td>${iconThumbImg(p)} ${esc(p.name)} <span class="muted">(NPC, Aggr ${p.aggression || 5})</span></td><td>—</td><td>—</td>${laneCell}<td>${declaredManeuversText(ns)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td>${slipCell}<td>—</td><td>${netLabel(net)}</td></tr>`;
       });
       html += `</table>`;
+      html += `<p class="muted" style="margin:4px 0 0">Pilot Total (circular only) is the Pilot position's own running total; Maneuver Net is a ship-wide reading across all 4 positions -- the two aren't the same number. Neither includes Phase I Conditions, Resistance, or Engineer/Spotter/Navigator grants, which are tracked in their own cards below.</p>`;
     }
     html += `</section>`;
     return html;
