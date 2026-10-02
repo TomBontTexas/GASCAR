@@ -2754,7 +2754,7 @@ function describeFumbleAffects(affects, cls) {
   if (!affects || !affects.length) return "No lasting mechanical effect.";
   return affects.map(a => {
     if (a.type === "disadvantage") {
-      return `${POS_LABEL[a.position] || a.position} −${a.levels} Level${a.levels > 1 ? "s" : ""} of Disadvantage for ${a.legs} Leg${a.legs > 1 ? "s" : ""}`;
+      return `${POS_LABEL[a.position] || a.position} ${netLabel(-a.levels)} for ${a.legs} Leg${a.legs > 1 ? "s" : ""}`;
     }
     if (a.type === "hp") {
       const dmg = Math.max(0, (cls.tier * a.tierMult) - (cls.dr || 0));
