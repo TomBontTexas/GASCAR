@@ -2656,10 +2656,10 @@ function renderPhaseII(race) {
             if (r.skipped) {
               html += `<p class="muted">No strain (TN ${r.tn}).</p>`;
             } else if (r.dice) {
-              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (−1 D)");
+              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (D)");
               html += `<p>Rolled ${r.dice.join(", ")} → chosen ${r.chosen} + ${r.score} = <b>${r.total}</b> vs TN ${r.tn} → <b>${outcome}</b></p>`;
             } else {
-              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (−1 D)");
+              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (D)");
               html += `<p><b>${outcome}</b>${r.total != null ? ` (${r.total} vs ${r.tn})` : ""}</p>`;
             }
           }
@@ -2720,10 +2720,8 @@ function shipStatusTags(participant, cls) {
     if (left <= 0) return; // window already past
     const active = legIndex >= pen.startLeg; // in effect this Leg vs. starting next Leg
     const when = active ? `${left} Leg${left > 1 ? "s" : ""} left` : `next ${left} Leg${left > 1 ? "s" : ""}`;
-    // Show the Advantage/Disadvantage letter (A/D), e.g. "Spotter −2D".
-    const sign = pen.amount < 0 ? "−" : "+";
-    const ad = pen.amount < 0 ? "D" : "A";
-    tags += ` <span class="tag danger">${POS_LABEL[pen.position] || pen.position} ${sign}${Math.abs(pen.amount)}${ad} (${when})</span>`;
+    // Show the Advantage/Disadvantage letter (A/D), e.g. "Spotter DD".
+    tags += ` <span class="tag danger">${POS_LABEL[pen.position] || pen.position} ${netLabel(pen.amount)} (${when})</span>`;
   });
   return tags;
 }
@@ -3051,7 +3049,7 @@ function renderReference() {
     <p class="muted">Each position runs its own Maneuver during Declarations against a target's <b>same</b> position (Pilot always instigates). Target position only matters against Hero ships — against an NPC, it applies as normal and stacks cumulatively with other positions' Maneuvers on that same NPC.</p>
     <table class="mktable">
     <tr><th>Position</th><th>Maneuver</th><th>Description</th><th>Disadvantage</th></tr>
-    ${GDATA.MANEUVERS.map(m => `<tr><td>${POS_LABEL[m.position] || m.position}</td><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.disadv === "Tier" ? "−Tier" : "−" + m.disadv}</td></tr>`).join("")}
+    ${GDATA.MANEUVERS.map(m => `<tr><td>${POS_LABEL[m.position] || m.position}</td><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.disadv === 1 ? "1 D" : `${m.disadv} D's`}</td></tr>`).join("")}
   </table></section>`;
 
   html += `<section class="card"><h2>NPC Performance (1d6)</h2><table class="mktable">
