@@ -17,6 +17,31 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-02 — Bug fix: multiple Fumble Levels now each require their own Fumble Chart roll, and all of them apply
+- **Bug:** a Task Check with more than one Fumble Level (failing badly enough
+  that `fumbleLevels > 1` — shown as "2 Fumbles", "3 Fumbles", etc. in the
+  outcome text) only ever offered ONE "Roll on Fumble Chart" button. Rolling
+  it applied exactly one Fumble Chart entry total, no matter how many Fumble
+  Levels the roll actually produced.
+- **Fix:** the Pilot now rolls on the Fumble Chart once **per Fumble Level**,
+  and every one of those rolls' effects applies — they stack (multiple HP
+  hits, multiple Disadvantage penalties, etc., each from its own independent
+  roll of the table). The button now reads "Roll on Fumble Chart (2 of 3)"
+  and so on until every Fumble Level has its own roll; each roll's text and
+  applied effects are shown separately, and the Race Log lists one fumble
+  entry per roll instead of one per ship per Leg.
+- Rolling continues even if an earlier roll already knocks the ship Out of
+  Commission — the remaining Fumble Levels still each get rolled and still
+  each apply, same as the rules call for (a worse failure is a worse
+  failure, win or lose).
+- **Where:** `app.js` — `ps.fumbleText`/`ps.fumbleApplied` (single fields)
+  replaced by `ps.fumbleRolls` (array, one entry per roll). `App.rollFumble()`
+  pushes to it instead of overwriting; `renderPhaseRollBlock()`'s Fumble
+  branch loops `rc.fumbleLevels` times; `finishLeg()`'s Race Log collection
+  pushes one entry per roll.
+
+---
+
 ### 2026-10-02 — Attack vs. an NPC: a Hero's Attack now kills the NPC outright (refines the entry below)
 - **Earlier value (same day, see entry below):** Attack against an NPC fell
   back to the old Disadvantage effect for EVERY instigator, Hero or NPC,

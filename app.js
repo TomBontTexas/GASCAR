@@ -511,7 +511,11 @@ function effectiveMaxThrust(participant, cls) {
 /* Applies one Fumble chart entry's structured `affects` (see data.js) to the
    ship that just fumbled: crew Disadvantage penalties over future Legs, HP
    damage (reduced by DR; 0 HP = out of the race), Acceleration reductions,
-   and forced-last-place Legs. */
+   and forced-last-place Legs. House rule: multiple Fumble Levels on one
+   Task Check (rc.fumbleLevels > 1) each require their OWN independent roll
+   on the Fumble Chart, and every one of those rolls' effects applies (they
+   stack) -- this function only ever applies ONE roll's worth; the caller
+   (App.rollFumble()) is what loops it once per Fumble Level. */
 function applyFumbleAffects(pid, entry) {
   const race = STATE.race, ls = race.legState;
   const ps = ls.perShip[pid];
@@ -538,7 +542,6 @@ function applyFumbleAffects(pid, entry) {
       participant.forcedLastLegs = Math.max(participant.forcedLastLegs || 0, a.legs);
     }
   });
-  ps.fumbleApplied = (entry.affects || []).slice();
 }
 /* Heroes shown/handled in the CURRENT Leg's Phase Cards. A destroyed ship is
    NOT deleted from the race mid-Leg -- it stays visible (flagged DESTROYED)
@@ -1374,12 +1377,13 @@ function finishLeg() {
     }
   }
 
-  // Record any Fumble descriptions rolled this Leg so they show in the Race Log.
+  // Record any Fumble descriptions rolled this Leg so they show in the Race Log
+  // -- one entry per roll (multiple Fumble Levels each get their own line).
   const fumbles = [];
   race.participants.forEach(p => {
     if (p.type !== "hero") return;
     const ps = ls.perShip[p.id];
-    if (ps && ps.fumbleText) fumbles.push({ name: shipName(p.shipId), text: ps.fumbleText });
+    (ps && ps.fumbleRolls || []).forEach(roll => fumbles.push({ name: shipName(p.shipId), text: roll.text }));
   });
   race.log.push({ legIndex: race.legIndex, rows: rows.map(r => ({ ...r })), fumbles });
 
@@ -2889,14 +2893,21 @@ function renderPhaseRollBlock(pid, ps, disp, tn, phase, grantTargets, forcedTarg
     if (!res.applied) autoApplyGrant(pid, phase);
     html += `<p class="muted">Applied ${netLabel(res.applied.amount)} to ${POS_LABEL[res.applied.targetPos]}.</p>`;
   } else if (rc.isFumble) {
-    if (!ps.fumbleText) {
-      html += `<button class="ghost" onclick="App.rollFumble('${pid}')">Roll on Fumble Chart</button>`;
+    // House rule: fumbleLevels>1 needs that many SEPARATE Fumble Chart
+    // rolls, each one applying on its own (see applyFumbleAffects()) -- not
+    // one roll no matter how badly the check failed.
+    const rollsNeeded = rc.fumbleLevels;
+    const rollsDone = (ps.fumbleRolls || []).length;
+    if (rollsDone < rollsNeeded) {
+      html += `<button class="ghost" onclick="App.rollFumble('${pid}')">Roll on Fumble Chart${rollsNeeded > 1 ? ` (${rollsDone + 1} of ${rollsNeeded})` : ""}</button>`;
     } else {
       const participant = STATE.race.participants.find(p => p.id === pid);
       const ship = getShip(participant.shipId);
       const cls = getShipClass(ship.shipClass);
-      html += `<p class="fumbletext">${esc(ps.fumbleText)}</p>`;
-      html += `<p class="muted">Applied: ${describeFumbleAffects(ps.fumbleApplied, cls)}</p>`;
+      ps.fumbleRolls.forEach((roll, i) => {
+        html += `<p class="fumbletext">${rollsNeeded > 1 ? `<b>Fumble ${i + 1} of ${rollsNeeded}:</b> ` : ""}${esc(roll.text)}</p>`;
+        html += `<p class="muted">Applied: ${describeFumbleAffects(roll.applied, cls)}</p>`;
+      });
     }
   }
   return html;
@@ -3859,7 +3870,8 @@ const App = {
     // language carry an oocText (see data.js) trimmed down to just the
     // crash itself.
     const displayText = justWentOut && entry.oocText ? entry.oocText : entry.text;
-    ps.fumbleText = displayText;
+    ps.fumbleRolls = ps.fumbleRolls || [];
+    ps.fumbleRolls.push({ text: displayText, applied: (entry.affects || []).slice() });
     // A destroyed ship stays in the race until the Leg ends (see finishLeg) --
     // don't end the race here even if it was the last living Hero.
     saveState(); render();
