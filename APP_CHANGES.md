@@ -15,6 +15,32 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-01 — Declarations table: columns reordered and rescoped to the Pilot, Crowded D made visible
+- Reordered the locked Declare Intentions table to build up left-to-right
+  into a final **Pilot Total** at the far right: Accel, Crowded D, Net Leg
+  Acc, Lane, Slip A/D, Maneuver, Maneuver Rec'd, Maneuver Inst'd, Maneuver
+  Net, Pilot Total — so `Pilot Total = Net Leg Acc + Crowded D + Slip A/D +
+  Maneuver Net`, and `Maneuver Net = Maneuver Rec'd + Maneuver Inst'd`, are
+  both now literally readable left-to-right instead of needing to be
+  explained in a footnote.
+- Added a standalone **Crowded D** column showing `ps.crowdedFieldD` — it was
+  already being rolled invisibly into Pilot Total; now it's its own column
+  like every other contributor.
+- **Maneuver Rec'd / Maneuver Inst'd / Maneuver Net are now the Pilot
+  position's own numbers**, not a sum across all 4 crew positions. A ship
+  where, say, the Navigator took a Maneuver hit no longer shows that
+  Disadvantage in this table at all (it's reflected in the Navigator's own
+  Task Check card instead) — this was necessary for the Maneuver Net column
+  to actually equal what feeds Pilot Total; summing across positions would
+  have mixed a different position's numbers into the Pilot's own total.
+- **Pilot Total is no longer Circular-Track-only** — on a straight/Legs
+  course it's simply Net Leg Acc + Maneuver Net (no Crowded D/Slip, since
+  neither exists there), using the same `pilotPreviewTotal()` either way.
+- Where: `app.js` → `renderDeclarations()`. Removed the now-unused
+  `sumPosObj()` helper.
+
+---
+
 ### 2026-10-01 — NPC automation: Maneuvers, Slip, and symmetric Performance rolls
 - **New feature:** NPCs now declare their own Maneuvers and (Circular Track)
   Slip automatically, driven by a per-NPC Aggression score — see
