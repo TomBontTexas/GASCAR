@@ -62,7 +62,12 @@ GDATA.CREWMAN_XP = { finish: 1, win: 2 };
    rolled unconditionally every Leg, independent of the Skill Check below. */
 GDATA.GEAR_DICE = { 0: null, 1: { n: 1, d: 10 }, 2: { n: 2, d: 10 }, 3: { n: 1, d: 20 }, 4: { n: 2, d: 20 }, 5: { n: 3, d: 20 } };
 GDATA.MAX_GEAR = 5;
-GDATA.HIGH_GEAR_TRIGGER = 4; // gear 4 or 5 is "high gear" -- one of the Skill Check triggers
+// Being in Gear 4 or 5 this Leg is one of the Skill Check triggers (see
+// RULE_CHANGES.md 2026-10-03). Gear 4 triggers the check but adds no
+// Disadvantage of its own; Gear 5 triggers AND adds 1 Disadvantage. Gear 0-3
+// never trigger on their own.
+GDATA.GEAR_TRIGGER = 4;
+GDATA.GEAR_TRIGGER_D = { 5: 1 };
 
 /* ---------- Ship icon art (webapp/Divisions/Ship Icons/) ----------
    Every Division has its own full 15-number x 4-color set. A Ship Class
@@ -237,25 +242,26 @@ GDATA.SPACE_LEG_FEATURES = [
   ["Clear deep-space sprint between beacons", -2]
 ];
 
-/* ---------- Racing Maneuvers (Circus Maximus conversion, see RULE_CHANGES.md) ----------
+/* ---------- Racing Maneuvers (see RULE_CHANGES.md 2026-10-03) ----------
    One Maneuver per car per Leg, car vs. car -- no crew positions left to
    target. Nudge/Block/Ram always land: they deal Disadvantage to the target
    AND trigger that Leg's Skill Check for both cars; the instigator pays its
    own `selfD` in Disadvantage on its own Skill Check regardless of outcome.
    Attack is the odd one out and the only one with its OWN d20+Advantage/
    Disadvantage roll (the car's Attack score vs the Leg's TN, resolved via
-   the same rollCheck() as everything else) -- a miss does nothing beyond
-   the instigator's selfD; a hit deals the instigator's own Damage stat,
-   reduced by the target's Armor, to the target's HP (see
-   applyAttackDamage() in app.js). This gives the Attack build stat an
-   actual purpose instead of being a dead number on an auto-hit. Uniform for
-   a Hero or NPC target -- everyone has HP now, no "NPCs have no HP"
-   special case. */
+   the same rollCheck() as everything else) -- a miss does nothing at all to
+   the target (no trigger, no Disadvantage) and costs the instigator only its
+   own flat selfD; a hit deals the instigator's own Damage stat, reduced by
+   the target's Armor, to the target's HP, AND 1 Disadvantage to the target's
+   own Skill Check (see applyAttack()/lockDeclarations() in app.js). This
+   gives the Attack build stat an actual purpose instead of being a dead
+   number on an auto-hit. Uniform for a Hero or NPC target -- everyone has HP
+   now, no "NPCs have no HP" special case. */
 GDATA.MANEUVERS = [
   { name: "Nudge", desc: "A light tap to unsettle the target's line.", selfD: 1, targetD: 1 },
   { name: "Block", desc: "Cut across the target's line, forcing them wide.", selfD: 1, targetD: 2 },
   { name: "Ram", desc: "A hard, deliberate hit to shove the target off its mark.", selfD: 2, targetD: 3 },
-  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP; a miss does nothing further. Still costs the instigator Tier Disadvantage either way. Usually illegal.", selfD: "Tier", targetD: null }
+  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. Still costs the instigator 1 Disadvantage either way. Usually illegal.", selfD: 1, targetD: null }
 ];
 
 /* ---------- Out-of-Control Chart (Circus Maximus's stumble chart, converted to

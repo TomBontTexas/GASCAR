@@ -17,6 +17,43 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-03 — Skill Check trigger table replaced with the book's own specific list
+- **Earlier value:** a Skill Check triggered on an approximation invented
+  during the Circus Maximus conversion -- more than 1 hex of Slip, being in
+  Gear 4-5 (0 Disadvantage of its own), a collision, or running/receiving a
+  Maneuver. Slip's Disadvantage (or Advantage!) came from whether the path
+  touched a curve and which direction you Slipped. Attack's self-cost scaled
+  with Tier. Attack hitting did damage only, nothing to the target's own
+  Skill Check. A miss on Attack still triggered the target's Skill Check.
+- **Current value:** the full, specific trigger list is now:
+  - **Slip** -- the first hex is free; each hex beyond that is **+1
+    Disadvantage**, always, regardless of direction or whether it touches a
+    curve. Slip can no longer ever grant Advantage. (An inward Slip that
+    touches a curve still grants bonus Movement via Slingshot -- that's
+    unrelated to the Skill Check and unchanged.)
+  - **Gear 4** this Leg -- triggers the check, but adds **no Disadvantage**
+    of its own. **Gear 5** -- triggers AND adds **+1 Disadvantage**. (Gear
+    0-3 never trigger on their own.)
+  - **This Leg's movement exceeds the Leg's TN** -- **+1 Disadvantage**.
+  - **Made an Attack** this Leg -- **+1 Disadvantage** to the instigator,
+    flat, regardless of Tier (replaces the old Tier-scaled self-cost).
+  - **Hit by an Attack** this Leg -- **+1 Disadvantage per hit** to the
+    target, on top of the existing HP damage. **A miss does nothing to the
+    target at all** -- no Disadvantage, and it no longer triggers the
+    target's Skill Check either.
+  - **Ran or was hit by Nudge/Block/Ram** -- unchanged: each still uses its
+    own selfD/targetD Disadvantage and still always triggers both cars
+    (they always land, no roll).
+  - **A collision** (path crosses/lands on another car's hex) -- unchanged:
+    still triggers a check on its own, still contributes no Disadvantage.
+  - Still only ONE combined Skill Check per Leg no matter how many of the
+    above fire; their Disadvantage all stacks into that one roll.
+- **Why:** the user gave the book's own trigger/Disadvantage table directly,
+  replacing GASCAR's earlier approximation.
+- **Where:** `GDATA.GEAR_TRIGGER`/`GDATA.GEAR_TRIGGER_D`, `GDATA.MANEUVERS`
+  (Attack's `selfD`) in `data.js`; the Slip/Maneuver/trigger blocks in
+  `lockDeclarations()`, `maneuverDAmount()` in `app.js`.
+
 ### 2026-10-03 — Health renamed Points
 - **Earlier value:** the Ship Class stat was called Health.
 - **Current value:** same stat, same role (the car's max HP) -- renamed Points.

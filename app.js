@@ -783,7 +783,7 @@ function initLegState(race) {
   race.participants.forEach(p => {
     cars[p.id] = {
       gearChange: 0, // -1/0/+1, chosen at Declare (Heroes) or by autoDeclareNpc (NPCs)
-      slip: "", slipHexes: 0, slipAdvantage: 0,
+      slip: "", slipHexes: 0, slipD: 0, slipTouchesCurve: false,
       maneuver: "", maneuverTarget: "",
       maneuverReceivedD: 0, maneuverInstigatedD: 0,
       declared: p.type === "npc", // NPCs auto-declare at lock time; Heroes must declare first
@@ -883,10 +883,10 @@ function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (
    One Maneuver per car per Leg, car vs. car. Nudge/Block/Ram always land:
    Disadvantage to the target, self-cost Disadvantage to the instigator, and
    BOTH cars' Skill Checks are triggered this Leg. Attack is the one with
-   its own roll -- see applyAttack(). */
-function maneuverDAmount(m, instigatorDivision) {
-  return m.selfD === "Tier" ? carTier(instigatorDivision) : m.selfD;
-}
+   its own roll -- see applyAttack(). Every Maneuver's selfD is now a flat
+   number (Attack's used to scale with Tier; the book's own trigger table
+   gives it a flat 1 instead, same as everything else). */
+function maneuverDAmount(m) { return m.selfD; }
 // Attack: the instigator's own Attack score vs the Leg's TN (same
 // rollCheck() as everything else, net=0 -- no situational Advantage/
 // Disadvantage on the to-hit roll itself). A hit deals the instigator's
@@ -988,18 +988,24 @@ function lockDeclarations() {
     const rolled = dice ? Array.from({ length: dice.n }, () => rollD(dice.d)).reduce((a, b) => a + b, 0) : 0;
     car.gearMovement = p.gear === 0 ? 0 : Math.max(0, rolled + stats.thrust);
   });
-  // Slip: curve-touch Advantage/Disadvantage, projected from this Leg's
-  // just-rolled gear movement (the Slingshot/actual-path resolution happens
-  // later in finishLeg(), once any Out-of-Control hex losses are known).
+  // Slip: Disadvantage is just (hexes - 1) -- the first hex is free, every
+  // extra hex is +1 Disadvantage, full stop (see RULE_CHANGES.md 2026-10-03:
+  // this replaced an earlier curve-touch Advantage/Disadvantage rule -- Slip
+  // can no longer ever grant Advantage). `touchesCurve` is still tracked for
+  // Slingshot (an unrelated bonus-MOVEMENT mechanic, resolved later in
+  // finishLeg() once Out-of-Control hex losses are known) -- it no longer
+  // feeds the Skill Check at all.
   race.participants.forEach(p => {
     if (p.out) return;
     const car = ls.cars[p.id];
-    car.slipAdvantage = 0;
+    car.slipD = 0;
+    car.slipTouchesCurve = false;
     if (!car.slip) { car.slipHexes = 0; return; }
     const maxLane = Math.min(car.slip === "left" ? p.lane - 1 : course.lanes - p.lane, car.gearMovement || 0);
     const hexes = clampInt(car.slipHexes, 0, Math.max(0, maxLane), 0);
     car.slipHexes = hexes;
     if (hexes <= 0) { car.slip = ""; return; }
+    car.slipD = Math.max(0, hexes - 1);
     const originLaneIdx0 = p.lane - 1, originHexPos = p.hexPos || 0;
     const dir = car.slip === "left" ? -1 : 1;
     const projected = resolveSlipPath(geom, originLaneIdx0, originHexPos, car.gearMovement || 0, hexes, dir);
@@ -1008,10 +1014,13 @@ function lockDeclarations() {
       const step = projected.steps[i];
       if (!isHexOnStraight(geom, step.laneIdx0, step.hexPos)) touchesCurve = true;
     }
-    car.slipAdvantage = touchesCurve ? (car.slip === "right" ? hexes : -hexes) : 0;
+    car.slipTouchesCurve = touchesCurve;
   });
   // Maneuvers: resolve each declared Maneuver, applying its effect and
-  // flagging both cars' Skill Checks as triggered.
+  // flagging both cars' Skill Checks as triggered. Nudge/Block/Ram always
+  // land, so the target is always triggered; Attack has its own roll, so the
+  // target is only triggered (and only takes the +1 Disadvantage) on an
+  // actual hit -- a miss does nothing to the target at all.
   const tn = ls.leg.finalTN;
   race.participants.forEach(p => {
     if (p.out) return;
@@ -1020,16 +1029,19 @@ function lockDeclarations() {
     const mv = GDATA.MANEUVERS.find(m => m.name === car.maneuver);
     if (!mv) return;
     const target = race.participants.find(x => x.id === car.maneuverTarget);
-    const dAmount = maneuverDAmount(mv, carDivision(p));
-    car.maneuverInstigatedD += dAmount;
+    car.maneuverInstigatedD += maneuverDAmount(mv);
     car.maneuverTriggered = true;
     if (!target || target.out) return;
     const tCar = ls.cars[target.id];
-    tCar.maneuverTriggered = true;
     if (mv.name === "Attack") {
       car.attackResult = applyAttack(race, p, target, tn);
+      if (car.attackResult.hit) {
+        tCar.maneuverReceivedD += 1; // "Per Hit from an Attack this turn -- Disadvantage per hit"
+        tCar.maneuverTriggered = true;
+      }
     } else {
       tCar.maneuverReceivedD += mv.targetD;
+      tCar.maneuverTriggered = true;
     }
   });
   // Obstacle check (see RULE_CHANGES.md 2026-10-03): a TENTATIVE pass, using
@@ -1043,20 +1055,26 @@ function lockDeclarations() {
     const c = ls.cars[p.id];
     return { movement: c.gearMovement, slipHexes: c.slip ? Math.min(c.slipHexes || 0, c.gearMovement) : 0 };
   }, false);
-  // Skill Check trigger: a Slip beyond the first free hex, high gear (top 2
-  // categories), a path that crosses/lands on another car's hex, or
-  // running/receiving a Maneuver this Leg -- mapped directly from Circus
-  // Maximus's own trigger list (an extra drift, an obstacle, high speed),
-  // not invented GASCAR-specific conditions. Only ONE Skill Check is ever
-  // rolled per Leg regardless of how many triggers fired.
+  // Skill Check trigger list (see RULE_CHANGES.md 2026-10-03 -- replaces an
+  // earlier, looser approximation with the book's own specific trigger/
+  // Disadvantage table): a Drift beyond the first free hex, being in Gear 4
+  // (triggers, no Disadvantage of its own) or Gear 5 (triggers, +1
+  // Disadvantage), this Leg's movement exceeding the Leg's TN, making or
+  // being hit by an Attack, running/receiving Nudge/Block/Ram, or a path
+  // that crosses/lands on another car's hex (the obstacle/collision rule
+  // above -- its own trigger, but contributes no Disadvantage of its own).
+  // Only ONE Skill Check is ever rolled per Leg regardless of how many of
+  // these fired; their Disadvantage stacks into that one roll.
   race.participants.forEach(p => {
     if (p.out) return;
     const car = ls.cars[p.id];
-    const extraSlip = Math.max(0, (car.slipHexes || 0) - 1);
-    const highGear = p.gear >= GDATA.HIGH_GEAR_TRIGGER;
+    const gearTriggers = p.gear >= GDATA.GEAR_TRIGGER; // Gear 4 or 5 -- Gear 4 adds no Disadvantage of its own, Gear 5 does (below)
+    const gearD = GDATA.GEAR_TRIGGER_D[p.gear] || 0;
+    const movementExceedsTN = car.gearMovement > ls.leg.finalTN;
     car.collided = !!(collisions[p.id] && collisions[p.id].collided);
-    car.triggered = extraSlip > 0 || highGear || car.collided || !!car.maneuverTriggered;
-    car.net = (car.slipAdvantage || 0) - (car.maneuverReceivedD || 0) - (car.maneuverInstigatedD || 0);
+    const totalD = (car.slipD || 0) + gearD + (movementExceedsTN ? 1 : 0) + (car.maneuverReceivedD || 0) + (car.maneuverInstigatedD || 0);
+    car.triggered = totalD > 0 || car.collided || gearTriggers;
+    car.net = -totalD;
     car.declared = true;
   });
   // NPCs' own Skill Checks auto-resolve immediately (same spirit as their
@@ -1146,7 +1164,7 @@ function finishLeg() {
     // Slingshot: an inward Slip that touches a curve grants +1 bonus
     // Movement per hex actually Slipped this Leg -- pure extra forward
     // movement, gated on an ACTIVE dive toward the inside this Leg.
-    const slingshotBonus = car.slipAdvantage < 0 ? actualSlipHexes : 0;
+    const slingshotBonus = (car.slip === "left" && car.slipTouchesCurve) ? actualSlipHexes : 0;
     movementInfo[p.id] = { total: movement + slingshotBonus, actualSlipHexes, slingshotBonus };
   });
   // Movement + Slip, resolved with the "no two cars share a hex" collision
@@ -1555,11 +1573,11 @@ function renderDeclarations(race) {
   let html = header;
   if (ls.declLocked) {
     if (!collapsed) {
-      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Gear</th><th>Slip A/D</th><th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Slip A/D + Maneuver Rec'd + Maneuver Inst'd -- the net fed into this car's Skill Check, if one is triggered.">Net</th></tr>`;
+      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Gear</th><th>Slip D</th><th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Slip D + Gear-4/5 D + Movement-exceeds-TN D + Maneuver Rec'd + Maneuver Inst'd -- the net fed into this car's Skill Check, if one is triggered.">Net</th></tr>`;
       race.participants.forEach(p => {
         if (p.out && p.outLeg !== race.legIndex) return;
         const car = ls.cars[p.id];
-        const slipTag = car.slip ? ` <span class="tag">Slipped ${car.slip} ${car.slipHexes} (${netLabel(car.slipAdvantage || 0)})</span>` : "";
+        const slipTag = car.slip ? ` <span class="tag">Slipped ${car.slip} ${car.slipHexes} (${netLabel(-(car.slipD || 0))})</span>` : "";
         const maneuverTarget = race.participants.find(x => x.id === car.maneuverTarget);
         const maneuverText = car.maneuver ? `${car.maneuver}${maneuverTarget ? ` (${participantLabel(maneuverTarget)})` : ""}` : "—";
         html += `<tr>${renderRacerCell(p)}<td>${p.gear}${car.gearChange ? ` (${car.gearChange > 0 ? "+" : ""}${car.gearChange})` : ""}</td><td>${p.lane}${slipTag}</td>
@@ -1623,7 +1641,7 @@ function renderDeclModal(race, pid) {
         </select>
         ${car.slip ? ` ${numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px">`)} hex(es) / ${slipMax} max` : ""}
       </div>
-      <p class="muted" style="margin:-4px 0 10px">The first hex of Slip is free; any more hexes of Slip, high gear, your path crossing or landing on another car's hex, or running/receiving a Maneuver each trigger a Skill Check this Leg. Two cars can never end a Leg on the same hex -- an unavoidable collision drifts you to an open neighboring hex, or (if fully boxed in) rolls you straight onto the Out-of-Control Chart. Touching a curve anywhere along the way grants +1 Advantage per hex outward or -1 Disadvantage per hex inward.</p>
+      <p class="muted" style="margin:-4px 0 10px">A Skill Check this Leg is triggered by: Slip (the first hex is free, each extra hex is +1 Disadvantage), being in Gear 4 (triggers, no Disadvantage) or Gear 5 (triggers, +1 Disadvantage), this Leg's movement exceeding the Leg's TN (+1 Disadvantage), making an Attack (+1 Disadvantage, plus +1 more to the target if it hits), or running/receiving Nudge/Block/Ram (their own Disadvantage either way). Two cars can never end a Leg on the same hex -- a collision also triggers a check (no Disadvantage of its own), and an unavoidable one drifts you to an open neighboring hex, or (if fully boxed in) rolls you straight onto the Out-of-Control Chart instead. An inward Slip that touches a curve still grants bonus Movement (Slingshot), separately from all of this.</p>
       <div class="formrow" style="align-items:flex-start"><label>Maneuver</label><div style="flex:1;min-width:0">
         <select class="monoselect" onchange="App.setManeuver('${pid}',this.value)">
           <option value="">none</option>
@@ -1656,7 +1674,12 @@ function renderResolve(race) {
     const label = p.type === "hero" ? shipName(p.shipId) : p.name;
     html += `<div class="subcard"><div class="row">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p)} <b>${esc(label)}</b>${shipStatusTags(p)}</div>`;
     if (p.out) { html += `</div>`; return; }
-    html += `<p>Gear ${p.gear}: rolled <b>${car.gearMovement}</b> hex${car.gearMovement === 1 ? "" : "es"} this Leg${car.slipAdvantage ? ` (Slip ${netLabel(car.slipAdvantage)})` : ""}</p>`;
+    const dTags = [];
+    if (car.slipD) dTags.push(`Slip ${netLabel(-car.slipD)}`);
+    const gearD = GDATA.GEAR_TRIGGER_D[p.gear] || 0;
+    if (gearD) dTags.push(`Gear ${p.gear} ${netLabel(-gearD)}`);
+    if (car.gearMovement > ls.leg.finalTN) dTags.push(`Movement &gt; TN ${netLabel(-1)}`);
+    html += `<p>Gear ${p.gear}: rolled <b>${car.gearMovement}</b> hex${car.gearMovement === 1 ? "" : "es"} this Leg${dTags.length ? ` (${dTags.join(", ")})` : ""}</p>`;
     if (car.maneuver) {
       const target = race.participants.find(x => x.id === car.maneuverTarget);
       if (car.maneuver === "Attack" && car.attackResult) {
@@ -1793,8 +1816,8 @@ function renderInstructions() {
     <p>Every course is a Circular Track: a real hex-grid, 6 lanes, each exactly 6 hexes longer per lap than the one inside it. Set the Division (flavor + Tier), inner lane hex count, and laps to finish -- the race has no fixed Leg count, it ends the moment any racer completes the required laps. Race Setup filters selectable ships to the course's Division (race-legal ones only), and you can add NPC racers -- full cars in their own right, built automatically from the same budget, each with an Aggression score (1-10) that drives its behavior. Each Leg:</p>
     <ol>
       <li><b>Declare</b> — shift your gear by at most 1 (0-5), optionally Slip a lane (Circular Track), and optionally run one Maneuver against a car within 2 hexes. NPCs declare automatically, driven by their Leg Aggression (Aggression + current standings position - 1 -- a car further back gambles more).</li>
-      <li><b>Resolve</b> — movement is unconditional: your current gear's dice (1D10 up to 3D20, scaling with gear 1-5; gear 0 is no movement) plus your Thrust stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Thrust stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in. A Skill Check (d20 + Skill + Advantage/Disadvantage vs the Leg's TN) only fires if something risky happened this Leg -- more than 1 hex of Slip, high gear (4-5), your path crossing or landing on another car's hex, or running/receiving a Maneuver. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
-      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP; a miss does nothing further. It still costs the instigator Tier Disadvantage on their own Skill Check either way.</li>
+      <li><b>Resolve</b> — movement is unconditional: your current gear's dice (1D10 up to 3D20, scaling with gear 1-5; gear 0 is no movement) plus your Thrust stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Thrust stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in (this also triggers a Skill Check, with no Disadvantage of its own). A Skill Check (d20 + Skill + Disadvantage vs the Leg's TN) is also triggered by, and gets +1 Disadvantage per hex of Slip beyond the first, +1 Disadvantage if this Leg's movement exceeds the TN, nothing extra for Gear 4 beyond triggering the check, +1 Disadvantage for Gear 5, +1 Disadvantage for making an Attack (plus +1 more to the target if it hits), or running/receiving Nudge/Block/Ram (their own Disadvantage either way) -- all of these stack into one combined check. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
+      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. It still costs the instigator 1 Disadvantage on their own Skill Check either way.</li>
       <li>A ship reduced to 0 HP (by Attack or an Out-of-Control hit) is marked out of the race and frozen at its crash position for the rest of the race.</li>
       <li>Every Hero who finishes the race (completes the required laps) banks XP for its assigned Crewman -- more for finishing in the best real track position -- spendable in the Cantina.</li>
     </ol>
@@ -1823,11 +1846,26 @@ function renderReference() {
   </table>
   <p class="muted">Every Ship Class stat (Thrust/Points/Armor/Attack/Damage) costs the same: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a Tier budget.</p></section>`;
 
+  html += `<section class="card"><h2>Skill Check Triggers</h2>
+    <p class="muted">Any one of these triggers this Leg's Skill Check; if more than one applies, their Disadvantage stacks into that one combined roll.</p>
+    <table class="mktable">
+    <tr><th>Trigger</th><th>Disadvantage</th></tr>
+    <tr><td>Slip, per hex beyond the first</td><td>1 D per hex</td></tr>
+    <tr><td>In Gear 4 this Leg</td><td>triggers, no Disadvantage</td></tr>
+    <tr><td>In Gear 5 this Leg</td><td>1 D</td></tr>
+    <tr><td>This Leg's movement exceeds the TN</td><td>1 D</td></tr>
+    <tr><td>Made an Attack this Leg</td><td>1 D</td></tr>
+    <tr><td>Hit by an Attack this Leg</td><td>1 D per hit</td></tr>
+    <tr><td>Ran Nudge/Block/Ram this Leg</td><td>own selfD -- see Racing Maneuvers below</td></tr>
+    <tr><td>Hit by Nudge/Block/Ram this Leg</td><td>own targetD -- see Racing Maneuvers below</td></tr>
+    <tr><td>Path crosses/lands on another car's hex</td><td>none (still triggers)</td></tr>
+  </table></section>`;
+
   html += `<section class="card"><h2>Racing Maneuvers</h2>
     <p class="muted">One Maneuver per car per Leg, against a car within 2 hexes.</p>
     <table class="mktable">
     <tr><th>Maneuver</th><th>Description</th><th>Self Cost</th><th>Deals</th></tr>
-    ${GDATA.MANEUVERS.map(m => `<tr><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.selfD === "Tier" ? "Tier D's" : (m.selfD === 1 ? "1 D" : `${m.selfD} D's`)}</td><td>${m.targetD == null ? "Attack roll -> Damage stat" : (m.targetD === 1 ? "1 D" : `${m.targetD} D's`)}</td></tr>`).join("")}
+    ${GDATA.MANEUVERS.map(m => `<tr><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.selfD === 1 ? "1 D" : `${m.selfD} D's`}</td><td>${m.targetD == null ? "Attack roll -> Damage stat + 1 D on hit" : (m.targetD === 1 ? "1 D" : `${m.targetD} D's`)}</td></tr>`).join("")}
   </table></section>`;
 
   html += `<section class="card" style="grid-row: span 2;"><h2>Out-of-Control Chart (1d10)</h2>
