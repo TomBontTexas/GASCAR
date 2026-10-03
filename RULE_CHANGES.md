@@ -17,6 +17,131 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-03 — Crowded Field retired: ships can no longer share a hex at all (refines the Circus Maximus conversion below)
+- **Earlier value (same day, see the Circus Maximus entry below):** 2+ cars
+  ending a Leg on the same hex ("Crowded Field") just cost each of them 1
+  Disadvantage per sharing car on their NEXT Leg's Skill Check -- they could
+  still physically pile onto the same hex.
+- **Current value: two cars can never end a Leg occupying the same hex.**
+  This is Circus Maximus's own "entering a space with another chariot" rule,
+  not a shared-hex penalty. Movement is now resolved in Circus Maximus's own
+  turn order -- **lowest Speed stat first** -- so a slower car commits to
+  its line before a faster one has to react to it. If a car's path crosses
+  or lands on a hex another car already occupies (or will occupy, if that
+  car moved first this Leg), it's one more trigger for this Leg's Skill
+  Check (same "only one Skill Check per Leg" rule as every other trigger).
+  If a car's FINAL hex specifically is still taken once it actually moves,
+  it drifts to an open hex truly adjacent to it (any of the 6 hex
+  neighbors, any lane) -- or, if every neighbor is also taken, it
+  automatically rolls one Out-of-Control Chart entry outright, no Skill
+  Check attempt, exactly as the book describes for a fully-blocked chariot.
+- **Why:** the user flagged that Circus Maximus's own rules don't allow
+  ships to share a space at all -- Crowded Field's shared-hex-with-a-penalty
+  model was a GASCAR-specific invention from before this conversion that
+  didn't actually match the source material once the rest of the engine
+  became a faithful Circus Maximus adaptation.
+- **Where:** `app.js` — `resolveCarCollisions()` (new), called from
+  `lockDeclarations()` (a tentative, non-mutating pass using this Leg's
+  just-rolled gear movement, purely to decide whether the Skill Check
+  triggers) and `finishLeg()` (the real pass, using each car's final
+  movement after Out-of-Control, that actually places cars and resolves any
+  unavoidable collision). `crowdedFieldD`/`crowdedFieldNextLeg` and the old
+  end-of-Leg pileup-detection block are removed entirely.
+
+---
+
+### 2026-10-03 — Circus Maximus conversion: every racer is now a single entity, built and resolved like a chariot, not a 4-position crew
+- **Why:** the 4-position system (Pilot/Navigator/Spotter/Engineer, each with
+  its own skill, its own roll, its own phase) asked a table of players to
+  share one ship and specialize into roles — in practice, players wanted
+  their own car, not an assigned seat on someone else's. This is a full
+  conversion toward the *Circus Maximus* model (one chariot, one rider, one
+  roll per turn), kept on GASCAR's own hex-grid Circular Track (the one part
+  of the old system that was working well and is explicitly unchanged). All
+  entries below this one describe the RETIRED 4-position ruleset; they're
+  kept for history, not current play.
+- **Every racer — Hero ship or NPC alike — is now one entity, one stat
+  line, one roll per Leg.** Crew size (1-4) is still flavor-visible (named
+  crew on the ship card) but carries no skills or assignments of its own —
+  the ship's own Skill stat is what rolls.
+- **Division is flavor only now.** Flash/Spark/Comet/Meteor/Nova still exist
+  and still set a car's Tier (Flash/Spark = 1, Comet = 2, Meteor = 3, Nova =
+  4) and which Leg-feature flavor pool it draws from (Flash = atmospheric,
+  the rest = deep-space) — nothing else about a Division is mechanical
+  anymore. The old per-Division Max Thrust/Damper/Ship AI/Frame/
+  Compartmentalization stat blocks are gone.
+- **A car is six numbers, built on one shared Tier-scaled point budget**
+  (Circus Maximus's own flat 6 points at Tier 1, +1 per Tier beyond that —
+  so 6/7/8/9): **Speed** (bonus to the gear-die movement roll), **Health**
+  (HP, base Tier×3), **Armor** (flat damage reduction), **Attack** (the
+  to-hit score for the Attack Maneuver), **Damage** (flat HP dealt on a
+  successful Attack), and **Skill** (the one Skill Check stat, base 7, same
+  as the book's own rider baseline). All six draw from the same pool.
+- **Movement is a Circus Maximus-style gear die, not a declared
+  Acceleration.** Shift your Movement Category by at most 1 per Leg (0-5,
+  starts at 0); the die tied to your new gear (0 = no movement; 1=1D4,
+  2=1D6, 3=1D8, 4=1D10, 5=2D6) plus your Speed stat is that Leg's hex
+  movement, rolled unconditionally every Leg. The old declare-Accel-and-
+  risk-a-worse-roll tension is gone — movement and the Skill Check are now
+  two completely separate rolls.
+- **The Skill Check is now conditional, not automatic.** A d20 +
+  Advantage/Disadvantage roll (same `rollCheck()` math as before) against
+  the Leg's TN only fires if something risky happened this Leg: more than 1
+  hex of Slip (the first hex is free, same spirit as Circus Maximus's free
+  drift), a Crowded hex, high gear (4 or 5), or running/receiving a
+  Maneuver. A clean Leg gets no roll and no Fumble risk at all, mapped
+  directly from Circus Maximus's own trigger list rather than inventing new
+  GASCAR-specific ones. Only one Skill Check is ever rolled per Leg no
+  matter how many triggers fired.
+- **Success is binary — no Critical Success bonus anymore.** A Critical
+  Success is still shown for flavor (how many Advantage dice beat the TN)
+  but grants nothing mechanical; only margin of FAILURE matters, via Fumble
+  Levels (same `rollCheck()` field as before).
+- **Fumbles now mean the Out-of-Control Chart, one universal 1d10 table**
+  (replacing the two Division-specific Fumble charts) adapted from Circus
+  Maximus's own stumble chart: lose hexes of this Leg's movement, get pushed
+  a lane, take Tier-scaled HP damage (reduced by Armor), drop to gear 1 next
+  Leg, or (worst) your Leg's movement ends right there. Exactly as before
+  (see the entry directly below), multiple Fumble Levels on one Skill Check
+  each roll and apply their own independent Out-of-Control entry — this
+  carries forward unchanged.
+- **Racing Maneuvers collapse to one per car per Leg, car vs. car** (no more
+  "each of 4 positions runs one against the target's same position"): Nudge,
+  Block, and Ram always land (Disadvantage to the target, a smaller
+  self-cost Disadvantage to the instigator, both cars' Skill Checks
+  triggered). **Attack is the one with its own roll** — the instigator's
+  Attack score vs the Leg's TN; a hit deals the instigator's Damage stat
+  (reduced by the target's Armor) to the target's HP, a miss does nothing
+  further, and it still costs the instigator Tier Disadvantage either way.
+  This is a deliberate change from the Attack mechanic two entries below
+  (which auto-hit with no roll at all) — with Attack and Damage now real,
+  purchasable build stats, an auto-hit would make them dead numbers.
+  Hero-vs-NPC and NPC-vs-NPC Attack now work identically (everyone has HP),
+  retiring the "a Hero's Attack kills an NPC outright" special case.
+- **NPCs are mechanically identical to Heroes** — full cars, built the same
+  way, resolved with the exact same gear die and Skill Check. An NPC's
+  Aggression (1-10, public) still drives whether it takes risks (shifts gear
+  up, attempts a Slip, runs a Maneuver) via its Leg Aggression (Aggression +
+  standings position − 1), but there's no separate NPC Performance table or
+  Base Leg Result baseline anymore — it's the same roll Heroes use.
+- **Resistance (G-force) checks are gone entirely** — they existed mainly to
+  hand out per-position Conditions, which don't mean anything with one
+  position left.
+- **The straight/Legs (non-hex, points-based) track type is gone.** Every
+  course is a Circular Track now; the hex-grid engine (lanes, Slip,
+  Slingshot, Crowded Field, real track position) is completely unchanged —
+  see the hex-grid entries further below, still fully in effect.
+- **Breaking change:** any saved crew, Ship Classes, ships, courses, and the
+  current race are cleared on upgrade — none of the old shapes correspond to
+  anything under the new rules. See `migrateState()`'s
+  `_circusMaximusConversion` flag in `app.js`.
+- **Where:** effectively all of `app.js` and `data.js`. The hex-grid
+  geometry/movement functions (`traceLaneRing()`, `circTrackGeometry()`,
+  `resolveSlipPath()`, etc.) are byte-for-byte unchanged from before this
+  conversion.
+
+---
+
 ### 2026-10-02 — Bug fix: multiple Fumble Levels now each require their own Fumble Chart roll, and all of them apply
 - **Bug:** a Task Check with more than one Fumble Level (failing badly enough
   that `fumbleLevels > 1` — shown as "2 Fumbles", "3 Fumbles", etc. in the

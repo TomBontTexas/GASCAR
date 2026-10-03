@@ -1,6 +1,20 @@
 /* GASCAR — application logic (vanilla JS, no build step).
    GASCAR = Galactic Association for Spaceship Competitive Astro-Racing,
-   the in-world racing league depicted in the tabletop game Warp Space: GASCAR. */
+   the in-world racing league depicted in the tabletop game Warp Space: GASCAR.
+
+   Circus Maximus conversion (see RULE_CHANGES.md 2026-10-03): every racer is
+   a SINGLE entity -- one car, one Skill stat, one roll per Leg -- whether
+   its crew is 1 person or 4. Movement comes from a Circus-Maximus-style
+   gear die every Leg, unconditionally; a separate d20+Advantage/Disadvantage
+   Skill Check only fires when something risky happens that Leg (a Slip, a
+   Maneuver, high gear, crossing/landing on another car's hex), and only a
+   FAILED Skill Check has consequences (the Out-of-Control chart) -- success is binary, no Crit
+   bonus. NPCs are mechanically identical to Heroes. The old 4-position
+   (Pilot/Navigator/Spotter/Engineer) Task Check system, Resistance checks,
+   and the straight/Legs (non-hex) track type are gone entirely. The hex/
+   Circular Track engine itself (traceLaneRing, circTrackGeometry,
+   resolveSlipPath, etc.) is untouched -- it's the one piece of the old
+   system explicitly kept. */
 
 // App version (see APP_CHANGES.md): bump the middle number for a new feature
 // or features, the last number for a bug fix. Shown at the top of the
@@ -16,7 +30,7 @@ function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ 
 function clampInt(v, lo, hi, fallback) { const n = parseInt(v, 10); if (isNaN(n)) return fallback; return Math.max(lo, Math.min(hi, n)); }
 // Right-pad with non-breaking spaces so <option> text keeps its columns (native
 // options collapse ordinary runs of whitespace). Pair with a monospace font.
-function padNbsp(s, n) { s = String(s); return s + " ".repeat(Math.max(0, n - s.length)); }
+function padNbsp(s, n) { s = String(s); return s + " ".repeat(Math.max(0, n - s.length)); }
 // Wraps an existing <input type="number" ...> tag string with a -/+ button on
 // either side, replacing the browser's native spin arrows everywhere in the
 // app (see style.css's .numstep) -- used by every number input. The buttons
@@ -28,7 +42,10 @@ function numStepper(inputHtml) {
 }
 
 /* Core Task Check: roll (|net|+1) d20s, keep highest (net>=0) or lowest (net<0), add score.
-   Returns success/critical/fumble info per the book's Advantage/Disadvantage rules. */
+   Returns success/critical/fumble info per the book's Advantage/Disadvantage rules.
+   This is the ONE dice mechanic in the whole game now -- the Skill Check,
+   the Attack-to-hit roll, everything -- just with a different score/net/TN
+   fed in each time. */
 function rollCheck(score, net, tn) {
   const diceCount = Math.abs(net) + 1;
   const dice = Array.from({ length: diceCount }, () => rollD(20));
@@ -42,9 +59,13 @@ function rollCheck(score, net, tn) {
   const fumbleLevels = net < 0 ? Math.max(0, failCount - 1) : 0;
   return { dice, chosen, total, tn, success, successCount, failCount, critLevels, fumbleLevels, isCrit: critLevels > 0, isFumble: fumbleLevels > 0, net };
 }
+// House rule: a Skill Check's success is binary (no Crit bonus) -- margin of
+// success doesn't matter, only margin of FAILURE (fumbleLevels -> how many
+// times the Out-of-Control chart gets rolled). Still surfaces critLevels in
+// the label for flavor/visibility even though nothing mechanical reads it.
 function outcomeLabel(rc) {
-  if (rc.isCrit) return rc.critLevels + " Critical" + (rc.critLevels === 1 ? "" : "s");
   if (rc.isFumble) return rc.fumbleLevels + " Fumble" + (rc.fumbleLevels === 1 ? "" : "s");
+  if (rc.isCrit) return rc.critLevels + " Critical" + (rc.critLevels === 1 ? "" : "s") + " (no bonus)";
   return rc.success ? "Success" : "Failure";
 }
 function formatMk(score, net) {
@@ -59,18 +80,13 @@ function netLabel(net) {
   // the letter itself (A vs D) already says which direction it is.
   return net > 0 ? "A".repeat(net) : "D".repeat(-net);
 }
-function signedCost(n) { return n > 0 ? `+${n}` : String(n); }
+var MAX_ADV = 5; // House rule: the effective Leg Skill caps at AAAAA. Disadvantage has no floor.
 
 /* ============================== State ============================== */
 const STORAGE_KEY = "gascar_state_v1";
-const POSITIONS = ["pilot", "navigator", "spotter", "engineer"];
-const POS_LABEL = { pilot: "Pilot", navigator: "Navigator", spotter: "Spotter", engineer: "Engineer" };
-/* House rule (see RULE_CHANGES.md): on Critical Success/Fumble, Engineer/Spotter
-   choose 1 level to Pilot, or 2 levels to one of these support positions. */
-const CRIT_FUMBLE_GRANT_TARGETS = { engineer: ["spotter", "navigator"], spotter: ["navigator"] };
 
 function defaultState() {
-  return { crew: [], ships: [], courses: [], race: null, shipClasses: [] };
+  return { ships: [], courses: [], race: null };
 }
 let STATE = loadState();
 function loadState() {
@@ -84,1883 +100,127 @@ function loadState() {
   } catch (e) { console.warn("Could not load saved state", e); }
   return defaultState();
 }
-/* Upgrades:
-   - Ship Classes saved under any earlier shape: Acc briefly became a
-     Score+Advantage pair (now reverted -- Acc has no Advantage/Disadvantage,
-     see RULE_CHANGES.md) and Tier/Damper/Min Crew came from a required
-     Division pick instead of a free Tier number.
-   - Ships saved before Division (.cls) and Ship Class (.shipClass) split
-     into two independent fields -- a ship's Class used to just be whatever
-     Division name sat in .cls. Give it a matching .shipClass so its stats
-     don't change, and make sure .cls itself still names a real Division. */
+/* ONE-TIME migration (see RULE_CHANGES.md 2026-10-03): the Circus Maximus
+   conversion replaced the entire Ship Class / 4-crew-position / Resistance /
+   straight-Legs-course system with single-entity cars, a Circus-Maximus-style
+   gear die, and one Skill Check per Leg -- the old saved shapes don't
+   correspond to anything meaningful under the new rules. Same precedent as
+   the earlier breaking migrations (_builtinShipClassesRemoved,
+   _circularTrackHexed): clear ships/courses/crew/race and start fresh. */
 function migrateState(state) {
-  /* ONE-TIME migration (see APP_CHANGES.md): the book's Flash/Spark/Comet/Meteor/Nova
-     stat blocks are no longer selectable as a Ship Class directly -- only custom Classes
-     built in the Shipyard (optionally seeded from a Division via the Default button) are.
-     Ships and Race Courses built against the old hard-coded classes are cleared. */
-  if (!state._builtinShipClassesRemoved) {
+  if (!state._circusMaximusConversion) {
     state.ships = [];
     state.courses = [];
     state.race = null;
-    state._builtinShipClassesRemoved = true;
+    delete state.crew;
+    delete state.shipClasses;
+    state._circusMaximusConversion = true;
   }
-  // ONE-TIME migration (see APP_CHANGES.md/RULE_CHANGES.md): Circular Track
-  // switched from a square grid to a real hex grid -- a clean break, not a
-  // field rename, since the old squarePos/innerSquares positions don't
-  // correspond to anything meaningful under hex rules (this replaces an
-  // EARLIER, now-obsolete hexPos->squarePos rename below that would have
-  // actively fought this migration by renaming fresh hex data back to
-  // square names). Any Circular Track course is removed; a race actively
-  // running on one is cleared too. Straight/Legs courses and their races,
-  // which never used squarePos, are untouched.
-  if (!state._circularTrackHexed) {
-    const raceCourse = state.race ? (state.courses || []).find(c => c.id === state.race.courseId) : null;
-    if (raceCourse && raceCourse.trackType === "circular") state.race = null;
-    state.courses = (state.courses || []).filter(c => c.trackType !== "circular");
-    state._circularTrackHexed = true;
-  }
-  (state.shipClasses || []).forEach(sc => {
-    if (sc.acc) { sc.maxThrust = sc.acc.score + (sc.acc.adv || 0); delete sc.acc; }
-    if (sc.maxThrust == null) sc.maxThrust = 10;
-    if (!sc.division) sc.division = GDATA.DIVISIONS.find(d => GDATA.SHIP_CLASSES[d].tier === sc.tier) || "Comet";
-    if (sc.division === "Spark") { sc.ai.control = 0; sc.ai.nav = 0; sc.ai.sensors = 0; }
-    if (!sc.frame || sc.frame === "None") sc.frame = "Standard";
-    if (sc.armor == null) sc.armor = 0;
-    if (!sc.compartment || sc.compartment === "None") sc.compartment = "Standard";
-  });
-  (state.ships || []).forEach(ship => {
-    if (!ship.shipClass) ship.shipClass = ship.cls || "Comet";
-    if (!GDATA.DIVISIONS.includes(ship.cls)) ship.cls = "Comet";
-    // A bare Division name is only illegal here if it ISN'T ALSO a real custom
-    // Class name -- a custom Class is allowed to share a name with a Division
-    // (see APP_CHANGES.md), so e.g. a class literally named "Meteor" must not
-    // get stomped just because "Meteor" is also a Division. Only reassign when
-    // there's truly no matching custom Class (leftover pre-Shipyard save data).
-    const hasMatchingCustomClass = (state.shipClasses || []).some(c => c.name === ship.shipClass);
-    if (GDATA.DIVISIONS.includes(ship.shipClass) && !hasMatchingCustomClass) {
-      ship.shipClass = (state.shipClasses && state.shipClasses[0]) ? state.shipClasses[0].name : "";
-    }
-  });
-  (state.courses || []).forEach(course => {
-    if (!GDATA.DIVISIONS.includes(course.division)) course.division = "Comet";
-    if (!course.trackType) course.trackType = "legs";
-  });
-  // Self-heal a cached race (see APP_CHANGES.md): a Hero at 0 HP must be out of
-  // the race. Early saves (or HP zeroed on a path that didn't flag it) can leave
-  // `out` unset while hp is 0, so the wreck keeps racing. Mark it out here, and
-  // give it an outLeg that isn't the current Leg so it's removed from the cards
+  // Self-heal a cached race: a car at 0 HP must be out of the race. Early
+  // saves (or HP zeroed on a path that didn't flag it) can leave `out`
+  // unset while hp is 0, so the wreck keeps racing. Mark it out here, with
+  // an outLeg that isn't the current Leg so it's removed from the cards
   // right away rather than lingering (this is a repair, not a fresh kill).
   if (state.race && Array.isArray(state.race.participants)) {
     const legIdx = state.race.legIndex || 0;
-    // Back-fill NPC iconDivision (see APP_CHANGES.md): icons are now per-Division,
-    // so an NPC saved before that needs the race's Division to find its icon art.
-    const raceCourse = (state.courses || []).find(c => c.id === state.race.courseId);
     state.race.participants.forEach(p => {
-      if (p.type === "npc" && !p.iconDivision && raceCourse) p.iconDivision = raceCourse.division;
-      if (p.type === "hero" && p.hp != null && p.hp <= 0 && !p.out) {
-        p.out = true;
-        p.outLeg = legIdx - 1;
-      }
-      // Convert old countdown penalties to absolute Leg windows (see
-      // applyFumbleAffects / APP_CHANGES.md). A stored legsRemaining of r during
-      // Leg L means the penalty is active this Leg and r more, i.e. through L+r.
-      (p.penalties || []).forEach(pen => {
-        if (pen.startLeg == null && pen.legsRemaining != null) {
-          pen.startLeg = 0; // already in effect
-          pen.endLeg = legIdx + pen.legsRemaining;
-          delete pen.legsRemaining;
-        }
-      });
+      if (p.hp != null && p.hp <= 0 && !p.out) { p.out = true; p.outLeg = legIdx - 1; }
     });
   }
 }
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
 }
-function getCrew(id) { return STATE.crew.find(c => c.id === id); }
 function getShip(id) { return STATE.ships.find(s => s.id === id); }
 function getCourse(id) { return STATE.courses.find(c => c.id === id); }
-/* Division vs Ship Class (see APP_CHANGES.md) are two independent fields on
-   a ship: .cls names a Division (Flash/Spark/Comet/Meteor/Nova -- fixed,
-   never extended by custom classes; ties a ship to a racecourse's TN table)
-   while .shipClass names the stat block (Tier/Acc/Damper/Crew/Ship AI) it
-   actually uses -- always a user-created Ship Class built in the Shipyard
-   tab (see APP_CHANGES.md: the book's 5 Divisions are no longer directly
-   selectable as a Class -- only their stat blocks remain, as raw material
-   for the Shipyard's "Default" button). A custom Class may legally share
-   its name with a Division (e.g. a custom "Flash" class) -- getShipClass()
-   checks custom classes first for exactly this reason, falling back to a
-   bare GDATA.SHIP_CLASSES[name] lookup only for old saved data. Anything
-   that needs a Division's own book stats directly (e.g. rollLegCount()'s
-   leg dice) reads GDATA.SHIP_CLASSES[division] itself rather than going
-   through getShipClass(), so it can't be shadowed by a same-named Class.
-
-   A custom Ship Class must itself pick a Division to be "legal for" --
-   Tier, Damper, and Min Crew all come straight from that Division's own
-   built-in stat block (not editable), same as the book ties every
-   Division's whole stat block together (see RULE_CHANGES.md). Spark's AI
-   Score is always locked at 0 (book default -- Advantage/Disadvantage still
-   applies) so any custom class legal for Spark inherits that lock. Acc
-   itself has no Advantage/Disadvantage at all -- it's a plain number. Hit
-   Points and Damage Reduction (see computeHitPoints()/computeDamageReduction()
-   below) are computed for every class -- a freshly-created blank one gets
-   the "Standard" Frame Strength / no Armor / "Standard" Compartmentalization
-   defaults until the player spends points to change them; hitting Default
-   (or "+ Add Preset") instead pulls in that Division's own preset hull
-   (see RULE_CHANGES.md for the per-Division table). */
-function frameOption(name) { return GDATA.FRAME_STRENGTH.find(f => f.name === name) || GDATA.FRAME_STRENGTH[0]; }
-function compartmentOption(name) { return GDATA.COMPARTMENTALIZATION.find(c => c.name === name) || GDATA.COMPARTMENTALIZATION[0]; }
-function computeHitPoints(tier, frameName) {
-  const base = tier * 3;
-  switch (frameOption(frameName).hpOp) {
-    case "div4": return Math.ceil(base / 4);
-    case "div2": return Math.ceil(base / 2);
-    case "mul2": return base * 2;
-    case "mul4": return base * 4;
-    default: return base;
-  }
-}
-function computeDamageReduction(armorLevel, compartmentName) {
-  return (armorLevel || 0) * compartmentOption(compartmentName).multiplier;
-}
-function frameCost(tier, frameName) { return frameOption(frameName).costFactor * tier; }
-function compartmentCost(tier, compartmentName) { return compartmentOption(compartmentName).costFactor * tier; }
-function getShipClass(name) {
-  // Custom classes are checked first: a class may legally share its name with
-  // a Division (e.g. a custom "Flash" class) -- that name must resolve to the
-  // player's own class, not the book's Division stat block. The GDATA.SHIP_CLASSES
-  // fallback below exists only for a bare Division name (see rollLeg()) or old
-  // saved data (see migrateState()).
-  let raw;
-  const sc = STATE.shipClasses.find(c => c.name === name);
-  if (sc) {
-    const divStats = GDATA.SHIP_CLASSES[sc.division] || GDATA.SHIP_CLASSES.Comet;
-    raw = { ...sc, tier: divStats.tier, damper: divStats.damper, crew: divStats.crew };
-  } else {
-    raw = GDATA.SHIP_CLASSES[name];
-    if (!raw) return undefined;
-  }
-  const frame = raw.frame || "Standard";
-  const armor = raw.armor || 0;
-  const compartment = raw.compartment || "Standard";
-  return { ...raw, frame, armor, compartment, hp: computeHitPoints(raw.tier, frame), dr: computeDamageReduction(armor, compartment) };
-}
-/* Acc has no Advantage/Disadvantage -- it's a plain point-costed number,
-   unlike Spotter/Navigator/Pilot which are Score + Advantage/Disadvantage
-   (see RULE_CHANGES.md). Frame Strength and Compartmentalization each cost
-   (or refund) a multiple of Tier; Armor uses the same triangular Score-cost
-   progression as Spotter/Navigator/Pilot (level n costs n(n+1)/2). */
-function shipClassTotalCost(sc) {
-  const aiStats = [{ score: sc.ai.sensors, adv: sc.ai.sensorsAdv }, { score: sc.ai.nav, adv: sc.ai.navAdv }, { score: sc.ai.control, adv: sc.ai.controlAdv }];
-  const tier = sc.tier != null ? sc.tier : (GDATA.SHIP_CLASSES[sc.division] || GDATA.SHIP_CLASSES.Comet).tier;
-  const hullCost = frameCost(tier, sc.frame || "Standard") + scoreCost(sc.armor || 0) + compartmentCost(tier, sc.compartment || "Standard");
-  return (sc.maxThrust || 0) + aiStats.reduce((sum, s) => sum + skillCost(s.score, s.adv), 0) + hullCost;
-}
-/* House rule (see APP_CHANGES.md): a Ship may only use a Ship Class legal for its
-   own Division -- the Hangar Bay's Ship Class dropdown is filtered to just these. */
-function shipClassNamesForDivision(division) { return STATE.shipClasses.filter(c => c.division === division).map(c => c.name); }
-/* Ship icon art (see GDATA.SHIP_ICON_* in data.js): every Division has its own
-   set of 15 ship designs. A Ship Class picks one of its Division's 15 White
-   icons; a Ship built from a Class picks one of that Division's 45 Red/Green/
-   Blue icons. Icons are unique PER DIVISION (the same number/color in another
-   Division is a different ship) -- these report which numbers/colors are taken
-   by some OTHER class/ship in the SAME Division,
-   so the picker UI can grey them out (and App.updateShipClassIcon()/
-   App.updateShipIcon() re-check at the moment of picking, in case two tabs
-   or a stale render raced each other). */
-function shipIconPath(division, number, color) { return `${GDATA.SHIP_ICON_DIR}${division} ${number} ${color}.png`; }
-/* Which Division's 15 ship designs an icon is drawn from. A Ship reads it from
-   its Ship Class's Division; an NPC race participant carries its own
-   iconDivision (set from the course's Division at race start). Icon numbers
-   (01-15) are per-Division, so uniqueness checks are scoped to a Division too. */
-function shipClassDivision(name) { const c = getShipClass(name); return c ? c.division : null; }
-function iconDivisionOf(obj) {
-  if (!obj) return null;
-  if (obj.iconDivision) return obj.iconDivision;          // NPC participant
-  if (obj.shipClass) return shipClassDivision(obj.shipClass); // Ship
-  return null;
-}
-function usedClassIconNumbers(excludeId, division) {
-  return new Set(STATE.shipClasses.filter(c => c.id !== excludeId && c.icon && c.division === division).map(c => c.icon));
-}
-function usedShipIconKeys(excludeId) {
-  return new Set(STATE.ships.filter(s => s.id !== excludeId && s.iconColor && s.iconNumber)
-    .map(s => `${shipClassDivision(s.shipClass) || "?"}|${s.iconColor}|${s.iconNumber}`));
-}
-/* Small <img> thumbnail for anything carrying .iconColor/.iconNumber (a Ship
-   or an NPC race participant) -- empty string if it has no icon assigned or its
-   Division can't be resolved. */
-function iconThumbImg(obj) {
-  if (!obj || !obj.iconColor || !obj.iconNumber) return "";
-  const div = iconDivisionOf(obj);
-  if (!div) return "";
-  return `<img class="iconthumb" src="${esc(shipIconPath(div, obj.iconNumber, obj.iconColor))}" title="${esc(div)} ${esc(obj.iconColor)} ${esc(obj.iconNumber)}">`;
-}
-/* Picks a uniformly random (color, number) not already in usedKeys (a Set of
-   "Color|Number" strings) -- used to give an NPC racer a random, distinct
-   icon at race start (see startRace()). Returns null if all 45 are taken. */
-function pickRandomUnusedIcon(usedKeys) {
-  const options = [];
-  GDATA.SHIP_ICON_COLORS.forEach(color => GDATA.SHIP_ICON_NUMBERS.forEach(num => {
-    if (!usedKeys.has(`${color}|${num}`)) options.push({ color, number: num });
-  }));
-  if (!options.length) return null;
-  return options[Math.floor(Math.random() * options.length)];
-}
-/* House rule (see RULE_CHANGES.md): every Division has a build points cap
-   (GDATA.DIVISION_CAPS) -- it's a RULE, not an app-enforced wall. The Racemaster
-   can build a Ship Class over its Division's cap; the app doesn't block it, it
-   just flags the Total Points display in red (see shipClassOverCap()) so it's
-   obvious the class is out of spec. Flash also has a separate physical 5-G Max
-   Thrust ceiling (sub-sonic) which IS hard-enforced -- see maxThrustCap(). */
-function maxThrustCap(division) { return division === "Flash" ? 5 : 99; }
-function shipClassOverCap(sc) {
-  const cap = GDATA.DIVISION_CAPS[sc.division];
-  return !!cap && shipClassTotalCost(sc) > cap.maxPoints;
-}
-function mutateShipClassWithCapCheck(sc, mutateFn) {
-  mutateFn();
-  saveState(); render();
-}
-/* House rule (see RULE_CHANGES.md): each Ship Class has an EXACT number of
-   DISTINCT crewmen required to fill its 4 positions -- not a minimum, a fixed
-   crew size. A Flash/Spark (crew 1) must be flown solo -- one person, all 4
-   positions, never two different people. A Nova (crew 3) needs exactly 3
-   different people, never more or fewer. Every position must also actually
-   be filled (not left blank) for the ship to be race-legal, which in turn
-   caps how many positions any one crewman can hold: with 4 positions and a
-   crew size of N, one person can hold at most 4-N+1 of them -- the rest must
-   go to at least N-1 other people. App.assignCrew() enforces both the floor
-   (can't leave a position blank) and the ceiling (can't bring in more
-   distinct people than the crew size allows) at assignment time. */
-function distinctCrewCount(ship) { return new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean)).size; }
-function minCrewFor(ship) { return getShipClass(ship.shipClass).crew || 1; }
-function emptyPositions(ship) { return POSITIONS.filter(p => !ship.assignments[p]); }
-function maxPositionsPerCrewman(ship) { return POSITIONS.length - minCrewFor(ship) + 1; }
-function shipCrewComplete(ship) { return emptyPositions(ship).length === 0 && distinctCrewCount(ship) === minCrewFor(ship); }
-function crewLockMessage(ship) {
-  const empties = emptyPositions(ship);
-  if (empties.length) return `${ship.name}: ${empties.map(p => POS_LABEL[p]).join(", ")} unfilled`;
-  return `${ship.name}: needs exactly ${minCrewFor(ship)} distinct crew, has ${distinctCrewCount(ship)}`;
-}
-
-/* ============================== Ship Display computation ============================== */
-/* Mirrors "Building a Race Ship Display" (p.27-28). */
-/* Simplified crewman point cost (p.25): score + 10/Advantage, score - 5/Disadvantage. */
-// The effective Leg-skill ceiling (AAAAA) -- NOT a purchase limit. Advantage can be
-// bought past this (see updateSkill/updateShipClassAI); it just goes to waste in a
-// Leg, and its cost keeps climbing regardless (see advCost below).
-var MAX_ADV = 5;
-// House rule (see RULE_CHANGES.md): Circular Track / Distance Tracking runs
-// on a real hex grid (see circTrackGeometry() below) -- lane N is a hex ring
-// at ring-level (innerRing + N) around a shared center, with the two
-// straight sides elongated by straightLen extra hexes each (see
-// hexRingParamsForCourse()). Growth per lane out is therefore a constant +6
-// hexes (6x the +1 ring-level increase) -- an exact property of hex ring
-// math, not a chosen/arbitrary number. (An earlier attempt made the
-// straight legs a plain constant, independent of ring level, reasoning that
-// would make Q comparisons across lanes simpler -- it does, but it also
-// breaks the ring-nesting guarantee: hex-ring corners aren't at a
-// radius-independent offset the way a circle's are, so a fixed-length
-// straight leg starting from a k-dependent corner drifts out of alignment
-// with the next lane's, reintroducing overlaps. Caught by testing before
-// shipping -- see hexStepAdvance() below for how cross-lane comparison is
-// solved instead, without touching this proven geometry.)
-function laneHexesArray(course) {
-  const { innerRing, straightLen } = hexRingParamsForCourse(course);
-  return Array.from({ length: course.lanes || 6 }, (_, i) => 6 * (innerRing + i) + 2 * straightLen);
-}
-// Derives (innerRing, straightLen) from the course's configurable
-// "innerHexes" target (replacing the old square system's innerSquares field)
-// -- solves innerHexes ~= 6*innerRing + 2*straightLen with straightLen held
-// at 2x innerRing (a reasonable straight-vs-curve shape ratio; unlike the
-// old trapezoid system, every hex is ALWAYS the exact same regular size
-// regardless of this ratio, so this is purely a track-SHAPE choice now, not
-// a cell-size-matching necessity).
-function hexRingParamsForCourse(course) {
-  const target = course.innerHexes || 50;
-  const innerRing = Math.max(1, Math.round(target / 10));
-  const straightLen = 2 * innerRing;
-  return { innerRing, straightLen };
-}
-// Staggered start (see RULE_CHANGES.md): each lane out starts this many
-// hexes further ahead than the one inside it -- a fixed offset. Shared by
-// startRace() (actual gameplay hexPos) and the standings SVG (drawing each
-// lane's own starting mark at that same hex).
-var STAGGER_PER_LANE = 4;
-function laneStartHexPos(laneIdx0) { return laneIdx0 * STAGGER_PER_LANE; }
-// House rule (see RULE_CHANGES.md): skill/AI SCORE cost is triangular — level n
-// costs n(n+1)/2 (1,3,6,10,15,21,28,36,45,55 for scores 1..10).
-function scoreCost(score) { score = score || 0; return score * (score + 1) / 2; }
-// Advantage: each level's INCREMENT doubles (A costs 5, AA +10, AAA +20, AAAA +40,
-// AAAAA +80, AAAAAA +160, ...) with no purchase ceiling -- so cumulative totals are
-// A=5, AA=15, AAA=35, AAAA=75, AAAAA=155, AAAAAA=315, etc. Disadvantage is a flat
-// -5/level discount, uncapped on the negative side.
-function advCost(adv) {
-  if (!adv) return 0;
-  if (adv < 0) return adv * 5;
-  return 5 * (Math.pow(2, adv) - 1);
-}
-// Shared by crew skills and ship AI. maxThrust is NOT a skill and keeps a flat cost.
-function skillCost(score, adv) { return scoreCost(score) + advCost(adv); }
-function crewTotalCost(crewman) {
-  return POSITIONS.concat("resistance").reduce((sum, pos) => sum + skillCost(crewman.skills[pos].score, crewman.skills[pos].adv), 0);
-}
-function computeShipDisplay(ship) {
-  const cls = getShipClass(ship.shipClass);
-  const out = {};
-  POSITIONS.forEach(pos => {
-    const crewId = ship.assignments[pos];
-    const crewman = crewId ? getCrew(crewId) : null;
-    const crewSkill = crewman ? crewman.skills[pos] : { score: 0, adv: 0 };
-    let shipAI = 0, shipAIAdv = 0;
-    if (pos === "pilot") { shipAI = cls.ai.control; shipAIAdv = cls.ai.controlAdv; }
-    else if (pos === "navigator") { shipAI = cls.ai.nav; shipAIAdv = cls.ai.navAdv; }
-    else if (pos === "spotter") { shipAI = cls.ai.sensors; shipAIAdv = cls.ai.sensorsAdv; }
-    else { shipAI = 0; shipAIAdv = 0; } // Engineer AI = 0 always
-
-    let bonus = 0;
-    if (pos === "spotter") bonus += cls.tier; // Spotter gets ship Tier as bonus
-    if (ship.sponsorBonusPos === pos) bonus += 1;
-    let penalty = 0;
-    if (ship.sponsorPenaltyPos === pos) penalty -= 1;
-
-    const finalScore = (crewSkill.score || 0) + shipAI + bonus + penalty;
-    const finalAdv = (crewSkill.adv || 0) + shipAIAdv;
-    out[pos] = {
-      crewName: crewman ? crewman.name : "(unassigned)",
-      crewScore: crewSkill.score || 0, crewAdv: crewSkill.adv || 0,
-      shipAI, shipAIAdv, bonus, penalty,
-      finalScore, finalAdv, mk: formatMk(finalScore, finalAdv)
-    };
-  });
-  return out;
-}
-
-/* ============================== Racecourse generation ============================== */
-function rollLegFeature(division) {
-  const table = division === "Flash" ? GDATA.FLASH_LEG_FEATURES : GDATA.SPACE_LEG_FEATURES;
-  const idx = rollD(50) - 1;
-  return { d50: idx + 1, desc: table[idx][0], mod: table[idx][1] };
-}
-function rollLeg(division) {
-  const tier = rollD(5) + rollD(5); // 2d5 -> 2..10
-  const baseTN = tier * 3;
-  const feat = rollLegFeature(division);
-  const tnTierMod = (tier + feat.mod) * 3;
-  const tnTnMod = baseTN + feat.mod;
-  return { tier, baseTN, d50: feat.d50, feature: feat.desc, mod: feat.mod, tnTierMod, tnTnMod, finalTN: tnTierMod, finalMode: "tier" };
-}
-/* Number of Legs is set by the race Type (Drag Race / Short / Medium / Long --
-   see GDATA.RACE_TYPES), independent of Division. Drag Race is a flat 1; the
-   others roll and sum (e.g. Medium = 2d10). */
-function raceType(name) { return GDATA.RACE_TYPES.find(t => t.name === name) || GDATA.RACE_TYPES[0]; }
-function rollLegCount(typeName) {
-  const dice = raceType(typeName).dice;
-  let total = 0;
-  for (let i = 0; i < dice.n; i++) total += rollD(dice.d);
-  return total;
-}
-function rollRaceName() {
-  const d1 = GDATA.RACE_NAME.die1[rollD(10) - 1];
-  const d2 = GDATA.RACE_NAME.die2[rollD(10) - 1];
-  const d3 = GDATA.RACE_NAME.die3[rollD(10) - 1];
-  return `${d1} ${d2} ${d3}`;
-}
-function rollShipName() {
-  let l = GDATA.SHIP_NAME.left[rollD(50) - 1];
-  let r = GDATA.SHIP_NAME.right[rollD(50) - 1];
-  if (l === "Reroll") l = GDATA.SHIP_NAME.left[rollD(49) - 1];
-  if (r === "Reroll") r = GDATA.SHIP_NAME.right[rollD(49) - 1];
-  return `${l} ${r}`;
-}
-/* Hero name: roll a d100 for the first name and a separate d100 for the last
-   name from GDATA.HERO_FIRST_NAMES / HERO_LAST_NAMES (see data.js). */
-function rollHeroName() {
-  return `${GDATA.HERO_FIRST_NAMES[rollD(100) - 1]} ${GDATA.HERO_LAST_NAMES[rollD(100) - 1]}`;
-}
-
-/* ============================== Race engine ============================== */
-function activePenalties(participant, legIndex) {
-  // Fumble penalties use an ABSOLUTE Leg window [startLeg, endLeg] (see
-  // applyFumbleAffects) rather than a countdown, so the "N more Legs" display can
-  // never drift off by one. Drop windows already past, then sum those in effect
-  // this Leg. No mutation of the counts here -- the window is fixed when created.
-  participant.penalties = (participant.penalties || []).filter(pen => pen.endLeg >= legIndex);
-  const totals = { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
-  participant.penalties.forEach(pen => {
-    if (legIndex >= pen.startLeg && legIndex <= pen.endLeg) totals[pen.position] += pen.amount;
-  });
-  return totals;
-}
-// Legs a penalty is still in effect, counting the current Leg. 0 means it's not
-// active this Leg (a window that starts next Leg reports how many Legs until it
-// ends). Used for the status display.
-function penaltyLegsLeft(pen, legIndex) {
-  if (legIndex > pen.endLeg) return 0;
-  return pen.endLeg - Math.max(legIndex, pen.startLeg) + 1;
-}
-/* A ship's usable max thrust after any Acceleration fumble effects (see the
-   Fumble charts in data.js): reductions subtract from it, a cap floors it,
-   both persisting for the rest of the race. Never drops below 1-G. */
-function effectiveMaxThrust(participant, cls) {
-  let m = cls.maxThrust - (participant.accelReduction || 0);
-  if (participant.accelCap != null) m = Math.min(m, participant.accelCap);
-  return Math.max(1, m);
-}
-/* Applies one Fumble chart entry's structured `affects` (see data.js) to the
-   ship that just fumbled: crew Disadvantage penalties over future Legs, HP
-   damage (reduced by DR; 0 HP = out of the race), Acceleration reductions,
-   and forced-last-place Legs. House rule: multiple Fumble Levels on one
-   Task Check (rc.fumbleLevels > 1) each require their OWN independent roll
-   on the Fumble Chart, and every one of those rolls' effects applies (they
-   stack) -- this function only ever applies ONE roll's worth; the caller
-   (App.rollFumble()) is what loops it once per Fumble Level. */
-function applyFumbleAffects(pid, entry) {
-  const race = STATE.race, ls = race.legState;
-  const ps = ls.perShip[pid];
-  const participant = race.participants.find(p => p.id === pid);
-  const ship = getShip(participant.shipId);
-  const cls = getShipClass(ship.shipClass);
-  if (participant.hp == null) { participant.maxHp = cls.hp; participant.hp = cls.hp; }
-  participant.penalties = participant.penalties || [];
-  (entry.affects || []).forEach(a => {
-    if (a.type === "disadvantage") {
-      // Absolute Leg window: a Fumble on this Leg imposes the Disadvantage on the
-      // NEXT a.legs Legs (it doesn't affect the Leg it happened on -- that Leg's
-      // conditions were already set at initLegState). startLeg is the first
-      // affected Leg, endLeg the last (inclusive).
-      participant.penalties.push({ position: a.position, amount: -a.levels, startLeg: race.legIndex + 1, endLeg: race.legIndex + a.legs });
-    } else if (a.type === "hp") {
-      const dmg = Math.max(0, (cls.tier * a.tierMult) - (cls.dr || 0));
-      participant.hp = Math.max(0, participant.hp - dmg);
-      if (participant.hp === 0 && !participant.out) { participant.out = true; participant.outLeg = race.legIndex; }
-    } else if (a.type === "accel") {
-      if (a.mode === "reduce") participant.accelReduction = (participant.accelReduction || 0) + a.value;
-      else if (a.mode === "set") participant.accelCap = participant.accelCap != null ? Math.min(participant.accelCap, a.value) : a.value;
-    } else if (a.type === "last") {
-      participant.forcedLastLegs = Math.max(participant.forcedLastLegs || 0, a.legs);
-    }
-  });
-}
-/* Heroes shown/handled in the CURRENT Leg's Phase Cards. A destroyed ship is
-   NOT deleted from the race mid-Leg -- it stays visible (flagged DESTROYED)
-   through the end of the Leg it died on, then drops out from the next Leg on. */
-function activeHeroes(race) {
-  return race.participants.filter(p => p.type === "hero" && (!p.out || p.outLeg === race.legIndex));
-}
-/* Heroes not yet destroyed -- used to decide whether the race can continue. */
-function livingHeroes(race) {
-  return race.participants.filter(p => p.type === "hero" && !p.out);
-}
-function rollCircularLeg(course) {
-  const leg = rollLeg(course.division);
-  const mode = course.legMode || "tier";
-  leg.finalMode = mode;
-  leg.finalTN = mode === "tier" ? leg.tnTierMod : (mode === "tn" ? leg.tnTnMod : leg.baseTN);
-  return leg;
-}
-// House rule (see RULE_CHANGES.md): a Leg's TN can never exceed the highest
-// Ship Pilot Mk among this race's Heroes, plus 18. Pilot Mk here is the ship's
-// static Pilot score (crew skill + Ship AI + bonuses/penalties -- see
-// computeShipDisplay()), not a Leg's tactical Advantage/Disadvantage, which
-// doesn't exist yet at the point a Leg's TN is set. NPCs have no Ship/crew, so
-// only Heroes count; an all-NPC race falls back to a flat cap of 18.
-function legTNCap(race) {
-  const mks = race.participants.filter(p => p.type === "hero").map(p => computeShipDisplay(getShip(p.shipId)).pilot.finalScore);
-  return (mks.length ? Math.max(...mks) : 0) + 18;
-}
-// The TN a Leg would have had before legTNCap() -- initLegState() overwrites
-// leg.finalTN with the capped value but leaves tnTierMod/tnTnMod/baseTN
-// alone, so the pre-cap number for whichever finalMode was in play is still
-// recoverable from those. Used only for the "capped from N" debug display
-// (see renderRace()) -- not needed anywhere the cap itself is applied.
-function legNaturalTN(leg) {
-  return leg.finalMode === "tier" ? leg.tnTierMod : leg.finalMode === "tn" ? leg.tnTnMod : leg.baseTN;
-}
-function initLegState(race) {
-  const course = getCourse(race.courseId);
-  // Circular Track (see RULE_CHANGES.md): there's no pre-built Leg list -- a
-  // fresh Leg (Tier/Feature/TN) is rolled every time one is needed, including
-  // the first Leg of a race, so re-racing the same course never reuses a
-  // stale Leg from a prior run. Straight courses' Legs are pre-built and
-  // persisted on the course (reusable across different races/rosters), so a
-  // shallow copy is taken here before the TN cap below is applied -- the
-  // course's own stored Leg (and its finalTN) is never mutated.
-  const leg = course.trackType === "circular" ? rollCircularLeg(course) : { ...course.legs[race.legIndex] };
-  leg.finalTN = Math.min(leg.finalTN, legTNCap(race));
-  const perShip = {};
-  race.participants.filter(p => p.type === "hero").forEach(p => {
-    const ship = getShip(p.shipId);
-    const shipCls = getShipClass(ship.shipClass);
-    const carriedConditions = activePenalties(p, race.legIndex);
-    const effMax = effectiveMaxThrust(p, shipCls);
-    perShip[p.id] = {
-      accel: Math.max(1, Math.min(effMax, shipCls.damper || effMax)), // min 1-G (see RULE_CHANGES.md)
-      // Racing Maneuvers (see RULE_CHANGES.md): EACH position may run its own
-      // Maneuver against the SAME position on chosen target ships.
-      maneuvers: { pilot: "", navigator: "", spotter: "", engineer: "" },
-      maneuverTargets: { pilot: [], navigator: [], spotter: [], engineer: [] },
-      slip: "", // Circular Track lane change this Leg: "" | "left" | "right" (see RULE_CHANGES.md)
-      slipHexes: 0, // hexes of Slip declared this Leg (costs no Movement Points)
-      slipAdvantage: 0, // signed A/D from the Slip, computed at lockDeclarations() -- 0 if entirely within a straightaway
-      // House rule (see RULE_CHANGES.md): Crowded Field. -1 D per ship that
-      // shared this hex with it at the end of the PREVIOUS Leg (flagged by
-      // finishLeg() as the group's size, consumed and cleared here so it only
-      // ever applies once).
-      crowdedFieldD: p.crowdedFieldNextLeg ? -p.crowdedFieldNextLeg : 0,
-      declared: false,
-      conditions: carriedConditions,
-      grants: { pilot: 0, navigator: 0, spotter: 0, engineer: 0 },
-      resistanceDelta: { pilot: 0, navigator: 0, spotter: 0, engineer: 0 },
-      // Maneuver Disadvantage received on each position (target's same position),
-      // and the instigator's own self-cost on each acting position.
-      maneuverReceivedByPos: { pilot: 0, navigator: 0, spotter: 0, engineer: 0 },
-      maneuverInstigatedByPos: { pilot: 0, navigator: 0, spotter: 0, engineer: 0 },
-      netLegAcc: 0,
-      resistance: null, // { [crewId]: {pass, total, tn, positions:[...] } }
-      condLocked: false, // Phase I conditions locked for this Leg (see renderPhaseI)
-      // A ship destroyed (0 HP) earlier stays out for every remaining Leg.
-      autoLast: !!p.out,
-      results: { engineer: null, spotter: null, navigator: null, pilot: null },
-      // House rule (see RULE_CHANGES.md): Engineer/Spotter must choose their grant
-      // target BEFORE rolling -- starts unset each Leg so there's no silent default.
-      grantChoice: { engineer: "", spotter: "" }
-    };
-    p.crowdedFieldNextLeg = 0; // consumed above into crowdedFieldD -- one-Leg effect only
-  });
-  const npcState = {};
-  race.participants.filter(p => p.type === "npc").forEach(p => {
-    // NPC automation (see RULE_CHANGES.md): maneuvers/slip/slipHexes/
-    // slipAdvantage/huntedThisLeg mirror a Hero's ps shape closely enough
-    // that declaredManeuversText() and finishLeg()'s circular Slip block
-    // (ls.perShip[r.id] || ls.npcState[r.id]) can treat either uniformly.
-    npcState[p.id] = {
-      maneuverReceivedD: 0,
-      maneuvers: { pilot: "", navigator: "", spotter: "", engineer: "" },
-      maneuverTargetId: null,
-      slip: "", slipHexes: 0, slipAdvantage: 0,
-      huntedThisLeg: false
-    };
-  });
-  race.legState = {
-    leg, declLocked: false, perShip, npcState,
-    npcResults: {}, baseLegResult: null, standings: null,
-    // UI only (see APP_CHANGES.md): each phase card can be collapsed to its
-    // header manually via the button in renderPhaseCardOpen(). Phase I
-    // (Crew Task Check Modifications) starts collapsed each Leg -- it's
-    // rarely used outside an RPG-style campaign and is just noise otherwise.
-    phaseCollapsed: { phaseI: true }
-  };
-  STATE._openDeclFor = null;
-}
-function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (p.name + " (NPC)"); }
-// House rule (see RULE_CHANGES.md): Initiative = d20 + Ship's max
-// Acceleration. NPCs have no Ship Class (see startRace()), so they roll a
-// bare d20.
-function shipMaxAccelForInitiative(p) {
-  if (p.type !== "hero") return 0;
-  const ship = getShip(p.shipId);
-  return getShipClass(ship.shipClass).maxThrust || 0;
-}
-// Rolls Initiative once for every ship in `ships`, stamps it onto
-// p.initiative (the displayed value), and returns them sorted highest to
-// lowest. A tied GROUP's overall rank among the rest of the field is fixed by
-// that shared value -- only their order relative to EACH OTHER is
-// undetermined, so ties are broken by a separate, unstamped reroll among just
-// that group (see breakTieOrder()) rather than a fresh d20 that could
-// otherwise vault a formerly-tied ship above (or below) ships it never tied
-// with (see RULE_CHANGES.md).
-function resolveInitiativeOrder(ships) {
-  const rolled = ships.map(p => ({ p, val: rollD(20) + shipMaxAccelForInitiative(p) }));
-  rolled.forEach(r => { r.p.initiative = r.val; });
-  rolled.sort((a, b) => b.val - a.val);
-  const result = [];
-  let i = 0;
-  while (i < rolled.length) {
-    let j = i;
-    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
-    if (j === i) { result.push(rolled[i].p); i++; continue; }
-    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
-    i = j + 1;
-  }
-  return result;
-}
-// Orders a group of ships that tied on Initiative, purely relative to each
-// other -- their displayed p.initiative is untouched (it's still the tied
-// value that put them in this group). Repeats (recursively, on whichever
-// subset ties again) until every ship in the group has a strict order.
-function breakTieOrder(tiedShips) {
-  const rolled = tiedShips.map(p => ({ p, val: rollD(20) + shipMaxAccelForInitiative(p) }));
-  rolled.sort((a, b) => b.val - a.val);
-  const result = [];
-  let i = 0;
-  while (i < rolled.length) {
-    let j = i;
-    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
-    if (j === i) { result.push(rolled[i].p); i++; continue; }
-    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
-    i = j + 1;
-  }
-  return result;
-}
-function startRace(courseId, shipIds, npcs) {
-  const course = getCourse(courseId);
-  const circular = course.trackType === "circular";
-  const participants = [];
-  const usedIcons = new Set();
-  shipIds.forEach(sid => {
-    const ship = getShip(sid);
-    const cls = getShipClass(ship.shipClass);
-    participants.push({
-      id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [], penalties: [],
-      // Fumble-tracked state (see data.js Fumble charts / RULE_CHANGES.md):
-      hp: cls.hp, maxHp: cls.hp, out: false,
-      accelReduction: 0, accelCap: null, forcedLastLegs: 0
-    });
-    if (ship.iconColor && ship.iconNumber) usedIcons.add(`${ship.iconColor}|${ship.iconNumber}`);
-  });
-  // House rule / UI (see APP_CHANGES.md): an NPC racer gets a random icon --
-  // any color, whichever hull number -- distinct from every Hero ship and
-  // every other NPC in this same race, so no two bars on the board look alike.
-  // NPC icons come from the course's Division (all racers in a race share it).
-  npcs.forEach(n => {
-    const pick = pickRandomUnusedIcon(usedIcons);
-    if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
-    // Aggression (see RULE_CHANGES.md): 1-10, public knowledge, drives this
-    // NPC's whole automated behavior (Maneuvers, Slip) via its Leg
-    // Aggression (aggression + standings position - 1, computed fresh each
-    // Leg in lockDeclarations()).
-    participants.push({ id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5), cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "" });
-  });
-  // Circular Track / Distance Tracking (see RULE_CHANGES.md): every racer starts
-  // in a lane, round-robin, and tracks laps completed + hex position within
-  // the current lap. Lane may change mid-race via a Slip (see
-  // renderDeclModal). Outer lanes get a staggered head start, same reasoning
-  // as a real track: an unstaggered outer lane's full-lap hex gain over the
-  // one inside it comes entirely from the two curved end-caps (straights are
-  // the same length for every lane -- see circTrackGeometry()), so crossing
-  // just the first curve it would already be running ahead. Starting that
-  // far behind cancels it out. startLane/startHexPos are kept alongside the
-  // live lane/hexPos so a race replay can redraw the true starting frame
-  // later.
-  if (circular) {
-    // House rule (see RULE_CHANGES.md): Initiative. Every ship rolls d20 +
-    // its max Acceleration (NPCs have no Ship Class, so just d20) once at the
-    // start of the Race; lanes are assigned in sequence, innermost to
-    // outermost, highest Initiative to lowest -- more racers than lanes wraps
-    // back to lane 1, same as the old round-robin did. Ties are broken by
-    // re-rolling ONLY the tied ships against each other (see resolveInitiativeOrder()).
-    const order = resolveInitiativeOrder(participants);
-    order.forEach((p, i) => {
-      const laneIdx0 = i % course.lanes;
-      p.lane = laneIdx0 + 1;
-      p.hexPos = laneStartHexPos(laneIdx0);
-      p.laps = 0;
-      p.startLane = p.lane;
-      p.startHexPos = p.hexPos;
-    });
-  }
-  const race = { courseId, legIndex: 0, participants, finished: false, log: [] };
-  initLegState(race);
-  STATE.race = race;
-  saveState();
-}
-// Real track position on a Circular Track: laps completed plus a
-// lane-length-normalized fraction through the current lap (the same measure
-// resolveSlipPath() uses to judge real progress fairly across lanes of
-// different length) -- NOT raw cumulative Movement. A ship can spend more
-// total Movement than another and still be behind it: outer lanes are
-// longer, a Slip's lane change is free (doesn't add to cumulative), and
-// Slingshot's bonus Movement isn't folded into cumulative either, so
-// cumulative alone can diverge from where a ship actually sits on the
-// track. One full lap = 6 (the hex ring's 6 legs), so dividing by
-// `course.laps * 6` gives a 0-1 fraction of the whole race. Shared by
-// standingsPositions() (NPC Leg Aggression) and renderStandings() (the
-// Standings board's ordering and bar length).
-function trackProgress(p, ringParams) {
-  return (p.laps || 0) * 6 + hexLegOffset(ringParams.innerRing, ringParams.straightLen, (p.lane || 1) - 1, p.hexPos || 0);
-}
-// NPC automation (see RULE_CHANGES.md): standings position among still-active
-// (not destroyed) racers, 1 = leading, used to compute each NPC's Leg
-// Aggression. Exact ties are broken randomly -- each tied racer gets its own
-// distinct position, not a shared rank, per the Racemaster's own call.
-// Straight/Legs courses have no lane geometry to normalize against, so
-// cumulative (there, literally the race score) is used as-is.
-function standingsPositions(race, course) {
-  const active = race.participants.filter(p => !p.out);
-  const circular = course && course.trackType === "circular";
-  const ringParams = circular ? hexRingParamsForCourse(course) : null;
-  const progress = p => circular ? trackProgress(p, ringParams) : p.cumulative;
-  const shuffled = [...active].sort(() => Math.random() - 0.5);
-  shuffled.sort((a, b) => progress(b) - progress(a));
-  const positions = {};
-  shuffled.forEach((p, i) => { positions[p.id] = i + 1; });
-  return positions;
-}
-// An NPC's own Aggression (1-10, public, set at Race Setup) plus its current
-// standings position - 1 -- a ship further back is more willing to gamble,
-// regardless of its base personality. Falls back to 5 for any NPC saved
-// before this field existed.
-function legAggressionFor(p, positions) {
-  return (p.aggression || 5) + ((positions[p.id] || 1) - 1);
-}
-// Margin = leg aggression - roll, only meaningful on a success (roll <= leg
-// aggression). Picks which Maneuver tier an NPC's position check reaches --
-// margin 0-2 -> D, 3-5 -> DD, 6-9 -> DDD, 10+ -> Attack (Pilot only; the
-// caller caps non-Pilot positions at DDD since they have no 4th tier).
-function npcManeuverTierForMargin(margin) {
-  if (margin >= 10) return 4;
-  if (margin >= 6) return 3;
-  if (margin >= 3) return 2;
-  return 1;
-}
-function npcManeuverFor(position, tier) {
-  if (tier >= 4 && position === "pilot") return GDATA.MANEUVERS.find(m => m.position === "pilot" && m.disadv === "Tier");
-  return GDATA.MANEUVERS.find(m => m.position === position && m.disadv === Math.min(tier, 3));
-}
-// Attack (see RULE_CHANGES.md): unlike every other Maneuver, it's a real
-// weapons hit, not a Task Check modifier -- it automatically deals Tier HP
-// damage (reduced by the target's Damage Resistance, same formula as a
-// Fumble's HP damage) to a HERO target instead of Disadvantage. NPCs have no
-// HP of their own to damage, so returns false for an NPC target, letting the
-// caller fall back to the ordinary Disadvantage every other Maneuver uses.
-function applyAttackDamage(race, targetId, tierAmount) {
-  const t = race.participants.find(p => p.id === targetId);
-  if (!t || t.type !== "hero") return false;
-  const cls = getShipClass(getShip(t.shipId).shipClass);
-  if (t.hp == null) { t.maxHp = cls.hp; t.hp = cls.hp; }
-  const dmg = Math.max(0, tierAmount - (cls.dr || 0));
-  t.hp = Math.max(0, t.hp - dmg);
-  if (t.hp === 0 && !t.out) { t.out = true; t.outLeg = race.legIndex; }
-  return true;
-}
-// A HERO's Attack against an NPC is an automatic kill (see RULE_CHANGES.md)
-// -- NPCs have no HP to damage gracefully, so instead of falling back to
-// Disadvantage like every other Hero-instigated Attack-vs-NPC case would,
-// it removes the NPC from the race outright, the same out/outLeg flag a
-// Fumble or falling a full Leg behind uses. NPC-instigated Attacks against
-// another NPC are NOT affected by this -- those still use the ordinary
-// Disadvantage fallback (see autoDeclareNpc()), since this is specifically
-// a Hero weapons-fire rule, not a blanket "Attack kills NPCs" one.
-function killNpc(race, npcId) {
-  const t = race.participants.find(p => p.id === npcId);
-  if (t && !t.out) { t.out = true; t.outLeg = race.legIndex; }
-}
-// Automates one NPC's Maneuvers (all 4 positions, each an independent d20 <=
-// leg aggression check) and, on a Circular Track, its Slip -- see
-// RULE_CHANGES.md for the full mechanic. Called from lockDeclarations() once
-// standings positions are known for this Leg.
-function autoDeclareNpc(race, p, legAggression, course, maneuverGeom, positions) {
-  const ls = race.legState, ns = ls.npcState[p.id];
-  ns.maneuvers = { pilot: "", navigator: "", spotter: "", engineer: "" };
-  ns.maneuverTargetId = null;
-  ns.slip = ""; ns.slipHexes = 0; ns.slipAdvantage = 0; ns.huntedThisLeg = false;
-
-  // Legal targets: the same rule Heroes use (excludes self, destroyed ships,
-  // and -- on a Circular Track -- anyone out of Maneuver range).
-  const legalTargets = race.participants.filter(x => x.id !== p.id && !x.out && (!maneuverGeom || hexesWithinManeuverRange(maneuverGeom, p, x)));
-  // "Logical" target: whoever's immediately ahead of this NPC in the
-  // standings -- that's who's actually blocking its way forward -- falling
-  // back through the ordered field (closest-ahead first) to the nearest one
-  // that's actually legal, or none if nobody ahead qualifies.
-  const aheadOrder = race.participants
-    .filter(x => x.id !== p.id && !x.out && positions[x.id] < positions[p.id])
-    .sort((a, b) => positions[b.id] - positions[a.id]);
-  const target = aheadOrder.find(x => legalTargets.includes(x)) || null;
-
-  const divStats = GDATA.SHIP_CLASSES[course.division] || GDATA.SHIP_CLASSES.Comet;
-  const tier = divStats.tier; // NPCs have no Ship Class of their own -- use the course Division's book Tier for Attack's -Tier cost
-  if (target) {
-    POSITIONS.forEach(pos => {
-      const roll = rollD(20);
-      if (roll > legAggression) return;
-      const margin = legAggression - roll;
-      const mv = npcManeuverFor(pos, npcManeuverTierForMargin(margin));
-      if (!mv) return;
-      ns.maneuvers[pos] = mv.name;
-      ns.maneuverTargetId = target.id;
-      const dAmount = mv.disadv === "Tier" ? tier : mv.disadv;
-      if (mv.name === "Attack" && applyAttackDamage(race, target.id, dAmount)) return; // Hero target -- HP damage applied instead of Disadvantage
-      if (ls.perShip[target.id]) {
-        const t = ls.perShip[target.id];
-        t.maneuverReceivedByPos = t.maneuverReceivedByPos || { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
-        t.maneuverReceivedByPos[pos] += dAmount;
-      } else if (ls.npcState[target.id]) {
-        ls.npcState[target.id].maneuverReceivedD += dAmount;
-      }
-    });
-  }
-
-  if (course.trackType === "circular") autoDeclareNpcSlip(race, p, legAggression, course, maneuverGeom, target);
-}
-// NPC Slip (Circular Track only, see RULE_CHANGES.md): one more independent
-// d20 <= leg aggression roll decides whether the Pilot attempts a Slip at
-// all this Leg -- regardless of whether this Leg's movement will even touch
-// a curve, since closing lane distance toward a target has value on its own.
-function autoDeclareNpcSlip(race, p, legAggression, course, geom, target) {
-  const ns = race.legState.npcState[p.id];
-  const roll = rollD(20);
-  if (roll > legAggression) return;
-  const margin = legAggression - roll;
-  const amount = Math.max(1, Math.floor(margin / 2));
-  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
-
-  let dir = null, hexes = 0;
-  const alreadyInRange = target && hexesWithinManeuverRange(geom, p, target);
-  if (target && !alreadyInRange) {
-    // Hunting progression: if this succeeds, the Slip is aimed at closing
-    // the lane gap toward the target instead of the plain lean below,
-    // capped at this roll's own allowance -- never overshoot trying to
-    // force it.
-    if (rollD(20) <= legAggression) {
-      const towardLeft = target.lane < p.lane;
-      const laneGap = Math.abs(target.lane - p.lane);
-      const neededLanes = Math.max(0, laneGap - MANEUVER_RANGE_HEXES);
-      const huntAmount = Math.min(amount, neededLanes, towardLeft ? maxLeft : maxRight);
-      if (huntAmount > 0) { dir = towardLeft ? "left" : "right"; hexes = huntAmount; ns.huntedThisLeg = true; }
-    }
-  }
-  if (dir === null) {
-    // Plain lean: how decisively this roll beat the ship's OWN leg
-    // aggression (not an absolute number, so it means the same thing for a
-    // timid ship and a reckless one) decides inward (chase Slingshot speed,
-    // accept Disadvantage) vs outward (bank the free Advantage).
-    const inward = (margin / legAggression) >= 0.5;
-    dir = inward ? "left" : "right";
-    hexes = Math.min(amount, dir === "left" ? maxLeft : maxRight);
-  }
-  if (hexes <= 0) return; // no room to slip that way -- nothing happens
-
-  ns.slip = dir; ns.slipHexes = hexes;
-  // NPCs don't declare an Acceleration the way Heroes do, so there's no
-  // known future movement to project a curve-touch check through (see
-  // lockDeclarations()'s Hero Slip block) -- instead walk just the `hexes`
-  // diagonal steps of the lane change itself, checking each landing hex.
-  const dirVal = dir === "left" ? -1 : 1;
-  let touchesCurve = !isHexOnStraight(geom, p.lane - 1, p.hexPos || 0);
-  let curLaneIdx0 = p.lane - 1, curHexPos = p.hexPos || 0;
-  for (let i = 0; i < hexes && !touchesCurve; i++) {
-    const sn = geom.slipNeighbors[curLaneIdx0][curHexPos];
-    const candidates = dirVal > 0 ? sn.outward : sn.inward;
-    if (!candidates.length) break;
-    curLaneIdx0 += dirVal; curHexPos = candidates[0];
-    if (!isHexOnStraight(geom, curLaneIdx0, curHexPos)) touchesCurve = true;
-  }
-  ns.slipAdvantage = touchesCurve ? (dir === "right" ? hexes : -hexes) : 0;
-}
-function lockDeclarations() {
-  const race = STATE.race, ls = race.legState;
-  const course = getCourse(race.courseId);
-  Object.entries(ls.perShip).forEach(([pid, ps]) => {
-    const ship = getShip(race.participants.find(p => p.id === pid).shipId);
-    const damper = getShipClass(ship.shipClass).damper;
-    ps.netLegAcc = damper - ps.accel;
-    ps.declared = true;
-  });
-  // Circular Track Slips (see RULE_CHANGES.md): a Slip costs no Movement
-  // Points beyond ordinary movement -- of this Leg's eventual hexes of
-  // movement, the declared Slip hexes are interleaved with ordinary forward
-  // movement wherever resolveSlipPath()'s longest-path DP finds the ship
-  // makes the most real progress around the track (not always first or
-  // last -- see RULE_CHANGES.md; even though every hex is the same real
-  // size, WHICH hex a "forward" step reaches depends on the current lane,
-  // so different interleavings genuinely land on different final hexes).
-  // Each hex of Slip is a diagonal, edge-adjacent step -- it advances
-  // forward by one hex (same as ordinary movement) AND changes one lane,
-  // simultaneously -- not a purely lateral hop. Since the Leg's real
-  // movement isn't resolved yet (that's what Phase VI's roll -- fed by the
-  // very A/D this determines -- is for), the lane change itself happens
-  // later, in finishLeg(), once movement is known; this only clamps the
-  // declared magnitude to physically available lanes and decides the A/D.
-  // It grants +1 Advantage per hex if the destination lane is further
-  // outward or -1 Disadvantage per hex if it's further inward, UNLESS the
-  // whole projected Leg -- current hex, forward by (declared Acceleration
-  // minus the Slip amount), then each diagonal Slip step in turn -- stays
-  // entirely on a straightaway; touching
-  // a curve anywhere along that projected span uses the curve A/D. The A/D
-  // itself is applied via pilotExtraNet() (not folded into
-  // ps.conditions.pilot) so it shows as its own "Slip" line in
-  // legAdSourcesHtml() instead of disappearing into "Conditions."
-  if (course.trackType === "circular") {
-    const geom = circTrackGeometry(course);
-    Object.entries(ls.perShip).forEach(([pid, ps]) => {
-      ps.slipAdvantage = 0;
-      if (!ps.slip) { ps.slipHexes = 0; return; }
-      const participant = race.participants.find(p => p.id === pid);
-      // The track runs counterclockwise (see RULE_CHANGES.md) -- facing the
-      // direction of travel, steering LEFT points toward the track's center
-      // (inward, toward lane 1) and RIGHT points away from it (outward,
-      // toward a higher lane number), the same way a driver on a real
-      // counterclockwise oval steers left to move to the inside lane.
-      // House rule (see RULE_CHANGES.md): a Slip is also capped at the ship's
-      // declared Acceleration -- a ship can't Slip more hexes than its own
-      // declared G rate this Leg, on top of the lanes actually available.
-      const maxLane = Math.min(ps.slip === "left" ? participant.lane - 1 : course.lanes - participant.lane, ps.accel || 0);
-      const hexes = clampInt(ps.slipHexes, 0, Math.max(0, maxLane), 0);
-      ps.slipHexes = hexes;
-      if (hexes <= 0) { ps.slip = ""; return; }
-      const originLaneIdx0 = participant.lane - 1;
-      const originHexPos = participant.hexPos || 0;
-      const dir = ps.slip === "left" ? -1 : 1;
-      // Touches a curve if the origin hex does, or if any hex along the
-      // projected path (declared Acceleration's worth of movement,
-      // interleaved with the declared Slip hexes the same way
-      // resolveSlipPath() actually resolves the Leg -- see RULE_CHANGES.md)
-      // does.
-      const projected = resolveSlipPath(geom, originLaneIdx0, originHexPos, ps.accel || 0, hexes, dir);
-      let touchesCurve = !isHexOnStraight(geom, originLaneIdx0, originHexPos);
-      for (let i = 0; !touchesCurve && i < projected.steps.length; i++) {
-        const step = projected.steps[i];
-        if (!isHexOnStraight(geom, step.laneIdx0, step.hexPos)) touchesCurve = true;
-      }
-      ps.slipAdvantage = touchesCurve ? (ps.slip === "right" ? hexes : -hexes) : 0;
-    });
-  }
-  // Apply maneuvers: each position may run its own Maneuver against the SAME
-  // position on the chosen targets (see RULE_CHANGES.md).
-  Object.entries(ls.perShip).forEach(([pid, ps]) => {
-    const tier = getShipClass(getShip(race.participants.find(p => p.id === pid).shipId).shipClass).tier;
-    ps.maneuverInstigatedByPos = ps.maneuverInstigatedByPos || { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
-    POSITIONS.forEach(pos => {
-      const mvName = ps.maneuvers && ps.maneuvers[pos];
-      if (!mvName) return;
-      const mv = GDATA.MANEUVERS.find(m => m.name === mvName);
-      if (!mv) return;
-      const dAmount = mv.disadv === "Tier" ? tier : mv.disadv;
-      const targets = (ps.maneuverTargets && ps.maneuverTargets[pos]) || [];
-      targets.forEach(tid => {
-        if (mv.name === "Attack") {
-          if (applyAttackDamage(race, tid, dAmount)) return; // Hero target -- HP damage applied instead of Disadvantage
-          if (ls.npcState[tid]) { killNpc(race, tid); return; } // NPC target -- a Hero's Attack is an automatic kill
-        }
-        // Hero target: Disadvantage lands on the SAME position. NPC target: no
-        // per-position rolls, so it applies to the NPC's single roll as normal.
-        if (ls.perShip[tid]) {
-          const t = ls.perShip[tid];
-          t.maneuverReceivedByPos = t.maneuverReceivedByPos || { pilot: 0, navigator: 0, spotter: 0, engineer: 0 };
-          t.maneuverReceivedByPos[pos] += dAmount;
-        } else if (ls.npcState[tid]) ls.npcState[tid].maneuverReceivedD += dAmount;
-      });
-      let selfD = dAmount * (targets.length > 0 ? 1 : 0);
-      if (targets.length > 1) selfD += (targets.length - 1); // +1 Disadvantage per additional target
-      ps.maneuverInstigatedByPos[pos] += selfD;
-    });
-  });
-  // NPC automation (see RULE_CHANGES.md): each active NPC now declares its
-  // own Maneuvers and (Circular Track) Slip, driven by its Leg Aggression --
-  // computed from this moment's standings, same as every Hero's Declaration
-  // just locked in above.
-  const maneuverGeom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-  const positions = standingsPositions(race, course);
-  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
-    autoDeclareNpc(race, p, legAggressionFor(p, positions), course, maneuverGeom, positions);
-  });
-  ls.declLocked = true;
-  saveState();
-}
-function rollResistance(pid) {
-  const race = STATE.race, ps = race.legState.perShip[pid];
-  const ship = getShip(race.participants.find(p => p.id === pid).shipId);
-  const cls = getShipClass(ship.shipClass);
-  const uncompensated = Math.max(0, ps.accel - cls.damper);
-  const tn = uncompensated * 3;
-  const crewIds = [...new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean))];
-  const result = {};
-  crewIds.forEach(cid => {
-    const crewman = getCrew(cid);
-    const heldPositions = POSITIONS.filter(pos => ship.assignments[pos] === cid);
-    if (tn <= 0) {
-      result[cid] = { pass: true, total: null, tn, positions: heldPositions, skipped: true };
-      return;
-    }
-    // Phase I conditions apply to the Resistance check too (see RULE_CHANGES.md):
-    // each condition checked on this crewman is −1 Disadvantage on their roll.
-    const condFlags = (ps._condFlags && ps._condFlags[cid]) || {};
-    const condCount = Object.values(condFlags).filter(Boolean).length;
-    const net = (crewman.skills.resistance.adv || 0) - condCount;
-    const rc = rollCheck(crewman.skills.resistance.score, net, tn);
-    // Store the full roll so Phase II can show it the same way every other phase
-    // does (dice → chosen + score = total vs TN → outcome).
-    result[cid] = {
-      pass: rc.success, total: rc.total, tn, positions: heldPositions, fumble: rc.isFumble,
-      dice: rc.dice, chosen: rc.chosen, score: crewman.skills.resistance.score, net: rc.net, conds: condCount
-    };
-    if (!rc.success) {
-      heldPositions.forEach(pos => { ps.resistanceDelta[pos] -= 1; });
-    }
-    if (rc.isFumble) ps.autoLast = true;
-  });
-  ps.resistance = result;
-  saveState();
-}
-function netForPosition(ps, shipDisplay, pos, extra) {
-  extra = extra || 0;
-  // Maneuver Disadvantage on THIS position: received (as a target) plus the
-  // instigator's own self-cost for acting from this position. Guarded for old
-  // cached legs that predate these per-position fields.
-  const manRecv = (ps.maneuverReceivedByPos && ps.maneuverReceivedByPos[pos]) || 0;
-  const manSelf = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos[pos]) || 0;
-  const raw = shipDisplay[pos].finalAdv + ps.conditions[pos] + ps.resistanceDelta[pos] + ps.grants[pos] - manRecv - manSelf + extra;
-  // House rule (see RULE_CHANGES.md): the effective Leg skill caps at AAAAA. Stacked
-  // crew+AI+grants past MAX_ADV are wasted. Disadvantage has no floor (no leg max DDDD).
-  return Math.min(raw, MAX_ADV);
-}
-function pilotExtraNet(ps) {
-  // Maneuvers (received + self-cost) are now per-position, handled in
-  // netForPosition. Net Leg Acceleration and a Slip's A/D are Pilot-specific
-  // here (not folded into ps.conditions.pilot) so each gets its own labeled
-  // line in legAdSourcesHtml() instead of vanishing into a generic total.
-  // ps.slipAdvantage (set in lockDeclarations()) is signed and already scaled
-  // by hexes slipped -- 0 if the Slip was entirely within a straightaway.
-  // ps.crowdedFieldD (set in initLegState() from last Leg's finishLeg()
-  // detection -- see RULE_CHANGES.md) is -1 if 2+ ships shared a hex
-  // entering this Leg, else 0.
-  return (ps.netLegAcc || 0) + (ps.slipAdvantage || 0) + (ps.crowdedFieldD || 0);
-}
-// Display-only preview of the Pilot's own net, for the Declarations table's
-// "Pilot Total" column -- NOT used for the real roll (that stays
-// netForPosition(ps, disp, "pilot", pilotExtraNet(ps)), which already adds
-// the Pilot-specific Maneuver terms in on its own; folding them into
-// pilotExtraNet() too would double-count them there). Maneuvers ARE already
-// known by the time this table renders (applied during this same
-// lockDeclarations() call), so there's no reason for this preview to leave
-// them out the way it has to leave out Conditions/Resistance/grants, which
-// genuinely haven't happened yet.
-function pilotPreviewTotal(ps) {
-  const manRecv = (ps.maneuverReceivedByPos && ps.maneuverReceivedByPos.pilot) || 0;
-  const manSelf = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos.pilot) || 0;
-  return pilotExtraNet(ps) - manRecv - manSelf;
-}
-/* House rule (see RULE_CHANGES.md): Speed Bonus IS the Leg's declared Acceleration,
-   1-for-1 -- it's the whole basis of the Leg-win ranking score (see rollPhase()'s
-   pilot branch), independent of the Damper-based Advantage/Disadvantage used for
-   the TN check's dice pool. */
-function speedBonus(accel) { return accel || 0; }
-function rollPhase(pid, phase) {
-  const race = STATE.race, ls = race.legState, ps = ls.perShip[pid];
-  const ship = getShip(race.participants.find(p => p.id === pid).shipId);
-  const disp = computeShipDisplay(ship);
-  const tn = ls.leg.finalTN;
-  if (phase === "pilot") {
-    const net = netForPosition(ps, disp, "pilot", pilotExtraNet(ps));
-    // Resolve the dice pool against the TN exactly as normal — Success/Failure and
-    // Critical/Fumble come entirely from skill and the dice pool. rc is left untouched.
-    const rc = rollCheck(disp.pilot.finalScore, net, tn);
-    // House rule (see RULE_CHANGES.md): the d20 roll and Pilot Leg Skill Score
-    // (rc.total) do NOT factor into who wins the Leg at all -- rc is rolled only
-    // to resolve the TN check (Success/Failure) and classify Critical/Fumble.
-    // The Leg-win ranking score (the Leg Ranking Score shown on the card, and
-    // each Hero's own Movement on a Circular Track) is Speed Bonus alone,
-    // +1 per Critical Success LEVEL (past the first success die), or -1 per
-    // Fumble LEVEL (past the first failure die) -- never both, since Crit
-    // only happens on Advantage rolls and Fumble only on Disadvantage. This
-    // is distinct from the Base Leg Result (see computeBaseLegResult()),
-    // which is Speed-Bonus-only across all Heroes (2026-08-21 rule change).
-    const sb = speedBonus(ps.accel);
-    const critBonus = rc.critLevels;
-    const fumblePenalty = rc.fumbleLevels;
-    ps.results.pilot = { net, rc, speedBonus: sb, critBonus, fumblePenalty, rankTotal: sb + critBonus - fumblePenalty };
-  } else {
-    const net = netForPosition(ps, disp, phase, 0);
-    const rc = rollCheck(disp[phase].finalScore, net, tn);
-    ps.results[phase] = { net, rc };
-    autoApplyGrant(pid, phase);
-  }
-  saveState();
-}
-/* House rule (see RULE_CHANGES.md): Engineer/Spotter/Navigator may decline to
-   roll; it counts as a plain Failure (same -1 D grant, free choice of target —
-   never the Critical/Fumble fixed-choice options) with no dice involved.
-   Player-facing label is "Play It Safe" (renamed from "Skip"); the internal
-   name and mechanics are unchanged. */
-function skipPhase(pid, phase) {
-  const ls = STATE.race.legState;
-  const rc = { dice: [], chosen: null, tn: ls.leg.finalTN, total: null, success: false, successCount: 0, failCount: 0, critLevels: 0, fumbleLevels: 0, isCrit: false, isFumble: false, net: null };
-  ls.perShip[pid].results[phase] = { net: null, rc, skipped: true };
-  autoApplyGrant(pid, phase);
-  saveState();
-}
-function applyGrant(pid, phase, targetPos, amountOverride) {
-  const ps = STATE.race.legState.perShip[pid];
-  const res = ps.results[phase];
-  if (!res) return;
-  const rc = res.rc;
-  let amount = amountOverride;
-  if (amount === undefined) {
-    if (rc.isCrit) amount = 2; else if (rc.isFumble) amount = -2; else amount = rc.success ? 1 : -1;
-  }
-  ps.grants[targetPos] += amount;
-  res.applied = { targetPos, amount };
-  saveState();
-}
-/* House rule (see RULE_CHANGES.md): the grant target (and, on a Crit/Fumble,
-   therefore the amount too) is fully determined before rolling -- there's no
-   longer a live choice to make afterward, so the grant is applied the moment
-   the result exists, with no separate manual step. Mirrors exactly what
-   renderPhaseRollBlock() would have shown as the (now-removed) Apply button. */
-function autoApplyGrant(pid, phase) {
-  if (phase === "pilot") return;
-  const ps = STATE.race.legState.perShip[pid];
-  const res = ps.results[phase];
-  if (!res || res.applied) return;
-  const target = phase === "navigator" ? "pilot" : ps.grantChoice[phase];
-  const critFumbleTargets = CRIT_FUMBLE_GRANT_TARGETS[phase];
-  const rc = res.rc;
-  if (critFumbleTargets && (rc.isCrit || rc.isFumble)) {
-    const sign = rc.isCrit ? 1 : -1;
-    applyGrant(pid, phase, target, target === "pilot" ? sign : sign * 2);
-  } else {
-    applyGrant(pid, phase, target);
-  }
-}
-function computeBaseLegResult() {
-  const race = STATE.race, ls = race.legState;
-  // House rule (see RULE_CHANGES.md): the Base Leg Result -- the baseline
-  // NPC Performance rolls are added to -- averages Heroes' Speed Bonus
-  // ALONE, not their full Leg Ranking Score. A Hero's own Critical
-  // Success/Fumble still adjusts THEIR OWN Leg Ranking Score (and Movement
-  // on a Circular Track) as always -- it just no longer skews the shared
-  // NPC baseline every Hero's dice luck feeds into.
-  const totals = Object.values(ls.perShip)
-    .filter(ps => ps.results.pilot && !ps.autoLast)
-    .map(ps => ps.results.pilot.speedBonus);
-  ls.baseLegResult = totals.length ? Math.round(totals.reduce((a, b) => a + b, 0) / totals.length) : 0;
-  saveState();
-}
-function rollNpc(pid) {
-  // Per p.35: NPCs use d6s instead of d20s for Advantage/Disadvantage — each level
-  // rolls one more d6, keeping the lowest (Disadvantage) or highest (Advantage) to
-  // pick the NPC Performance row. No Crit/Fumble for NPCs, just the extreme die.
-  const race = STATE.race, ls = race.legState;
-  const ns = ls.npcState[pid] || {};
-  // NPC automation (see RULE_CHANGES.md): net now sums EVERY source of this
-  // Leg's A/D -- Maneuvers received (always Disadvantage) plus this NPC's
-  // own Slip (Advantage if outward touching a curve, Disadvantage if
-  // inward) -- so an NPC can finally land on the Advantage side, same as a
-  // Hero's rollCheck().
-  const net = (ns.slipAdvantage || 0) - (ns.maneuverReceivedD || 0);
-  const diceCount = Math.abs(net) + 1;
-  const dice = Array.from({ length: diceCount }, () => rollD(6));
-  const chosen = net >= 0 ? Math.max(...dice) : Math.min(...dice);
-  const entry = GDATA.NPC_PERFORMANCE[chosen - 1];
-  const total = (ls.baseLegResult || 0) + entry.mod;
-  ls.npcResults[pid] = { dice, chosen, net, name: entry.name, mod: entry.mod, total };
-  saveState();
-}
-function finishLeg() {
-  const race = STATE.race, ls = race.legState;
-  const course = getCourse(race.courseId);
-  const circular = course.trackType === "circular";
-  const N = race.participants.length;
-  const rows = race.participants.map(p => {
-    if (p.type === "hero") {
-      const ps = ls.perShip[p.id];
-      // Forced-last (Fumble "Position (Last)") ranks at the bottom like autoLast,
-      // but the ship still played its phases this Leg. A destroyed ship (HP 0) is
-      // frozen -- no movement at all -- whether it blew up this Leg or an earlier one.
-      const forcedLast = (p.forcedLastLegs || 0) > 0;
-      const lastPlace = ps.autoLast || forcedLast || !!p.out;
-      const frozen = !!p.out; // destroyed = out of the race, makes no further progress
-      const rankTotal = ps.results.pilot ? ps.results.pilot.rankTotal : -999;
-      const total = lastPlace ? -999 : rankTotal;
-      const successCount = ps.results.pilot ? ps.results.pilot.rc.successCount : 0;
-      const fumbleCount = ps.results.pilot ? ps.results.pilot.rc.failCount - 1 : 0;
-      return { id: p.id, name: shipName(p.shipId), type: "hero", total, rankTotal, successCount, fumbleCount: Math.max(0, fumbleCount), autoLast: ps.autoLast, lastPlace, frozen, out: !!p.out };
-    } else {
-      // An NPC removed for falling too far behind (see below) is frozen -- no
-      // more movement -- and ranks last, just like a destroyed Hero.
-      const frozen = !!p.out;
-      const r = ls.npcResults[p.id] || { total: -999 };
-      return { id: p.id, name: p.name, type: "npc", total: frozen ? -999 : r.total, rankTotal: r.total, successCount: 0, fumbleCount: 0, autoLast: false, lastPlace: frozen, frozen, out: frozen };
-    }
-  });
-  rows.sort((a, b) => {
-    if (a.lastPlace !== b.lastPlace) return a.lastPlace ? 1 : -1;
-    if (b.total !== a.total) return b.total - a.total;
-    if (b.successCount !== a.successCount) return b.successCount - a.successCount;
-    return a.fumbleCount - b.fumbleCount;
-  });
-  let lastPos = 0, lastKey = null;
-  rows.forEach((r, i) => {
-    const key = r.lastPlace ? "AL" : `${r.total}|${r.successCount}|${r.fumbleCount}`;
-    if (key !== lastKey) { lastPos = i + 1; lastKey = key; }
-    r.position = lastPos;
-    // Distance Tracking (see RULE_CHANGES.md): hexes moved this Leg is the ship's
-    // real Leg Finishing Score, floored at 0 -- Fumbles and Disadvantage slow a
-    // ship, never send it backward. The points-ranking "forced last" override
-    // (via r.total/-999) is a straight-course-only concept and doesn't apply here.
-    // A Slip no longer costs Movement Points beyond ordinary movement (see
-    // RULE_CHANGES.md) -- it only changes lane and, off a straightaway,
-    // Advantage/Disadvantage.
-    r.movement = r.frozen ? 0 : (circular ? Math.max(0, r.rankTotal) : (N - lastPos + 1));
-    // House rule (see RULE_CHANGES.md): if the Pilot Fails or Fumbles their
-    // own Task Check this Leg, Movement (MPs) for the Leg is cut in half,
-    // rounded up -- applied here, BEFORE any Slip calculations below, so a
-    // Slip's hexes (and the curve-touch Advantage/Disadvantage) are based
-    // on the ALREADY-HALVED total, never the full pre-Fumble amount.
-    if (circular && r.type === "hero") {
-      const pilotRc = ls.perShip[r.id] && ls.perShip[r.id].results.pilot && ls.perShip[r.id].results.pilot.rc;
-      if (pilotRc && !pilotRc.success) r.movement = Math.ceil(r.movement / 2);
-    }
-  });
-  const circGeom = circular ? circTrackGeometry(course) : null;
-  rows.forEach(r => {
-    const participant = race.participants.find(p => p.id === r.id);
-    participant.cumulative += r.movement; // straight: points; circular: total hexes traveled (monotonic)
-    if (circular) {
-      // Circular Track Slip (see RULE_CHANGES.md): the Slip's hexes are
-      // taken first, then the ship continues forward in its new lane -- see
-      // resolveSlipPath(). A ship that didn't Slip this Leg (or rolled 0
-      // movement) just moves forward in its current lane as always. An NPC
-      // has no perShip entry -- its own automated Slip (see
-      // autoDeclareNpcSlip()) lives on npcState instead, in the same
-      // slip/slipHexes/slipAdvantage shape, so this falls back to it
-      // transparently.
-      const ps = ls.perShip[r.id] || ls.npcState[r.id];
-      const originLaneIdx0 = participant.lane - 1;
-      const declaredSlipHexes = (ps && ps.slip) ? (ps.slipHexes || 0) : 0;
-      const actualSlipHexes = Math.min(declaredSlipHexes, Math.max(0, r.movement));
-      const dir = (ps && ps.slip === "left") ? -1 : 1;
-      // House rule (see RULE_CHANGES.md): Slingshot. An inward Slip that
-      // touches a curve (ps.slipAdvantage is negative ONLY for "left" +
-      // touchesCurve, per lockDeclarations()) grants 1 bonus MP per hex
-      // actually Slipped this Leg (actualSlipHexes, already shrunk by any
-      // Fail/Fumble halving or lane clamp above) -- pure extra forward
-      // movement on top, not an extra Slip hex. Gated on an ACTIVE dive
-      // toward the inside this Leg, never on merely occupying the inside
-      // lane already.
-      const slingshotBonus = (ps && ps.slipAdvantage < 0) ? actualSlipHexes : 0;
-      const totalMovement = r.movement + slingshotBonus;
-      participant.cumulative += slingshotBonus;
-      const path = resolveSlipPath(circGeom, originLaneIdx0, participant.hexPos || 0, totalMovement, actualSlipHexes, dir);
-      participant.lane = path.finalLaneIdx0 + 1;
-      participant.hexPos = path.finalHexPos;
-      participant.laps = (participant.laps || 0) + path.lapsGained;
-      participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: totalMovement, lane: participant.lane, laps: participant.laps, hexPos: participant.hexPos, slipHexes: actualSlipHexes, slingshotBonus });
-      // The Race Log's own Movement column (see renderLog()) reads r.movement
-      // straight off this same row object -- bump it to the actual total
-      // (including the Slingshot bonus) so the log shows what the ship
-      // really moved this Leg, not just the pre-bonus base amount.
-      r.movement = totalMovement;
-    } else {
-      participant.history.push({ leg: race.legIndex + 1, total: r.total, position: r.position, movement: r.movement });
-    }
-    if (participant.type === "hero" && participant.forcedLastLegs > 0) participant.forcedLastLegs -= 1;
-  });
-  // House rule (see RULE_CHANGES.md): Crowded Field. Any 2+ ships (hero or NPC)
-  // that end this Leg sharing the same hex flag every HERO among them for a
-  // one-Leg Pilot Disadvantage next Leg, 1 D per ship in the hex (consumed
-  // in initLegState() via crowdedFieldD) -- an NPC can crowd a Hero's hex
-  // even though only a Hero has a Pilot to penalize.
-  if (circular) {
-    const byHex = {};
-    race.participants.forEach(p => {
-      if (p.out) return;
-      const key = `${p.lane}|${p.hexPos}`;
-      (byHex[key] = byHex[key] || []).push(p);
-    });
-    Object.values(byHex).forEach(group => {
-      if (group.length < 2) return;
-      group.forEach(p => { if (p.type === "hero") p.crowdedFieldNextLeg = group.length; });
-    });
-  }
-  // House rule (see RULE_CHANGES.md): an NPC sitting in LAST place, more than one
-  // full Leg's worth of movement behind the SECOND-to-last ship, is out of the
-  // race -- its bar freezes where it is (see renderStandings). A full Leg's max
-  // movement is N (the racer count), so the gap scales with the field instead of
-  // a flat number. Loop so a detached tail can clear in one Leg; stops as soon as
-  // last place is a Hero or the gap closes to <= one Leg. Distance Tracking
-  // measures in hexes, not points, so this points-scaled gap doesn't apply there.
-  if (!circular) {
-    while (true) {
-      const inRace = race.participants.filter(p => !p.out).sort((a, b) => a.cumulative - b.cumulative);
-      if (inRace.length < 2) break;
-      const last = inRace[0], secondLast = inRace[1];
-      if (last.type === "npc" && (secondLast.cumulative - last.cumulative) > N) {
-        last.out = true; last.outLeg = race.legIndex;
-      } else break;
-    }
-  }
-
-  // Record any Fumble descriptions rolled this Leg so they show in the Race Log
-  // -- one entry per roll (multiple Fumble Levels each get their own line).
-  const fumbles = [];
-  race.participants.forEach(p => {
-    if (p.type !== "hero") return;
-    const ps = ls.perShip[p.id];
-    (ps && ps.fumbleRolls || []).forEach(roll => fumbles.push({ name: shipName(p.shipId), text: roll.text }));
-  });
-  race.log.push({ legIndex: race.legIndex, rows: rows.map(r => ({ ...r })), fumbles });
-
-  if (circular) {
-    // Distance Tracking has no fixed Leg count -- the race ends the Leg any
-    // in-race participant completes the course's required laps (see RULE_CHANGES.md).
-    const someoneFinished = race.participants.some(p => !p.out && (p.laps || 0) >= course.laps);
-    if (someoneFinished || livingHeroes(race).length === 0) {
-      race.finished = true;
-    } else {
-      race.legIndex += 1;
-      initLegState(race); // rolls the next Leg fresh -- see rollCircularLeg()
-    }
-  } else {
-    // End the race when the course is done, OR once every Hero has been destroyed
-    // (a wreck is only removed after the Leg it died on has finished resolving).
-    if (race.legIndex + 1 >= course.legs.length || livingHeroes(race).length === 0) {
-      race.finished = true;
-    } else {
-      race.legIndex += 1;
-      initLegState(race);
-    }
-  }
-  saveState();
-}
 function shipName(shipId) { const s = getShip(shipId); return s ? s.name : "(deleted ship)"; }
 
-/* ============================== Rendering ============================== */
-let CURRENT_TAB = "shipyard";
-function setTab(tab) { CURRENT_TAB = tab; render(); }
-function render() {
-  document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === CURRENT_TAB));
-  const root = document.getElementById("view");
-  if (CURRENT_TAB === "introduction") root.innerHTML = renderIntroduction();
-  else if (CURRENT_TAB === "shipyard") root.innerHTML = renderShipyard();
-  else if (CURRENT_TAB === "cantina") root.innerHTML = renderCantina();
-  else if (CURRENT_TAB === "hangar") root.innerHTML = renderHangarBay();
-  else if (CURRENT_TAB === "course") root.innerHTML = renderCourse();
-  else if (CURRENT_TAB === "race") root.innerHTML = renderRace();
-  else if (CURRENT_TAB === "instructions") root.innerHTML = renderInstructions();
-  else root.innerHTML = renderReference();
+/* ============================== Cars: Tier, build points, stats ==============================
+   See RULE_CHANGES.md 2026-10-03. Division (Flash/Spark/Comet/Meteor/Nova) is
+   FLAVOR ONLY -- it just picks a Tier and which Leg Feature flavor pool to
+   draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier alone drives
+   crew size and the build-point budget. A car (Hero ship or NPC alike) is
+   six numbers -- Speed, Health, Armor, Attack, Damage, Skill -- bought up
+   from a base line on one shared Tier-scaled point pool (Circus Maximus's
+   own flat 6 at Tier 1, +1 per Tier beyond that). */
+const CAR_STATS = ["speed", "health", "armor", "attack", "damage", "skill"];
+function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
+function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
+function tierBuildPoints(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).buildPoints; }
+// A stat's value before any points are spent -- Health is Tier x3 (GASCAR's
+// own existing HP formula), everything else is Circus Maximus's own base
+// (Skill 7, the rest 0 except Damage's minimum of 1).
+function statBase(stat, tier) { return stat === "health" ? tier * 3 : GDATA.STAT_BASE[stat]; }
+// Build points spent so far on one car, across all six stats -- kept as a
+// single shared pool (see RULE_CHANGES.md) rather than Skill having its own
+// budget, but routed through this one function so that split could be made
+// later without touching every caller.
+function buildPointsSpent(ship) {
+  const tier = carTier(ship.division);
+  return CAR_STATS.reduce((sum, stat) => sum + Math.max(0, (ship[stat] || 0) - statBase(stat, tier)) * GDATA.STAT_COSTS[stat], 0);
 }
+function buildPointsRemaining(ship) { return tierBuildPoints(carTier(ship.division)) - buildPointsSpent(ship); }
+// A fresh car/NPC at its Division's baseline, nothing spent yet.
+function freshCarStats(division) {
+  const tier = carTier(division);
+  const out = {};
+  CAR_STATS.forEach(stat => { out[stat] = statBase(stat, tier); });
+  return out;
+}
+// Every stat a participant (Hero ship OR NPC) fights with this race --
+// unifies the two shapes (a Hero's stats live on its Ship; an NPC carries
+// its own inline, see startRace()) so the rest of the engine never has to
+// branch on p.type to read a stat.
+function carStats(p) {
+  const src = p.type === "hero" ? getShip(p.shipId) : p;
+  const out = {};
+  CAR_STATS.forEach(stat => { out[stat] = (src && src[stat]) || 0; });
+  return out;
+}
+// A participant's Division -- lives on its Ship for a Hero, inline for an
+// NPC (see startRace()). Needed anywhere Tier has to be looked up for a
+// participant directly (e.g. a Maneuver's Tier-scaled self-cost).
+function carDivision(p) { return p.type === "hero" ? getShip(p.shipId).division : p.division; }
 
-/* ---------- Cantina: create Hero crewmembers ---------- */
-/* Crew skill summaries (Cantina header + Hangar crew dropdown). "Score" is the
-   raw skill Score; the highest one on a crewman is highlighted so players can
-   compare Heroes at a glance. */
-const CREW_SKILL_FULL = [["pilot", "Pilot"], ["navigator", "Navigator"], ["spotter", "Spotter"], ["engineer", "Engineer"], ["resistance", "Resistance"]];
-const CREW_SKILL_ABBR = [["pilot", "Pil"], ["navigator", "Nav"], ["spotter", "Spot"], ["engineer", "Eng"], ["resistance", "Res"]];
-// Effective skill value for ranking: raw Score adjusted by net Advantage(+)/
-// Disadvantage(-), so A/D count when deciding a crewman's best skill.
-function crewSkillEff(sk) { return (sk.score || 0) + (sk.adv || 0); }
-// Shared skill cells: one column per skill showing its Skill Mk (score + A/D),
-// with the crewman's best skill (by effective value) highlighted in gold.
-// `defs` picks full labels (Cantina) or abbreviations (dropdown).
-function crewSkillCells(c, defs) {
-  const effs = defs.map(([k]) => crewSkillEff(c.skills[k]));
-  const max = Math.max.apply(null, effs);
-  return defs.map(([k, label]) => {
-    const sk = c.skills[k];
-    const hi = (crewSkillEff(sk) === max && max > 0) ? " hi" : "";
-    return `<span class="crewskill${hi}"><span class="lbl">${label}</span><span class="val">${formatMk(sk.score, sk.adv)}</span></span>`;
-  }).join("");
-}
-function crewSkillHeaderHtml(c, total) {
-  let cells = crewSkillCells(c, CREW_SKILL_FULL);
-  // Total Points rendered as one more matching cell, same size as the rest.
-  cells += `<span class="crewskill total"><span class="lbl">Total</span><span class="val">${total}</span></span>`;
-  return `<span class="crewskills">${cells}</span>`;
-}
-// Inline skill summary for the dropdown ("Pil-7, Nav-3A, ...") with the best
-// skill (by effective value) coloured gold.
-function crewSkillInlineHtml(c) {
-  const effs = CREW_SKILL_ABBR.map(([k]) => crewSkillEff(c.skills[k]));
-  const max = Math.max.apply(null, effs);
-  return CREW_SKILL_ABBR.map(([k, ab]) => {
-    const sk = c.skills[k];
-    const hi = (crewSkillEff(sk) === max && max > 0) ? " hi" : "";
-    return `<span class="ddskill${hi}">${ab}-${formatMk(sk.score, sk.adv)}</span>`;
-  }).join("");
-}
-// Custom crew-assignment dropdown for the Hangar Bay. A native <select> can't
-// colour-highlight its options, so this is a hand-rolled listbox: the closed
-// button shows the selected crewman's name; the open menu lists every crewman
-// with the same gold-highlighted skill columns as the Cantina header.
-function crewDropdownHtml(ship, pos) {
-  const selId = ship.assignments[pos] || "";
-  const sel = selId ? getCrew(selId) : null;
-  let opts = `<div class="crewdd-opt${selId ? "" : " chosen"}" onclick="App.crewDDpick('${ship.id}','${pos}','')"><span class="crewdd-name muted">— none —</span></div>`;
-  opts += STATE.crew.map(c =>
-    `<div class="crewdd-opt${c.id === selId ? " chosen" : ""}" onclick="App.crewDDpick('${ship.id}','${pos}','${c.id}')">
-      <span class="crewdd-name">${esc(c.name)}</span>
-      <span class="ddskills">${crewSkillInlineHtml(c)}</span>
-    </div>`).join("");
-  return `<div class="crewdd">
-    <button type="button" class="crewdd-btn" onclick="App.crewDDtoggle(this)">
-      <span>${sel ? esc(sel.name) : "—"}</span><span class="crewdd-caret">▾</span></button>
-    <div class="crewdd-menu">${opts}</div>
-  </div>`;
-}
-function renderCantina() {
-  let html = `<section class="card"><h2>Crew</h2>`;
-  html += `<div class="row"><select id="presetCrew">${GDATA.PRESET_CREW.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join("")}</select>
-    <button onclick="App.addPresetCrew()">+ Add Preset</button>
-    <button class="ghost" onclick="App.addBlankCrew()">+ Add Blank Crewman</button></div>`;
-  if (!STATE.crew.length) html += `<p class="muted">No crew yet. Add a preset from <em>Stars of the Show</em> or a blank crewman.</p>`;
-  STATE.crew.forEach(c => {
-    const total = crewTotalCost(c);
-    const collapsed = !!c._collapsed;
-    html += `<div class="subcard">
-      <div class="row">
-        <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleCrewCollapse('${c.id}')">${collapsed ? "▸" : "▾"}</button>
-        <input class="name-input" value="${esc(c.name)}" onchange="App.updateCrew('${c.id}','name',this.value)">
-        ${collapsed ? "" : `<button class="ghost" title="Random Hero name" onclick="App.rerollCrewName('${c.id}')">🎲</button>`}
-        ${collapsed
-          ? ""
-          : `<label>Unspent XP ${numStepper(`<input type="number" style="width:56px" value="${c.unspentPoints || 0}" onchange="App.updateUnspentPoints('${c.id}',this.value)">`)}</label>`}
-        ${crewSkillHeaderHtml(c, total)}
-        <button class="danger" style="margin-left:auto" onclick="App.deleteCrew('${c.id}')">Delete</button>
-      </div>`;
-    if (!collapsed) {
-      html += `<table class="mktable skilltable">
-        <tr><th>Skill</th><th>Score</th><th>Advantage (+) /<br>Disadvantage (−)</th><th>Skill Mk</th><th>Cost</th></tr>
-        ${POSITIONS.concat("resistance").map(pos => {
-          const label = pos === "resistance" ? "Resistance" : POS_LABEL[pos];
-          const s = c.skills[pos];
-          return `<tr>
-            <td>${label}</td>
-            <td>${numStepper(`<input type="number" style="width:56px" value="${s.score}" onchange="App.updateSkill('${c.id}','${pos}','score',this.value)">`)}</td>
-            <td>${numStepper(`<input type="number" style="width:56px" value="${s.adv}" onchange="App.updateSkill('${c.id}','${pos}','adv',this.value)">`)}</td>
-            <td><b>${formatMk(s.score, s.adv)}</b></td>
-            <td>${skillCost(s.score, s.adv)}</td>
-          </tr>`;
-        }).join("")}
-        <tr><td colspan="4"><b>Total Points</b></td><td><b>${total}</b></td></tr>
-      </table>`;
-    }
-    html += `</div>`;
-  });
-  html += `</section>`;
-  return html;
-}
-
-/* ---------- Hangar Bay: build ships from Ship Classes and Hero crew ---------- */
-function renderHangarBay() {
-  if (!STATE.shipClasses.length) {
-    return `<section class="card"><h2>Ships</h2>
-      <p class="muted">No Ship Classes yet. Build one in the Shipyard tab first, then come back here to build ships from it.</p></section>`;
-  }
-  let html = `<section class="card"><h2>Ships</h2>
-    <div class="row"><button onclick="App.addShip()">+ Add Ship</button>
-    <label>Division <select onchange="App.setHangarAddDivision(this.value)">
-      ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === (STATE._hangarAddDivision || "Comet") ? "selected" : ""}>${d}</option>`).join("")}
-    </select></label>
-    <button class="ghost" onclick="App.randomShipName()">🎲 Name Idea</button> <span id="nameIdea" class="muted"></span></div>`;
-  if (!STATE.ships.length) html += `<p class="muted">No ships yet.</p>`;
-  // Group ships into a collapsible per-Division tree (Flash..Nova order).
-  STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-  GDATA.DIVISIONS.forEach(div => {
-    const ships = STATE.ships.filter(s => (s.cls || "Comet") === div);
-    const collapsed = !!STATE._hangarDivCollapse[div];
-    html += `<div class="divgroup"><div class="divhead" onclick="App.toggleHangarDiv('${div}')">
-      <button class="ghost collapse-btn" tabindex="-1">${collapsed ? "▸" : "▾"}</button>
-      <b>${div}</b> <span class="muted">${ships.length} ${ships.length === 1 ? "ship" : "ships"}</span></div>`;
-    if (!collapsed) {
-      html += `<div class="divbody">`;
-      if (!ships.length) html += `<p class="muted">No ${div} ships yet.</p>`;
-      ships.forEach(ship => { html += renderShipCard(ship); });
-      html += `</div>`;
-    }
-    html += `</div>`;
-  });
-  html += `</section>`;
-  return html;
-}
-function renderShipCard(ship) {
-    let html = "";
-    const cls = getShipClass(ship.shipClass);
-    if (!cls) {
-      return `<div class="subcard"><div class="row">
-        <input class="name-input" value="${esc(ship.name)}" onchange="App.updateShip('${ship.id}','name',this.value)">
-        <label>Ship Class
-          <select onchange="App.updateShip('${ship.id}','shipClass',this.value)">
-            <option value="">-- choose a Ship Class --</option>
-            ${shipClassNamesForDivision(ship.cls).map(d => `<option value="${d}">${d}</option>`).join("")}
-          </select></label>
-        <button class="danger" onclick="App.deleteShip('${ship.id}')">Delete</button>
-      </div></div>`;
-    }
-    const disp = computeShipDisplay(ship);
-    const collapsed = !!ship._collapsed;
-    html += `<div class="subcard">
-      <div class="row">
-        <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipCollapse('${ship.id}')">${collapsed ? "▸" : "▾"}</button>
-        ${iconThumbImg(ship)}
-        <input class="name-input" value="${esc(ship.name)}" onchange="App.updateShip('${ship.id}','name',this.value)">
-        ${collapsed ? "" : `<button class="ghost" title="Random ship name" onclick="App.rerollShipName('${ship.id}')">🎲</button>`}
-        <label>Division
-          <select onchange="App.updateShip('${ship.id}','cls',this.value)">
-            ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === ship.cls ? "selected" : ""}>${d}</option>`).join("")}
-          </select></label>
-        <label>Ship Class
-          <select onchange="App.updateShip('${ship.id}','shipClass',this.value)">
-            ${shipClassNamesForDivision(ship.cls).map(d => `<option value="${d}" ${d === ship.shipClass ? "selected" : ""}>${d}</option>`).join("")}
-          </select></label>
-        ${collapsed
-          ? `<span class="tag">Total Points ${shipClassTotalCost(cls)}</span><span class="tag ${shipCrewComplete(ship) ? "" : "danger"}">${shipCrewComplete(ship) ? "" : "🔒 "}Crew ${distinctCrewCount(ship)}/${minCrewFor(ship)}</span>`
-          : `<span class="tag">Tier ${cls.tier}</span><span class="tag">${cls.maxThrust}-G</span><span class="tag">Damper ${cls.damper}</span>
-        <span class="tag ${shipCrewComplete(ship) ? "" : "danger"}" title="${shipCrewComplete(ship) ? "All positions filled -- race-legal" : `Locked out of racing: ${crewLockMessage(ship)}`}">${shipCrewComplete(ship) ? "" : "🔒 "}Crew ${distinctCrewCount(ship)}/${minCrewFor(ship)}</span>
-        <span class="tag">HP ${cls.hp}</span><span class="tag">DR ${cls.dr}</span>`}
-        <button class="danger" onclick="App.deleteShip('${ship.id}')">Delete</button>
-      </div>`;
-    if (!collapsed) {
-      html += `<div class="row">
-        <label>Sponsor Bonus:
-          <select onchange="App.updateShip('${ship.id}','sponsorBonusPos',this.value)">
-            <option value="">none</option>
-            ${POSITIONS.map(p => `<option value="${p}" ${ship.sponsorBonusPos === p ? "selected" : ""}>${POS_LABEL[p]}</option>`).join("")}
-          </select>
-        </label>
-        <label>Sponsor Penalty:
-          <select onchange="App.updateShip('${ship.id}','sponsorPenaltyPos',this.value)">
-            <option value="">none</option>
-            ${POSITIONS.map(p => `<option value="${p}" ${ship.sponsorPenaltyPos === p ? "selected" : ""}>${POS_LABEL[p]}</option>`).join("")}
-          </select>
-        </label>
-      </div>
-      <table class="mktable shiptable">
-        <tr><th>Position</th><th>Crewman</th><th>Crew Skill</th><th>Ship AI</th><th>Bonus</th><th>Penalty</th><th>Ship Skill Mk</th></tr>
-        ${POSITIONS.map(pos => `<tr>
-          <td>${POS_LABEL[pos]}</td>
-          <td>${crewDropdownHtml(ship, pos)}</td>
-          <td>${formatMk(disp[pos].crewScore, disp[pos].crewAdv)}</td>
-          <td>${formatMk(disp[pos].shipAI, disp[pos].shipAIAdv)}</td>
-          <td>${disp[pos].bonus >= 0 ? "+" : ""}${disp[pos].bonus}</td>
-          <td>${disp[pos].penalty}</td>
-          <td><b>${disp[pos].mk}</b></td>
-        </tr>`).join("")}
-      </table>
-      ${renderShipIconPicker(ship)}`;
-    }
-    html += `</div>`;
-    return html;
-}
-
-/* Icon pickers (see GDATA.SHIP_ICON_* in data.js): a grid of clickable
-   thumbnails. An icon already used by another Class/Ship is greyed out and
-   disabled; the current selection is highlighted, and clicking it again
-   removes it (toggle) -- that's the only way to unpick, there's no separate
-   Clear button.
-   House rule (see APP_CHANGES.md): a Ship's icon NUMBER always matches its
-   Ship Class's icon number -- only the COLOR is free (Red/Green/Blue). A
-   Class's icon is always White. This means at most 3 Ships (one per color)
-   can ever be built from a single Class. */
-function renderClassIconPicker(sc) {
-  const used = usedClassIconNumbers(sc.id, sc.division);
-  const swatches = GDATA.SHIP_ICON_NUMBERS.map(num => {
-    const selected = sc.icon === num;
-    const takenByOther = used.has(num) && !selected;
-    const cls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
-    const title = takenByOther ? `Already used by another ${sc.division} Ship Class` : (selected ? `Icon ${num} (click to remove)` : `Icon ${num}`);
-    const action = takenByOther ? "disabled" : `onclick="App.updateShipClassIcon('${sc.id}','${selected ? "" : num}')"`;
-    return `<button type="button" class="${cls}" ${action} title="${title}"><img src="${esc(shipIconPath(sc.division, num, GDATA.SHIP_CLASS_ICON_COLOR))}" alt="Icon ${num}"></button>`;
-  }).join("");
-  return `<div class="row"><b>Icon</b></div>
-    <div class="iconpicker">${swatches}</div>`;
-}
-function renderShipIconPicker(ship) {
-  const sc = STATE.shipClasses.find(c => c.name === ship.shipClass);
-  const classIconNum = sc && sc.icon;
-  if (!classIconNum) {
-    return `<div class="row"><b>Icon</b></div>
-      <p class="muted">Give "${esc(ship.shipClass)}" an Icon in the Shipyard tab first -- a Ship's icon number always matches its Class's.</p>`;
-  }
-  const used = usedShipIconKeys(ship.id);
-  const swatches = GDATA.SHIP_ICON_COLORS.map(color => {
-    const selected = ship.iconColor === color && ship.iconNumber === classIconNum;
-    const takenByOther = used.has(`${sc.division}|${color}|${classIconNum}`) && !selected;
-    const cls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
-    const title = takenByOther ? "Already used by another ship" : (selected ? `${color} ${classIconNum} (click to remove)` : `${color} ${classIconNum}`);
-    const action = takenByOther ? "disabled" : `onclick="App.updateShipIcon('${ship.id}','${selected ? "" : color}','${selected ? "" : classIconNum}')"`;
-    return `<button type="button" class="${cls}" ${action} title="${title}"><img src="${esc(shipIconPath(sc.division, classIconNum, color))}" alt="${color} ${classIconNum}"></button>`;
-  }).join("");
-  return `<div class="row"><b>Icon</b> <span class="muted">number ${classIconNum} (matches the Ship Class) -- pick a color</span></div>
-    <div class="iconpicker">${swatches}</div>`;
-}
-
-/* ---------- Shipyard: build new Ship Classes ---------- */
-/* Ship Classes: user-defined ship models, distinct from the book's built-in
-   Divisions (Flash/Spark/Comet/Meteor/Nova -- see APP_CHANGES.md for how
-   Division and Ship Class differ). Every custom class must pick which
-   Division it's legal for; Tier, Damper, and Min Crew all come straight
-   from that Division's own stat block, not editable here. Spark locks Ship
-   AI Score at 0 (Advantage/Disadvantage still free) -- same as the book's
-   own Spark entry. Acc is a plain point-costed number (no Advantage/
-   Disadvantage); Spotter/Navigator/Pilot are Score+Advantage, same p.25
-   point cost used for crew -- all four sum into Total Points. */
-function renderShipyard() {
-  let html = `<section class="card"><h2>Ship Classes</h2>`;
-  html += `<div class="row"><select id="presetShipClass">${GDATA.DIVISIONS.map(d => `<option value="${d}">${d} (${GDATA.SHIP_CLASSES[d].common})</option>`).join("")}</select>
-    <button onclick="App.addPresetShipClass()">+ Add Preset</button>
-    <button class="ghost" onclick="App.addShipClass()">+ Add Blank Ship Class</button></div>`;
-  if (!STATE.shipClasses.length) html += `<p class="muted">No Ship Classes yet. Add a preset seeded from a Division's book stats, or a blank class to build from scratch.</p>`;
-  // Group classes into a collapsible per-Division tree (Flash..Nova order).
-  STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
-  GDATA.DIVISIONS.forEach(div => {
-    const classes = STATE.shipClasses.filter(sc => sc.division === div);
-    const collapsed = !!STATE._shipyardDivCollapse[div];
-    html += `<div class="divgroup"><div class="divhead" onclick="App.toggleShipyardDiv('${div}')">
-      <button class="ghost collapse-btn" tabindex="-1">${collapsed ? "▸" : "▾"}</button>
-      <b>${div}</b> <span class="muted">${GDATA.SHIP_CLASSES[div].common} · ${classes.length} ${classes.length === 1 ? "class" : "classes"}</span></div>`;
-    if (!collapsed) {
-      html += `<div class="divbody">`;
-      if (!classes.length) html += `<p class="muted">No ${div} Ship Classes yet.</p>`;
-      classes.forEach(sc => { html += renderShipClassCard(sc); });
-      html += `</div>`;
-    }
-    html += `</div>`;
-  });
-  html += `</section>`;
-  return html;
-}
-function renderShipClassCard(sc) {
-    let html = "";
-    const collapsed = !!sc._collapsed;
-    const divStats = GDATA.SHIP_CLASSES[sc.division];
-    const isSpark = sc.division === "Spark";
-    const total = shipClassTotalCost(sc);
-    const overCap = shipClassOverCap(sc);
-    html += `<div class="subcard">
-      <div class="row">
-        <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipClassCollapse('${sc.id}')">${collapsed ? "▸" : "▾"}</button>
-        ${sc.icon ? `<img class="iconthumb" src="${esc(shipIconPath(sc.division, sc.icon, GDATA.SHIP_CLASS_ICON_COLOR))}" title="${esc(sc.division)} Icon ${sc.icon}">` : ""}
-        <label>Class Name <input class="name-input" value="${esc(sc.name)}" onchange="App.updateShipClassName('${sc.id}',this.value)"></label>
-        ${collapsed ? `<span class="tag">${sc.division}</span><span class="tag${overCap ? " danger" : ""}" title="${overCap ? `Over the ${sc.division} Division cap of ${GDATA.DIVISION_CAPS[sc.division].maxPoints}` : ""}">Total Points ${total}</span>` : ""}
-        <button class="danger" onclick="App.deleteShipClass('${sc.id}')">Delete</button>
-      </div>`;
-    if (!collapsed) {
-      html += `<div class="row">
-        <label>Legal for Division
-          <select onchange="App.updateShipClassDivision('${sc.id}',this.value)">
-            ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === sc.division ? "selected" : ""}>${d}</option>`).join("")}
-          </select></label>
-        <button class="ghost" title="Reset all stats to the book ${sc.division}-class ship" onclick="App.applyShipClassDefault('${sc.id}')">Default</button>
-        <label>Acc ${numStepper(`<input type="number" style="width:56px" min="0" max="${maxThrustCap(sc.division)}" value="${sc.maxThrust}" onchange="App.updateShipClassMaxThrust('${sc.id}',this.value)">`)}</label>
-        <span class="tag">Tier ${divStats.tier}</span>
-        <span class="tag">Damper ${divStats.damper}</span>
-        <span class="tag">Min Crew ${divStats.crew}</span>
-      </div>`;
-      if (isSpark) html += `<p class="muted">Spark ships get no Ship AI Score — locked at 0 (Advantage/Disadvantage still applies).</p>`;
-      if (sc.division === "Flash") html += `<p class="muted">Flash ships are sub-sonic — Max Thrust is hard-capped at 5-G.</p>`;
-      if (GDATA.DIVISION_CAPS[sc.division]) {
-        html += `<p class="muted">${sc.division} Division ships are capped at ${GDATA.DIVISION_CAPS[sc.division].maxPoints} total points (a rule, not enforced here — Total Points below turns red if you build over it).</p>`;
-      }
-      html += `<table class="mktable skilltable">
-        <tr><th>Stat</th><th>Score</th><th>Advantage (+) /<br>Disadvantage (−)</th><th>Mk</th><th>Cost</th></tr>
-        ${[["Spotter", "sensors", "sensorsAdv"], ["Navigator", "nav", "navAdv"], ["Pilot", "control", "controlAdv"]].map(([label, scoreKey, advKey]) => `
-          <tr>
-            <td>${label}</td>
-            <td>${numStepper(`<input type="number" style="width:56px" value="${sc.ai[scoreKey]}" ${isSpark ? "disabled title=\"Spark locks Ship AI Score at 0\"" : ""} onchange="App.updateShipClassAI('${sc.id}','${scoreKey}',this.value)">`)}</td>
-            <td>${numStepper(`<input type="number" style="width:56px" value="${sc.ai[advKey]}" onchange="App.updateShipClassAI('${sc.id}','${advKey}',this.value)">`)}</td>
-            <td><b>${formatMk(sc.ai[scoreKey], sc.ai[advKey])}</b></td>
-            <td>${skillCost(sc.ai[scoreKey], sc.ai[advKey])}</td>
-          </tr>`).join("")}
-      </table>
-      <div class="row">
-        <label>Frame Strength
-          <select onchange="App.updateShipClassFrame('${sc.id}',this.value)">
-            ${GDATA.FRAME_STRENGTH.map(f => `<option value="${f.name}" ${f.name === sc.frame ? "selected" : ""}>${f.name} (${signedCost(frameCost(divStats.tier, f.name))})</option>`).join("")}
-          </select></label>
-        <label>Armor ${numStepper(`<input type="number" style="width:56px" min="0" value="${sc.armor}" onchange="App.updateShipClassArmor('${sc.id}',this.value)">`)}</label>
-        <label>Compartmentalization
-          <select onchange="App.updateShipClassCompartment('${sc.id}',this.value)">
-            ${GDATA.COMPARTMENTALIZATION.map(c => `<option value="${c.name}" ${c.name === sc.compartment ? "selected" : ""}>${c.name} (${signedCost(compartmentCost(divStats.tier, c.name))})</option>`).join("")}
-          </select></label>
-        <span class="tag">HP ${computeHitPoints(divStats.tier, sc.frame)}</span>
-        <span class="tag">DR ${computeDamageReduction(sc.armor, sc.compartment)}</span>
-      </div>
-      <table class="mktable"><tr><td><b>Total Points</b></td><td><b${overCap ? ` class="danger-text"` : ""}>${total}</b></td></tr></table>
-      ${renderClassIconPicker(sc)}`;
-    }
-    html += `</div>`;
-    return html;
-}
-
-/* ---------- Course ---------- */
-function renderCourse() {
-  let html = `<div class="grid2">`;
-  const trackType = STATE._draftTrackType || "legs";
-  html += `<section class="card"><h2>Design a Racecourse</h2>
-    <div class="formrow"><label>Race Name</label>
-      <input id="cName" value="${esc(STATE._draftCourse?.name || "")}" placeholder="Roll or type a name">
-      <button class="ghost" onclick="App.rollDraftName()">🎲</button></div>
-    <div class="formrow"><label>Division</label>
-      <select id="cDiv" onchange="App.draftDivChanged(this.value)">
-        ${GDATA.DIVISIONS.map(d => `<option value="${d}">${d}</option>`).join("")}
-      </select></div>
-    <div class="formrow"><label>Track</label>
-      <select id="cTrackType" onchange="App.setDraftTrackType(this.value)">
-        <option value="legs" ${trackType === "legs" ? "selected" : ""}>Straight — Legs</option>
-        <option value="circular" ${trackType === "circular" ? "selected" : ""}>Circular — Distance Tracking</option>
-      </select></div>
-    ${trackType === "circular" ? `
-    <p class="muted">Circular Track (see RULE_CHANGES.md): 6 lanes on a real hex grid, each exactly 6 hexes longer per lap than the one inside it (an exact property of hex ring math, not a chosen number). Race runs Leg by Leg until a racer completes the required laps — there's no fixed Leg count.</p>
-    <div class="formrow"><label>Inner Lane Hexes (approx.)</label>${numStepper(`<input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)">`)}</div>
-    <div class="formrow"><label>Laps to Finish</label>${numStepper(`<input id="cLaps" type="number" min="1" value="3">`)}</div>
-    <div class="formrow"><label>Apply Leg Modifier To</label>
-      <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
-    <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
-      <tr><td>Hexes/Lap</td>${laneHexesArray({ lanes: 6, innerHexes: 50 }).map((h, i) => `<td id="laneHexCol${i}">${h}</td>`).join("")}</tr></table>
-    ` : `
-    <div class="formrow"><label>Race Type</label>
-      <select id="cType">
-        ${GDATA.RACE_TYPES.map(t => `<option value="${t.name}"${t.name === "Medium" ? " selected" : ""}>${t.name} (${t.label})</option>`).join("")}
-      </select></div>
-    <div class="formrow"><label># Legs</label>
-      ${numStepper(`<input id="cLegs" type="number" min="1" value="4">`)}
-      <button class="ghost" onclick="App.rollDraftLegCount()">🎲 by Type</button></div>
-    <div class="formrow"><label>Apply Leg Modifier To</label>
-      <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
-    `}
-    <button onclick="App.generateCourse()">Generate Racecourse</button>
-  </section>`;
-
-  html += `<section class="card"><h2>Saved Racecourses</h2>`;
-  if (!STATE.courses.length) html += `<p class="muted">None yet — generate one on the left.</p>`;
-  STATE.courses.forEach(c => {
-    const circular = c.trackType === "circular";
-    const circTag = circular ? `<span class="tag">Circular</span> <span class="tag">${c.lanes} lanes, inner ~${c.innerHexes} hexes</span> <span class="tag">${c.laps} laps</span>` : `${c.type ? `<span class="tag">${esc(c.type)}</span>` : ""} <span class="tag">${c.legs.length} Legs</span>`;
-    // Circular Track Legs are rolled fresh live during the race, never stored
-    // on the course (see RULE_CHANGES.md) -- there's nothing to preview here.
-    const viewLegsBtn = circular ? `<span class="muted">Legs are rolled fresh each race</span>` : `<button class="ghost" onclick="App.toggleCourseView('${c.id}')">${STATE._expanded === c.id ? "Hide" : "View"} Legs</button>`;
-    html += `<div class="subcard">
-      <div class="row"><b>${esc(c.name)}</b> <span class="tag">${c.division}</span>${circTag}
-        ${viewLegsBtn}
-        <button class="danger" onclick="App.deleteCourse('${c.id}')">Delete</button></div>`;
-    if (!circular && STATE._expanded === c.id) {
-      html += `<table class="mktable"><tr><th>Leg</th><th>Tier</th><th>Base TN</th><th>Feature</th><th>Mod</th><th>TN(Tier)</th><th>TN(TN)</th><th>Final TN</th><th></th></tr>`;
-      c.legs.forEach((leg, i) => {
-        html += `<tr>
-          <td>${i + 1}</td><td>${leg.tier}</td><td>${leg.baseTN}</td>
-          <td>${esc(leg.feature)} <span class="muted">(d50: ${leg.d50})</span></td>
-          <td>${leg.mod >= 0 ? "+" : ""}${leg.mod}</td>
-          <td>${leg.tnTierMod}</td><td>${leg.tnTnMod}</td>
-          <td>${numStepper(`<input type="number" style="width:56px" value="${leg.finalTN}" onchange="App.setFinalTN('${c.id}',${i},this.value)">`)}</td>
-          <td><button class="ghost" onclick="App.rerollLeg('${c.id}',${i})">🎲</button></td>
-        </tr>`;
-      });
-      html += `</table>`;
-    }
-    html += `</div>`;
-  });
-  html += `</section></div>`;
-  return html;
-}
-
-/* ---------- Race ---------- */
-function renderRace() {
-  if (!STATE.race) return renderRaceSetup();
-  const race = STATE.race;
-  const course = getCourse(race.courseId);
-  if (!course) return `<p class="muted">Course for this race was deleted. <button onclick="App.abandonRace()">Clear Race</button></p>`;
-  let html = "";
-
-  html += `<div class="row spread"><h2><span style="color:var(--muted)">${esc(course.division)}-Division</span> ${esc(course.name)}</h2>
-    <button class="danger" onclick="App.abandonRace()">Abandon Race</button></div>`;
-
-  html += renderStandings(race);
-
-  if (race.finished) {
-    html += `<section class="card winner"><h2>🏁 Race Complete</h2>${renderFinalStandings(race)}
-      <button onclick="App.abandonRace()">Start a New Race</button></section>`;
-    html += renderLog(race);
-    return html;
-  }
-
-  const leg = race.legState.leg;
-  // Distance Tracking has no fixed Leg count (see RULE_CHANGES.md) -- the race
-  // runs until someone completes the required laps, so there's no "of N" total.
-  const legHeader = course.trackType === "circular" ? `Leg ${race.legIndex + 1}` : `Leg ${race.legIndex + 1} of ${course.legs.length}`;
-  // Debug visibility into the Leg TN cap (see RULE_CHANGES.md/legTNCap()):
-  // show the pre-cap TN alongside the capped one whenever the cap actually
-  // brought it down, so it's obvious when/how often the cap is binding
-  // instead of the number just looking "stuck."
-  const naturalTN = legNaturalTN(leg);
-  const tnTag = naturalTN > leg.finalTN ? ` <span class="tag">capped from ${naturalTN}</span>` : "";
-  html += `<section class="card"><h2>${legHeader}</h2>
-    <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
-  </section>`;
-
-  html += renderDeclarations(race); // Phase 0 — all Heroes together
-  if (race.legState.declLocked) {
-    html += renderPhaseI(race);      // Phase I — all Heroes together
-    html += renderPhaseII(race);     // Phase II — all Heroes together
-    html += renderPhaseCrew(race, "engineer", "Phase III — Engineer", ["spotter", "navigator", "pilot"], null);
-    html += renderPhaseCrew(race, "spotter", "Phase IV — Spotter", ["navigator", "pilot"], null);
-    html += renderPhaseCrew(race, "navigator", "Phase V — Navigator", ["pilot"], "pilot");
-    html += renderPhaseVI(race);
-    html += renderLegClose(race);
-  }
-  html += renderLog(race);
-  return html;
-}
-
-function renderRaceSetup() {
-  let html = `<section class="card"><h2>Set Up a Race</h2>`;
-  if (!STATE.courses.length) { html += `<p class="muted">Create a racecourse first (Racecourse tab).</p></section>`; return html; }
-  if (!STATE.ships.length) { html += `<p class="muted">Build at least one ship first (Hangar Bay tab).</p></section>`; return html; }
-  // Persist the selected course + ships in STATE so a re-render (e.g. adding an
-  // NPC) doesn't wipe the checkbox selections, which are otherwise DOM-only.
-  let courseId = STATE._raceSetupCourse;
-  if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses[0].id;
-  const division = getCourse(courseId).division;
-  STATE._raceSetupShips = STATE._raceSetupShips || [];
-  html += `<div class="formrow"><label>Racecourse</label><select id="raceCourseSel" onchange="App.setRaceSetupCourse(this.value)">
-    ${STATE.courses.map(c => `<option value="${c.id}" ${c.id === courseId ? "selected" : ""}>${esc(c.name)} (${c.division}, ${c.trackType === "circular" ? `Circular, ${c.laps} laps` : `${c.legs.length} legs`})</option>`).join("")}
-  </select></div>`;
-  {
-    const selCourse = getCourse(courseId);
-    if (selCourse && selCourse.trackType === "circular") {
-      html += `<p class="muted">Circular Track — Distance Tracking is in effect (see Instructions). ${selCourse.lanes} lanes, inner lane ~${selCourse.innerHexes} hexes around, ${selCourse.laps} laps to finish. Ships are assigned a starting lane automatically; the Pilot may Slip a lane during the race.</p>`;
-    }
-  }
-  // Only ships of the racecourse's Division are eligible to race it.
-  const eligible = STATE.ships.filter(s => (s.cls || "Comet") === division);
-  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division only)</span></label><div>
-    ${eligible.length ? eligible.map(s => `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)} <span class="muted">(${s.cls})</span>${shipCrewComplete(s) ? "" : ` <span class="tag danger" title="${crewLockMessage(s)}">🔒 crew incomplete</span>`}</label>`).join("")
-      : `<span class="muted">No ${division} Division ships built yet — build one in the Hangar Bay and set its Division to ${division}.</span>`}
-  </div></div>`;
-  html += `<div class="formrow" style="align-items:flex-start"><label>NPC Racers</label><div>
-    <div class="row">
-      <input id="npcName" placeholder="NPC name"><button class="ghost" title="Random ship name" onclick="App.rollNpcName()">🎲</button>
-      <label>Aggression ${numStepper(`<input id="npcAggression" type="number" min="1" max="10" value="${STATE._draftNpcAggression || 5}" style="width:48px">`)}</label>
-      <button class="ghost" title="Randomize Aggression" onclick="App.randomizeDraftNpcAggression()">🎲</button>
-      <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
-    </div>
-    <p class="muted" style="margin:0 0 6px">Aggression (1-10, public knowledge -- see Instructions) drives this NPC's automated Maneuvers and Slip during the race.</p>
-    <div id="npcList">${(STATE._draftNpcs || []).map((n, i) => `<span class="tag">${esc(n.name)} <span class="muted">(Aggr ${n.aggression})</span> <a href="#" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join(" ")}</div>
-  </div></div>`;
-  html += `<button onclick="App.beginRace()">Start Race</button></section>`;
-  return html;
-}
-
-/* UI only, no mechanics affected (see APP_CHANGES.md): the Standings bar is a
-   race-track progress view, not a relative-to-leader bar chart. Each racer starts at the
-   left (0%) and their bar's width is their cumulative movement as a percentage
-   of the maximum possible movement for the whole race (every Leg's winner gets
-   a number of points equal to the participant count, so max = legs * racers).
-   Racer order never changes leg to leg -- only how far each bar reaches.
-   "Show Entire Race" replays that growth from Leg 1 forward on the same bars
-   (see App.playRaceReplay), rather than printing a separate snapshot per Leg. */
-/* Hex-grid track geometry (see RULE_CHANGES.md): a real pointy-top axial hex
-   grid, replacing the old continuous-Q trapezoid system entirely. Lane N is
-   a hex ring at ring-level (innerRing+N) around a shared center -- see
+/* ============================== Hex-grid Circular Track geometry ==============================
+   Unchanged from before the Circus Maximus conversion (see RULE_CHANGES.md
+   2026-08-24) -- the proven, tested engine for the one track type the app
+   now exclusively uses. A real pointy-top axial hex grid: lane N is a hex
+   ring at ring-level (innerRing+N) around a shared center -- see
    traceLaneRing() -- with the two straight sides elongated by a fixed
    straightLen so every lane shares the exact same straight length and only
    the curved end-caps grow. Because every lane's ring shares the same
    center and elongation, adjacent rings are ALWAYS perfectly nested by
-   construction (standard hex-ring math) -- this is the actual fix for the
-   earlier hex attempt's lane-to-lane misalignment: that used continuous,
-   independently divided equal-angle curve slices (a shape that can flex to
-   fit a circle regardless of neighboring lanes' cell counts), which a true
-   regular hexagon can't do -- fixed 60-degree angles/equal sides, no
-   flexing. Traces each lane COUNTERCLOCKWISE starting top-right (same
-   convention as before): left along the top straight, down the left cap,
+   construction (standard hex-ring math). Traces each lane COUNTERCLOCKWISE
+   starting top-right: left along the top straight, down the left cap,
    right along the bottom straight, up the right cap, back to start. */
 // 6 neighbor directions for pointy-top axial hexes, fixed rotational order.
 const HEX_DIRS = [
   { dq: 1, dr: 0 }, { dq: 1, dr: -1 }, { dq: 0, dr: -1 },
   { dq: -1, dr: 0 }, { dq: -1, dr: 1 }, { dq: 0, dr: 1 },
 ];
+// Every lane's hex count for a course spec (used by the Racecourse builder's
+// live preview) -- not a chosen number, an exact property of hex-ring math.
+function laneHexesArray(course) {
+  const { innerRing, straightLen } = hexRingParamsForCourse(course);
+  return Array.from({ length: course.lanes || 6 }, (_, i) => 6 * (innerRing + i) + 2 * straightLen);
+}
+// Derives (innerRing, straightLen) from the course's configurable
+// "innerHexes" target -- solves innerHexes ~= 6*innerRing + 2*straightLen
+// with straightLen held at 2x innerRing (a track-SHAPE choice, every hex is
+// always the exact same regular size regardless of this ratio).
+function hexRingParamsForCourse(course) {
+  const target = course.innerHexes || 50;
+  const innerRing = Math.max(1, Math.round(target / 10));
+  const straightLen = 2 * innerRing;
+  return { innerRing, straightLen };
+}
+// Staggered start: each lane out starts this many hexes further ahead than
+// the one inside it -- a fixed offset. Shared by startRace() (actual
+// gameplay hexPos) and the standings SVG (drawing each lane's own starting
+// mark at that same hex).
+var STAGGER_PER_LANE = 4;
+function laneStartHexPos(laneIdx0) { return laneIdx0 * STAGGER_PER_LANE; }
 function hexKey(q, r) { return q + "," + r; }
 function hexAdd(h, dir, n) { return { q: h.q + dir.dq * n, r: h.r + dir.dr * n }; }
 // Direction order [W,SW,SE,E,NE,NW] (not the "textbook" ring-trace order
@@ -1983,7 +243,7 @@ function traceLaneRing(k, straightLen) {
       cur = hexAdd(cur, HEX_DIRS[dirIdx], 1);
     }
   }
-  return hexes; // ordered; index = hexPos, today's squarePos
+  return hexes; // ordered; index = hexPos
 }
 // Pointy-top axial -> pixel, relative to the track's own (cx,cy) and
 // hexSize (center-to-vertex distance).
@@ -2001,9 +261,8 @@ function hexCorners(size, cx, cy) {
 }
 // The two corner points of the hex edge a ship crosses moving from `hex`
 // toward `nextHex` -- i.e. that hex's own "front" edge/spine in the
-// direction of travel, as opposed to a line through its center. Each of the
-// 6 HEX_DIRS faces exactly one edge; this pairing is fixed by hexCorners()'s
-// own corner angle scheme (60*i-30) and doesn't depend on position.
+// direction of travel. Each of the 6 HEX_DIRS faces exactly one edge; this
+// pairing is fixed by hexCorners()'s own corner angle scheme.
 const HEX_EDGE_CORNERS = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]]; // indexed by HEX_DIRS
 function hexFrontEdge(geom, hex, nextHex) {
   const dq = nextHex.q - hex.q, dr = nextHex.r - hex.r;
@@ -2025,11 +284,10 @@ function circularHexDist(a, b, circ) {
 function hexDistance(a, b) {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
 }
-// House rule (see RULE_CHANGES.md): Racing Maneuvers can target a ship
-// within MANEUVER_RANGE_HEXES hexes (same lane or a nearby one), wrapping a
-// lap in the same lane. A different lane's position is compared via real
-// hex distance (cube coordinates) -- exact between any two hexes directly,
-// simpler than the old system's same-lane Q-conversion workaround.
+// House rule: Racing Maneuvers (and Attack) can target a car within
+// MANEUVER_RANGE_HEXES hexes (same lane or a nearby one), wrapping a lap in
+// the same lane. A different lane's position is compared via real hex
+// distance (cube coordinates).
 var MANEUVER_RANGE_HEXES = 2;
 function hexesWithinManeuverRange(geom, pA, pB) {
   const laneA = (pA.lane || 1) - 1, laneB = (pB.lane || 1) - 1;
@@ -2042,23 +300,14 @@ function hexesWithinManeuverRange(geom, pA, pB) {
   const hexB = geom.laneHexLists[laneB][(pB.hexPos || 0) % geom.laneHexLists[laneB].length];
   return hexDistance(hexA, hexB) <= MANEUVER_RANGE_HEXES;
 }
-// Shared geometry for one course's Circular Track drawing -- computed once
-// and reused both by the initial full SVG draw and by later incremental
-// position updates (replay), so the two never drift out of sync with each
-// other. Builds every lane's ordered hex ring, a global (q,r) lookup, and
-// per-hex Slip-neighbor tables (which adjacent-lane hexes each hex is
-// edge-adjacent to) -- everything movement/Slip/rendering need, computed
-// once so nothing downstream needs runtime trig.
 // A hex's structural position expressed as (completed legs) + (fraction
-// through the current leg) -- used ONLY to sanity-check candidate Slip
-// neighbors below, not as a distance metric. Since every leg (straight or
-// curve) grows by exactly +1 hex per lane step, this value's expected
-// change for "the same real structural position" one lane over is tiny
-// (well under 1) everywhere EXCEPT at the ring's own seam (hexPos 0 /
-// hexPos total-1), where the closed loop puts a hex from the FAR end of
-// the neighboring lane's ring genuinely hex-adjacent too (see
-// circTrackGeometry()'s slipNeighbors filter for why that specific
-// coincidental adjacency has to be excluded as a Slip target).
+// through the current leg) -- used to sanity-check candidate Slip neighbors
+// and to SCORE real progress for the Slip longest-path DP (see
+// hexStepAdvance()). Since every leg (straight or curve) grows by exactly
+// +1 hex per lane step, this value's expected change for "the same real
+// structural position" one lane over is tiny (well under 1) everywhere
+// except at the ring's own seam, which circTrackGeometry()'s slipNeighbors
+// filter excludes as a Slip target.
 function hexLegOffset(innerRing, straightLen, laneIdx0, hexPos) {
   const S = straightLen, k = innerRing + laneIdx0;
   const legLens = [k + S, k, k, k + S, k, k];
@@ -2090,16 +339,9 @@ function circTrackGeometry(course) {
         const hit = lookup.get(hexKey(h.q + dir.dq, h.r + dir.dr));
         if (!hit) continue;
         if (hit.lane !== lane + 1 && hit.lane !== lane - 1) continue;
-        // The ring closing back on itself makes a hex right at the START
-        // of the walk (hexPos near 0) ALSO true-hex-adjacent to a hex right
-        // at the END of the neighboring lane's ring (hexPos near its own
-        // total-1) -- real (q,r) adjacency, but not the "same real
-        // position one lane over" a Slip is supposed to reach: taking it
-        // would let a single lane-change land almost a full lap ahead by
-        // pure coordinate-labeling coincidence, not real travel. Structural
-        // offset catches this cleanly (a real corner candidate's offset
-        // never drifts more than a fraction of 1; this artifact drifts by
-        // nearly a full 6-leg lap) without touching the proven geometry.
+        // Exclude the ring's own seam artifact (see RULE_CHANGES.md) -- a
+        // real corner candidate's offset never drifts more than a fraction
+        // of 1; this artifact drifts by nearly a full 6-leg lap.
         const toOffset = hexLegOffset(innerRing, straightLen, hit.lane, hit.index);
         if (Math.abs(toOffset - fromOffset) > 1.5) continue;
         if (hit.lane === lane + 1) sn.outward.push(hit.index);
@@ -2120,91 +362,28 @@ function circTrackGeometry(course) {
 }
 // Whether hex `hexPos` in lane laneIdx0 is a straight-section hex or a
 // curved-cap hex -- tagged once at construction time (traceLaneRing()).
-// Used by the Circular Track Slip A/D rule (see RULE_CHANGES.md) to walk
-// every hex a Leg's projected movement passes through.
 function isHexOnStraight(geom, laneIdx0, hexPos) {
   return geom.laneHexLists[laneIdx0][hexPos].isStraight;
 }
 // One atomic unit of ordinary forward movement, staying in the same lane --
-// used by resolveSlipPath() below. Returns the new position and whether a
-// lap was completed by this single hex (a single hex can cross the lap
-// boundary at most once).
+// used by resolveSlipPath() below.
 function stepForward(geom, laneIdx0, hexPos) {
   const circ = geom.laneHexLists[laneIdx0].length;
   const lapGained = hexPos + 1 >= circ ? 1 : 0;
   return { laneIdx0, hexPos: (hexPos + 1) % circ, lapGained };
 }
-// Real forward advance contributed by ONE atomic step -- what
-// resolveSlipPath()'s longest-path DP (below) sums and maximizes to decide
-// where to interleave a Slip. Scored as the change in hexLegOffset()
-// (completed legs + fraction through the current leg) between the two
-// hexes -- the SAME structural measure used to filter slipNeighbors, now
-// also used to VALUE them, so a hex-adjacent step is scored by how much
-// real ground it actually covers, not by an incidental index number.
-//
-// (Two earlier versions of this function each got one thing right and one
-// thing wrong. The first expressed every hex as a FRACTION of its own
-// lane's total hex count (hexPos/laneLen) -- correct proportionality
-// between straights and curves, but taking a same-index candidate into a
-// longer destination lane makes that fraction slightly SMALLER even
-// though nothing regressed, and the modular wraparound needed to handle
-// genuine lap completions misread that tiny decrease as "advanced almost
-// a full lap" -- a fake-huge score that made the DP pick a stationary
-// candidate over a genuinely better one. The second switched to raw
-// hex-INDEX delta -- no wraparound trap, and correct on the straights
-// (where the two lanes' indices track closely, deltas of 0/1), but wrong
-// on the curves: a curve leg's length scales with the lane's own ring
-// level directly (not lane-length-plus-a-shared-constant, the way a
-// straight does), so the exact same real structural position can be
-// several raw index numbers apart between adjacent lanes partway through
-// a curve -- scoring that raw gap as real distance produced deeply
-// negative totals for any Leg that slipped through a curve, exactly
-// backwards from the real Slingshot-style advantage of hugging the inside
-// line through a turn. hexLegOffset() stays correctly small (well under 1)
-// for any genuine adjacent candidate everywhere on the ring, straight or
-// curve, so a plain subtraction -- no modular wraparound needed, since
-// circTrackGeometry()'s slipNeighbors filter already excludes the one case
-// (the ring's own seam) where two truly hex-adjacent hexes have very
-// different offsets -- is the correct, uniform way to score every step.
-// Caught via a user-flagged race where a heavy inward Slip through a curve
-// landed far short of the demonstrably better "hug the inside line, gain
-// ground exiting the curve" path the user had worked out by hand.)
+// Real forward advance contributed by ONE atomic step -- scored as the
+// change in hexLegOffset() between the two hexes, the same structural
+// measure used to filter slipNeighbors.
 function hexStepAdvance(geom, fromLaneIdx0, fromHexPos, toLaneIdx0, toHexPos) {
   return hexLegOffset(geom.innerRing, geom.straightLen, toLaneIdx0, toHexPos) -
     hexLegOffset(geom.innerRing, geom.straightLen, fromLaneIdx0, fromHexPos);
 }
-// House rule (see RULE_CHANGES.md): a Slip's hexes are interleaved with
-// ordinary forward movement to actually maximize the ship's real progress
-// around the track this Leg, rather than assuming "all Slip hexes first"
-// is always optimal. Even though every hex is the same real size, WHICH
-// hex a "forward" step reaches depends on the current lane/ring, so
-// different interleavings of forward-vs-diagonal steps land on genuinely
-// different final hexes -- some further along than others -- exactly the
-// same class of issue the original square-grid bug had.
-//
-// This is a longest-path DP, not a greedy one-step lookahead (a single-step
-// "whichever is bigger right now" comparison can lock in a choice that
-// blocks a much better option two steps later). The state at step i is
-// fully described by k = how many of the slipHexes diagonal hops have been
-// used so far (the current lane is just originLane + dir*k), so only hexPos
-// and the true best cumulative advance (via hexStepAdvance() -- real,
-// cross-lane-comparable progress) need tracking per (i, k); keeping
-// only the max-advance candidate per (i, k) and discarding the rest is
-// lossless (same DP guarantee as the old square-grid version). A hex-ring
-// corner can have up to 3 valid diagonal neighbor candidates (see
-// circTrackGeometry()'s slipNeighbors) -- the DP tries all of them.
+// A Slip's hexes are interleaved with ordinary forward movement to actually
+// maximize the ship's real progress around the track this Leg -- a
+// longest-path DP keyed by (k, laneIdx0, hexPos), not a greedy lookahead.
 function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes, dir) {
   const maxLaneIdx0 = geom.laneHexLists.length - 1;
-  // DP state is keyed by (k, laneIdx0, hexPos) -- diagonal-hops-used PLUS
-  // exact physical position -- not just (k) alone. Collapsing on (k) alone
-  // is unsound: two different paths can tie in cumulative distance-so-far
-  // while sitting on genuinely different hexes, and which one is better
-  // depends on the lane you're now in (forward-step Q advance differs per
-  // lane) -- discarding the "loser" of such a tie can throw away a state
-  // that leads to a strictly better total. Keying by exact position is safe
-  // because from an identical physical position, the best possible future
-  // is a pure function of that position plus remaining moves/slips,
-  // independent of how you got there -- a genuine DP state.
   let states = new Array(slipHexes + 1).fill(null).map(() => new Map());
   states[0].set(originLaneIdx0 + "," + originHexPos, { laneIdx0: originLaneIdx0, hexPos: originHexPos, dist: 0, lapsGained: 0, prev: null, step: null });
   for (let i = 0; i < movement; i++) {
@@ -2212,23 +391,12 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
     for (let k = 0; k <= Math.min(i, slipHexes); k++) {
       states[k].forEach(st => {
         const fwd = stepForward(geom, st.laneIdx0, st.hexPos);
-        // Score against the UNWRAPPED hexPos+1, not fwd.hexPos (which wraps
-        // to 0 on a lap completion) -- hexLegOffset() treats an input equal
-        // to the lane's own total as exactly one full lap (verified: its
-        // leg-by-leg walk falls through to base=6), so this scores a
-        // lap-completing step correctly without a special case, instead of
-        // reading it as a huge regression back to hexPos 0.
         const fwdDist = st.dist + hexStepAdvance(geom, st.laneIdx0, st.hexPos, fwd.laneIdx0, st.hexPos + 1);
         const fwdKey = fwd.laneIdx0 + "," + fwd.hexPos;
         const existingFwd = next[k].get(fwdKey);
         if (!existingFwd || fwdDist > existingFwd.dist) {
           next[k].set(fwdKey, { laneIdx0: fwd.laneIdx0, hexPos: fwd.hexPos, dist: fwdDist, lapsGained: st.lapsGained + fwd.lapGained, prev: st, step: { laneIdx0: fwd.laneIdx0, hexPos: fwd.hexPos, isSlip: false } });
         }
-        // Defensive bounds check (see the old system's own equivalent): a
-        // live declared Slip is always pre-clamped to available lanes (see
-        // lockDeclarations()), but this also reconstructs from RECORDED
-        // history, which could in principle be malformed -- this just makes
-        // the option unavailable rather than indexing off the end.
         if (k < slipHexes && st.laneIdx0 + dir >= 0 && st.laneIdx0 + dir <= maxLaneIdx0) {
           const sn = geom.slipNeighbors[st.laneIdx0][st.hexPos];
           const candidates = dir > 0 ? sn.outward : sn.inward;
@@ -2248,12 +416,6 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
     }
     states = next;
   }
-  // Defensive: states[0] is always reachable (the unconditional forward
-  // transition keeps it populated every step), but a requested slipHexes
-  // that isn't actually achievable within the lane bounds along the way
-  // (malformed/legacy inputs only, never a live declared Slip) leaves
-  // states[k] empty for the unreachable k and every k above it. Gracefully
-  // degrade to the largest achievable k instead of crashing.
   let k = slipHexes;
   while (k > 0 && states[k].size === 0) k--;
   let final = null;
@@ -2263,20 +425,65 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
   steps.reverse();
   return { steps, finalLaneIdx0: final.laneIdx0, finalHexPos: final.hexPos, lapsGained: final.lapsGained };
 }
+// House rule (see RULE_CHANGES.md 2026-10-03): cars cannot occupy the same
+// hex -- Circus Maximus's own "entering a space with another chariot"
+// obstacle rule, not a shared-hex Disadvantage penalty (Crowded Field,
+// retired). Resolves every active car's path in Circus Maximus's own turn
+// order (lowest Speed stat first -- a slower car commits to its line
+// before a faster one has to react to it), building up an occupied-hex set
+// as each car's new position is settled.
+// `paramsFor(p)` supplies { movement, slipHexes } for this pass -- the
+// lock-time tentative gear roll (to decide if this Leg's Skill Check
+// triggers), or the finish-time final amount after Out-of-Control effects
+// (to actually place cars). `place=false` only DETECTS whether a car's path
+// would cross or land on an occupied hex, mutating nothing. `place=true`
+// also resolves what happens on an unavoidable landing collision: drift to
+// an open hex truly adjacent (any of the 6 hex neighbors, any lane) to the
+// blocked one, or -- if every neighbor is also taken -- automatically roll
+// one Out-of-Control Chart entry, exactly as the book describes (no Skill
+// Check attempt for that specific failure mode; the Leg's own Skill Check,
+// if it triggered, is handled separately).
+function resolveCarCollisions(race, geom, paramsFor, place) {
+  const order = race.participants.filter(p => !p.out).sort((a, b) => {
+    const diff = carStats(a).speed - carStats(b).speed;
+    return diff !== 0 ? diff : Math.random() - 0.5;
+  });
+  // hexKey -> Set of participant ids currently claiming it. A Set (not a
+  // plain boolean) matters because more racers than lanes can legitimately
+  // start a race sharing a hex (startRace()'s lane assignment wraps round-
+  // robin) -- removing just THIS car's own claim must never also drop
+  // another car that's still legitimately sitting there.
+  const occupied = new Map();
+  const claim = (key, id) => { if (!occupied.has(key)) occupied.set(key, new Set()); occupied.get(key).add(id); };
+  const unclaim = (key, id) => { const s = occupied.get(key); if (s) { s.delete(id); if (!s.size) occupied.delete(key); } };
+  race.participants.forEach(p => { if (!p.out) claim(`${p.lane}|${p.hexPos}`, p.id); });
+  const results = {};
+  order.forEach(p => {
+    unclaim(`${p.lane}|${p.hexPos}`, p.id); // this car is about to move off its current hex
+    const { movement, slipHexes } = paramsFor(p);
+    const dir = race.legState.cars[p.id].slip === "left" ? -1 : 1;
+    const path = resolveSlipPath(geom, p.lane - 1, p.hexPos, movement, slipHexes, dir);
+    let finalLaneIdx0 = path.finalLaneIdx0, finalHexPos = path.finalHexPos;
+    const collided = path.steps.some(s => occupied.has(`${s.laneIdx0 + 1}|${s.hexPos}`)) || occupied.has(`${finalLaneIdx0 + 1}|${finalHexPos}`);
+    if (place && occupied.has(`${finalLaneIdx0 + 1}|${finalHexPos}`)) {
+      const hex = geom.laneHexLists[finalLaneIdx0][finalHexPos];
+      let drifted = null;
+      for (const d of HEX_DIRS) {
+        const hit = geom.lookup.get(hexKey(hex.q + d.dq, hex.r + d.dr));
+        if (hit && !occupied.has(`${hit.lane + 1}|${hit.index}`)) { drifted = hit; break; }
+      }
+      if (drifted) { finalLaneIdx0 = drifted.lane; finalHexPos = drifted.index; }
+      else { rollOneOutOfControl(race, p); }
+    }
+    claim(`${finalLaneIdx0 + 1}|${finalHexPos}`, p.id);
+    results[p.id] = { collided, finalLaneIdx0, finalHexPos, lapsGained: path.lapsGained, movement };
+  });
+  return results;
+}
 // Every intermediate hex a racer's <g> should visit while animating through
-// each of its Legs (see App.playRaceReplay(), RULE_CHANGES.md/APP_CHANGES.md)
-// -- walking hex by hex instead of one straight-line transition from a Leg's
-// start position to its end position, since a straight chord cuts across a
-// curve instead of following the track. Returns one array of {lane,hexPos}
-// waypoints per Leg, by re-running the exact same deterministic
-// resolveSlipPath() finishLeg() used to resolve it -- a perfect, step-for-
-// step reconstruction, since the same inputs always produce the same path,
-// PROVIDED the algorithm hasn't changed since that Leg was recorded (it has,
-// at least once already, mid-development -- see RULE_CHANGES.md's
-// longest-path DP entry). If the recomputed path doesn't land exactly on
-// the Leg's authoritative recorded position, only the FINAL waypoint is
-// snapped to match it -- the replay always ends where the ship actually is,
-// even if an older Leg's lead-up animation isn't a perfect re-derivation.
+// each of its Legs (see App.playRaceReplay()) -- walking hex by hex instead
+// of one straight-line transition, since a straight chord cuts across a
+// curve instead of following the track.
 function buildCircularLegWaypoints(p, geom) {
   const h = p.history || [];
   const perLeg = [];
@@ -2295,43 +502,19 @@ function buildCircularLegWaypoints(p, geom) {
   }
   return perLeg;
 }
-// One racer's placement on the track for a given (lane, hexPos) snapshot --
-// used for both the initial draw and later incremental transform updates,
-// so a replay step only has to change this string, not rebuild any markup.
+// One racer's placement on the track for a given (lane, hexPos) snapshot.
 function circRacerTransform(geom, p, prevRotDeg) {
   const laneIdx0 = Math.min(Math.max((p.lane || 1) - 1, 0), geom.laneHexLists.length - 1);
   const ring = geom.laneHexLists[laneIdx0];
   const hexPos = ((p.hexPos || 0) % ring.length + ring.length) % ring.length;
   const hex = ring[hexPos];
   const { x, y } = hexToPixel(geom, hex.q, hex.r);
-  // Icon art faces "up" natively (see .boardicon in style.css) -- facing
-  // direction is just the pixel-space delta toward the NEXT hex in this
-  // lane's own sequence (no trig needed, the grid is discrete), +90 to turn
-  // that into the standard 0deg-is-east convention.
   const next = ring[(hexPos + 1) % ring.length];
   const nextPt = hexToPixel(geom, next.q, next.r);
   let rotDeg = Math.atan2(nextPt.y - y, nextPt.x - x) * 180 / Math.PI + 90;
-  // If given the racer's CURRENTLY-displayed rotation (see App.playRaceReplay()),
-  // re-express rotDeg as the equivalent (mod 360) angle closest to it, so a
-  // CSS transition between them always animates the short way around --
-  // e.g. 179 -> 181 instead of the numerically-different but
-  // visually-identical 179 -> -179, which would spin the long way through 0.
   if (prevRotDeg != null) rotDeg += Math.round((prevRotDeg - rotDeg) / 360) * 360;
   return { laneIdx0, transform: `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${rotDeg.toFixed(1)})` };
 }
-/* Circular Track standings view: a real hex-grid stadium track, one lane per
-   Division lane, drawn as true regular hexagons (see circTrackGeometry()/
-   traceLaneRing() above) -- every cell the exact same size and shape,
-   adjacent lanes always meeting edge-to-edge by construction, no
-   boundary-matching math needed at all (the old trapezoid system's
-   mergedBoundaryAngles() has no hex equivalent -- it just isn't needed).
-   Racer icons snap to the center of whichever hex their position falls in
-   (circRacerTransform()). Each racer `<g>` gets a stable id
-   (`circracer-<id>`) and a CSS transform transition (see style.css), the
-   same way the linear board's icons/bars only actually animate when
-   something moves their EXISTING DOM node rather than recreating it -- see
-   App.playRaceReplay(), which updates these transforms directly instead of
-   regenerating this whole SVG every step. */
 function renderCircularTrackSvg(race, course) {
   const geom = circTrackGeometry(course);
   const { vbW, vbH, iconSize } = geom;
@@ -2340,17 +523,9 @@ function renderCircularTrackSvg(race, course) {
     ring.forEach((hex, hexPos) => {
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
       const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
-      // Curve hexes get their own fill (see style.css) so the two curved
-      // end-caps read as visually distinct from the straightaways.
       svg += `<polygon class="circcell${hex.isStraight ? "" : " curve"}" id="circcell-${lane}-${hexPos}" points="${pts}"/>`;
     });
   });
-  // Starting line: each lane's own mark at its actual staggered starting hex
-  // (see laneStartHexPos()/RULE_CHANGES.md), not one straight line across
-  // every lane -- outer lanes start further around the first curve, same as
-  // a real track's staggered start grid. Drawn as that hex's own FRONT edge
-  // (hexFrontEdge()) -- the real spine facing the direction of travel --
-  // rather than a line cut through its center.
   geom.laneHexLists.forEach((ring, laneIdx0) => {
     const hexPos = Math.min(laneStartHexPos(laneIdx0), ring.length - 1);
     const hex = ring[hexPos];
@@ -2358,16 +533,11 @@ function renderCircularTrackSvg(race, course) {
     const [p1, p2] = hexFrontEdge(geom, hex, next);
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
-  // Icon sized to sit inside a single hex with margin to spare (see
-  // circTrackGeometry()'s iconSize). Name/lane/lap are hover-only via
-  // <title> -- no permanent on-track labels to collide.
   race.participants.forEach(p => {
     const { laneIdx0, transform } = circRacerTransform(geom, p);
-    const icon = p.type === "hero" ? getShip(p.shipId) : p;
-    const iconDiv = iconDivisionOf(icon);
     const label = p.type === "hero" ? shipName(p.shipId) : p.name;
     const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}`;
-    const imgHref = icon && icon.iconColor && icon.iconNumber && iconDiv ? esc(shipIconPath(iconDiv, icon.iconNumber, icon.iconColor)) : "";
+    const imgHref = p.iconColor && p.iconNumber && p.iconDivision ? esc(shipIconPath(p.iconDivision, p.iconNumber, p.iconColor)) : "";
     svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" transform="${transform}">
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
@@ -2378,11 +548,682 @@ function renderCircularTrackSvg(race, course) {
   svg += `</svg>`;
   return svg;
 }
+// Real track position: laps completed plus a lane-length-normalized
+// fraction through the current lap -- NOT raw cumulative Movement, which
+// can diverge from where a car actually sits once lane length, free Slip
+// lane changes, and Slingshot bonus Movement are in the mix. One full lap =
+// 6 (the hex ring's 6 legs). Shared by standingsPositions() (NPC Leg
+// Aggression) and renderStandings() (the board's ordering and bar length).
+function trackProgress(p, ringParams) {
+  return (p.laps || 0) * 6 + hexLegOffset(ringParams.innerRing, ringParams.straightLen, (p.lane || 1) - 1, p.hexPos || 0);
+}
+// Standings position among still-active (not destroyed) racers, 1 =
+// leading, used to compute each NPC's Leg Aggression. Exact ties are broken
+// randomly -- each tied racer gets its own distinct position.
+function standingsPositions(race, course) {
+  const active = race.participants.filter(p => !p.out);
+  const ringParams = hexRingParamsForCourse(course);
+  const shuffled = [...active].sort(() => Math.random() - 0.5);
+  shuffled.sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
+  const positions = {};
+  shuffled.forEach((p, i) => { positions[p.id] = i + 1; });
+  return positions;
+}
+// An NPC's own Aggression (1-10, public, set at Race Setup) plus its
+// current standings position - 1 -- a car further back is more willing to
+// gamble, regardless of its base personality.
+function legAggressionFor(p, positions) {
+  return (p.aggression || 5) + ((positions[p.id] || 1) - 1);
+}
+
+/* ============================== Icons ============================== */
+function shipIconPath(division, number, color) { return `${GDATA.SHIP_ICON_DIR}${division} ${number} ${color}.png`; }
+function iconThumbImg(obj) {
+  const div = obj && (obj.type === "hero" ? obj.division : obj.iconDivision || obj.division);
+  if (!obj || !obj.iconColor || !obj.iconNumber || !div) return "";
+  return `<img class="iconthumb" src="${esc(shipIconPath(div, obj.iconNumber, obj.iconColor))}" title="${esc(div)} ${esc(obj.iconColor)} ${esc(obj.iconNumber)}">`;
+}
+// Picks a uniformly random (color, number) not already in usedKeys (a Set of
+// "Color|Number" strings) -- used to give an NPC racer a random, distinct
+// icon at race start. Returns null if all 45 are taken.
+function pickRandomUnusedIcon(usedKeys) {
+  const options = [];
+  GDATA.SHIP_ICON_COLORS.forEach(color => GDATA.SHIP_ICON_NUMBERS.forEach(number => {
+    const key = `${color}|${number}`;
+    if (!usedKeys.has(key)) options.push({ color, number });
+  }));
+  if (!options.length) return null;
+  return options[Math.floor(Math.random() * options.length)];
+}
+function usedShipIconKeys(excludeId) {
+  const used = new Set();
+  STATE.ships.forEach(s => { if (s.id !== excludeId && s.iconColor && s.iconNumber) used.add(`${s.division}|${s.iconColor}|${s.iconNumber}`); });
+  return used;
+}
+
+/* ============================== Name generators ============================== */
+function rollRaceName() {
+  const d1 = GDATA.RACE_NAME.die1[rollD(10) - 1];
+  const d2 = GDATA.RACE_NAME.die2[rollD(10) - 1];
+  const d3 = GDATA.RACE_NAME.die3[rollD(10) - 1];
+  return `${d1} ${d2} ${d3}`;
+}
+function rollShipName() {
+  let l = GDATA.SHIP_NAME.left[rollD(50) - 1];
+  let r = GDATA.SHIP_NAME.right[rollD(50) - 1];
+  if (l === "Reroll") l = GDATA.SHIP_NAME.left[rollD(49) - 1];
+  if (r === "Reroll") r = GDATA.SHIP_NAME.right[rollD(49) - 1];
+  return `${l} ${r}`;
+}
+function rollHeroName() {
+  return `${GDATA.HERO_FIRST_NAMES[rollD(100) - 1]} ${GDATA.HERO_LAST_NAMES[rollD(100) - 1]}`;
+}
+
+/* ============================== Racecourse generation ============================== */
+// Leg flavor + TN: a fresh Leg is rolled every time one is needed (there's
+// no pre-built Leg list -- see RULE_CHANGES.md). Flavor pool is picked by
+// the course's Division (Flash = atmospheric, everything else = deep-space)
+// -- purely narration, no mechanical difference between the two pools.
+function rollLegFeature(division) {
+  const table = GDATA.DIVISION_ATMOSPHERIC[division] ? GDATA.FLASH_LEG_FEATURES : GDATA.SPACE_LEG_FEATURES;
+  const idx = rollD(50) - 1;
+  return { d50: idx + 1, desc: table[idx][0], mod: table[idx][1] };
+}
+function rollLeg(division) {
+  const tier = rollD(5) + rollD(5); // 2d5 -> 2..10, the Leg's OWN difficulty tier, independent of any car's build Tier
+  const baseTN = tier * 3;
+  const feat = rollLegFeature(division);
+  const tnTierMod = (tier + feat.mod) * 3;
+  const tnTnMod = baseTN + feat.mod;
+  return { tier, baseTN, d50: feat.d50, feature: feat.desc, mod: feat.mod, tnTierMod, tnTnMod, finalTN: tnTierMod, finalMode: "tier" };
+}
+function rollCircularLeg(course) {
+  const leg = rollLeg(course.division);
+  const mode = course.legMode || "tier";
+  leg.finalMode = mode;
+  leg.finalTN = mode === "tier" ? leg.tnTierMod : (mode === "tn" ? leg.tnTnMod : leg.baseTN);
+  return leg;
+}
+// A Leg's TN can never exceed the highest Skill Mk among this race's cars
+// (Hero or NPC alike now that they're mechanically identical), plus 18.
+function legTNCap(race) {
+  const scores = race.participants.map(p => carStats(p).skill);
+  return (scores.length ? Math.max(...scores) : 0) + 18;
+}
+function legNaturalTN(leg) {
+  return leg.finalMode === "tier" ? leg.tnTierMod : leg.finalMode === "tn" ? leg.tnTnMod : leg.baseTN;
+}
+
+/* ============================== Race engine ============================== */
+function activeCars(race) {
+  return race.participants.filter(p => !p.out || p.outLeg === race.legIndex);
+}
+function livingCars(race) {
+  return race.participants.filter(p => !p.out);
+}
+function initLegState(race) {
+  const course = getCourse(race.courseId);
+  const leg = rollCircularLeg(course);
+  leg.finalTN = Math.min(leg.finalTN, legTNCap(race));
+  const cars = {};
+  race.participants.forEach(p => {
+    cars[p.id] = {
+      gearChange: 0, // -1/0/+1, chosen at Declare (Heroes) or by autoDeclareNpc (NPCs)
+      slip: "", slipHexes: 0, slipAdvantage: 0,
+      maneuver: "", maneuverTarget: "",
+      maneuverReceivedD: 0, maneuverInstigatedD: 0,
+      declared: p.type === "npc", // NPCs auto-declare at lock time; Heroes must declare first
+      gear: p.gear || 0, gearMovement: 0,
+      triggered: false, collided: false, net: 0, skillCheck: null,
+      outOfControlRolls: [],
+      hexesLost: 0, stopped: false,
+      autoLast: !!p.out
+    };
+  });
+  race.legState = { leg, declLocked: false, cars };
+  STATE._openDeclFor = null;
+}
+// Initiative = d20 + the car's own Speed stat.
+function resolveInitiativeOrder(participants) {
+  const rolled = participants.map(p => ({ p, val: rollD(20) + carStats(p).speed }));
+  rolled.forEach(r => { r.p.initiative = r.val; });
+  rolled.sort((a, b) => b.val - a.val);
+  const result = [];
+  let i = 0;
+  while (i < rolled.length) {
+    let j = i;
+    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
+    if (j === i) { result.push(rolled[i].p); i++; continue; }
+    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
+    i = j + 1;
+  }
+  return result;
+}
+function breakTieOrder(tied) {
+  const rolled = tied.map(p => ({ p, val: rollD(20) + carStats(p).speed }));
+  rolled.sort((a, b) => b.val - a.val);
+  const result = [];
+  let i = 0;
+  while (i < rolled.length) {
+    let j = i;
+    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
+    if (j === i) { result.push(rolled[i].p); i++; continue; }
+    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
+    i = j + 1;
+  }
+  return result;
+}
+function startRace(courseId, shipIds, npcs) {
+  const course = getCourse(courseId);
+  const participants = [];
+  const usedIcons = new Set();
+  shipIds.forEach(sid => {
+    const ship = getShip(sid);
+    participants.push({
+      id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [],
+      hp: ship.health, maxHp: ship.health, out: false, gear: 0
+    });
+    if (ship.iconColor && ship.iconNumber) usedIcons.add(`${ship.division}|${ship.iconColor}|${ship.iconNumber}`);
+  });
+  // An NPC racer is a full car in its own right now (see RULE_CHANGES.md) --
+  // built the same way a Hero's ship is (freshCarStats() at the course's own
+  // Division/Tier), not a stripped-down abstraction. It gets a random icon,
+  // distinct from every Hero ship and every other NPC in this race.
+  npcs.forEach(n => {
+    const pick = pickRandomUnusedIcon(usedIcons);
+    if (pick) usedIcons.add(`${course.division}|${pick.color}|${pick.number}`);
+    const stats = n.stats || freshCarStats(course.division);
+    participants.push({
+      id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
+      division: course.division, ...stats,
+      cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "",
+      hp: stats.health, maxHp: stats.health, out: false, gear: 0
+    });
+  });
+  // Every racer starts in a lane, round-robin by Initiative, tracking laps
+  // completed + hex position within the current lap. Outer lanes get a
+  // staggered head start (see laneStartHexPos()).
+  const order = resolveInitiativeOrder(participants);
+  order.forEach((p, i) => {
+    const laneIdx0 = i % course.lanes;
+    p.lane = laneIdx0 + 1;
+    p.hexPos = laneStartHexPos(laneIdx0);
+    p.laps = 0;
+    p.startLane = p.lane;
+    p.startHexPos = p.hexPos;
+  });
+  const race = { courseId, legIndex: 0, participants, finished: false, log: [] };
+  initLegState(race);
+  STATE.race = race;
+  saveState();
+}
+function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (p.name + " (NPC)"); }
+
+/* ---------- Maneuvers (see RULE_CHANGES.md 2026-10-03) ----------
+   One Maneuver per car per Leg, car vs. car. Nudge/Block/Ram always land:
+   Disadvantage to the target, self-cost Disadvantage to the instigator, and
+   BOTH cars' Skill Checks are triggered this Leg. Attack is the one with
+   its own roll -- see applyAttack(). */
+function maneuverDAmount(m, instigatorDivision) {
+  return m.selfD === "Tier" ? carTier(instigatorDivision) : m.selfD;
+}
+// Attack: the instigator's own Attack score vs the Leg's TN (same
+// rollCheck() as everything else, net=0 -- no situational Advantage/
+// Disadvantage on the to-hit roll itself). A hit deals the instigator's
+// Damage stat, reduced by the target's Armor (min 0), to the target's HP;
+// 0 HP marks it out of the race, same as an Out-of-Control hit. A miss does
+// nothing beyond the instigator's own selfD, already applied by the caller.
+function applyAttack(race, instigator, target, tn) {
+  const atkStats = carStats(instigator);
+  const rc = rollCheck(atkStats.attack, 0, tn);
+  if (!rc.success) return { hit: false, rc };
+  const tgtStats = carStats(target);
+  const dmg = Math.max(0, atkStats.damage - tgtStats.armor);
+  target.hp = Math.max(0, target.hp - dmg);
+  if (target.hp === 0 && !target.out) { target.out = true; target.outLeg = race.legIndex; }
+  return { hit: true, rc, dmg };
+}
+// Automates one NPC's whole Declare step: gear shift, (Circular Track) Slip,
+// and Maneuver -- all driven by its Leg Aggression (own Aggression + current
+// standings position - 1). A ship further back gambles more, regardless of
+// its base personality.
+function autoDeclareNpc(race, p, legAggression, course, geom, positions) {
+  const ls = race.legState, car = ls.cars[p.id];
+  // Gear: push up while winning the aggression gamble, otherwise hold or
+  // ease off -- simple, legible NPC behavior without a separate sub-system.
+  const roll = rollD(20);
+  if (roll <= legAggression) car.gearChange = 1;
+  else if (roll > legAggression + 5) car.gearChange = -1;
+  // Legal targets: excludes self, destroyed cars, and anyone out of
+  // Maneuver range. "Logical" target: whoever's immediately ahead of it in
+  // the standings.
+  const legalTargets = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
+  const aheadOrder = race.participants
+    .filter(x => x.id !== p.id && !x.out && positions[x.id] < positions[p.id])
+    .sort((a, b) => positions[b.id] - positions[a.id]);
+  const target = aheadOrder.find(x => legalTargets.includes(x)) || null;
+  if (target && rollD(20) <= legAggression) {
+    const margin = legAggression - rollD(20);
+    // Deterministic pick by how decisively it rolled: Attack only once
+    // genuinely aggressive (margin >= 6), otherwise the more severe
+    // interference Maneuver.
+    const mv = margin >= 6 ? GDATA.MANEUVERS.find(m => m.name === "Attack")
+      : margin >= 3 ? GDATA.MANEUVERS.find(m => m.name === "Ram")
+      : GDATA.MANEUVERS.find(m => m.name === "Nudge");
+    car.maneuver = mv.name;
+    car.maneuverTarget = target.id;
+  }
+  autoDeclareNpcSlip(race, p, legAggression, course, geom, target);
+  car.declared = true;
+}
+// NPC Slip: one more independent d20<=legAggression roll decides whether
+// the car attempts a Slip at all this Leg. A success always Slips at least
+// 1; if a legal target exists but isn't in Maneuver range yet, a second
+// roll decides whether to hunt it down instead of just leaning for
+// speed/Advantage.
+function autoDeclareNpcSlip(race, p, legAggression, course, geom, target) {
+  const car = race.legState.cars[p.id];
+  const roll = rollD(20);
+  if (roll > legAggression) return;
+  const margin = legAggression - roll;
+  const amount = Math.max(1, Math.floor(margin / 2));
+  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
+  let dir = null, hexes = 0;
+  const alreadyInRange = target && hexesWithinManeuverRange(geom, p, target);
+  if (target && !alreadyInRange) {
+    if (rollD(20) <= legAggression) {
+      const towardLeft = target.lane < p.lane;
+      const laneGap = Math.abs(target.lane - p.lane);
+      const neededLanes = Math.max(0, laneGap - MANEUVER_RANGE_HEXES);
+      const huntAmount = Math.min(amount, neededLanes, towardLeft ? maxLeft : maxRight);
+      if (huntAmount > 0) { dir = towardLeft ? "left" : "right"; hexes = huntAmount; }
+    }
+  }
+  if (dir === null) {
+    const inward = (margin / legAggression) >= 0.5;
+    dir = inward ? "left" : "right";
+    hexes = Math.min(amount, dir === "left" ? maxLeft : maxRight);
+  }
+  if (hexes <= 0) return;
+  car.slip = dir; car.slipHexes = hexes;
+}
+// Locks in Declarations: resolves gear shifts + movement, Maneuvers, Slip
+// curve-touch A/D, and Skill Check triggers for every car at once. Heroes
+// must have already declared; NPCs auto-declare here.
+function lockDeclarations() {
+  const race = STATE.race, ls = race.legState, course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const positions = standingsPositions(race, course);
+  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
+    autoDeclareNpc(race, p, legAggressionFor(p, positions), course, geom, positions);
+  });
+  // Gear + movement: unconditional, every car, every Leg.
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const car = ls.cars[p.id];
+    p.gear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
+    car.gear = p.gear;
+    const stats = carStats(p);
+    const dice = GDATA.GEAR_DICE[p.gear];
+    const rolled = dice ? Array.from({ length: dice.n }, () => rollD(dice.d)).reduce((a, b) => a + b, 0) : 0;
+    car.gearMovement = p.gear === 0 ? 0 : Math.max(0, rolled + stats.speed);
+  });
+  // Slip: curve-touch Advantage/Disadvantage, projected from this Leg's
+  // just-rolled gear movement (the Slingshot/actual-path resolution happens
+  // later in finishLeg(), once any Out-of-Control hex losses are known).
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const car = ls.cars[p.id];
+    car.slipAdvantage = 0;
+    if (!car.slip) { car.slipHexes = 0; return; }
+    const maxLane = Math.min(car.slip === "left" ? p.lane - 1 : course.lanes - p.lane, car.gearMovement || 0);
+    const hexes = clampInt(car.slipHexes, 0, Math.max(0, maxLane), 0);
+    car.slipHexes = hexes;
+    if (hexes <= 0) { car.slip = ""; return; }
+    const originLaneIdx0 = p.lane - 1, originHexPos = p.hexPos || 0;
+    const dir = car.slip === "left" ? -1 : 1;
+    const projected = resolveSlipPath(geom, originLaneIdx0, originHexPos, car.gearMovement || 0, hexes, dir);
+    let touchesCurve = !isHexOnStraight(geom, originLaneIdx0, originHexPos);
+    for (let i = 0; !touchesCurve && i < projected.steps.length; i++) {
+      const step = projected.steps[i];
+      if (!isHexOnStraight(geom, step.laneIdx0, step.hexPos)) touchesCurve = true;
+    }
+    car.slipAdvantage = touchesCurve ? (car.slip === "right" ? hexes : -hexes) : 0;
+  });
+  // Maneuvers: resolve each declared Maneuver, applying its effect and
+  // flagging both cars' Skill Checks as triggered.
+  const tn = ls.leg.finalTN;
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const car = ls.cars[p.id];
+    if (!car.maneuver) return;
+    const mv = GDATA.MANEUVERS.find(m => m.name === car.maneuver);
+    if (!mv) return;
+    const target = race.participants.find(x => x.id === car.maneuverTarget);
+    const dAmount = maneuverDAmount(mv, carDivision(p));
+    car.maneuverInstigatedD += dAmount;
+    car.maneuverTriggered = true;
+    if (!target || target.out) return;
+    const tCar = ls.cars[target.id];
+    tCar.maneuverTriggered = true;
+    if (mv.name === "Attack") {
+      car.attackResult = applyAttack(race, p, target, tn);
+    } else {
+      tCar.maneuverReceivedD += mv.targetD;
+    }
+  });
+  // Obstacle check (see RULE_CHANGES.md 2026-10-03): a TENTATIVE pass, using
+  // this Leg's just-rolled gear movement, purely to decide whether a car's
+  // intended path would cross or land on another car's hex -- Circus
+  // Maximus's own "entering a space with another chariot" trigger. This
+  // never actually moves anyone (place=false); the real placement (with
+  // drift/auto-Out-of-Control on an unavoidable collision) happens in
+  // finishLeg(), once Out-of-Control hex losses are known.
+  const collisions = resolveCarCollisions(race, geom, p => {
+    const c = ls.cars[p.id];
+    return { movement: c.gearMovement, slipHexes: c.slip ? Math.min(c.slipHexes || 0, c.gearMovement) : 0 };
+  }, false);
+  // Skill Check trigger: a Slip beyond the first free hex, high gear (top 2
+  // categories), a path that crosses/lands on another car's hex, or
+  // running/receiving a Maneuver this Leg -- mapped directly from Circus
+  // Maximus's own trigger list (an extra drift, an obstacle, high speed),
+  // not invented GASCAR-specific conditions. Only ONE Skill Check is ever
+  // rolled per Leg regardless of how many triggers fired.
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const car = ls.cars[p.id];
+    const extraSlip = Math.max(0, (car.slipHexes || 0) - 1);
+    const highGear = p.gear >= GDATA.HIGH_GEAR_TRIGGER;
+    car.collided = !!(collisions[p.id] && collisions[p.id].collided);
+    car.triggered = extraSlip > 0 || highGear || car.collided || !!car.maneuverTriggered;
+    car.net = (car.slipAdvantage || 0) - (car.maneuverReceivedD || 0) - (car.maneuverInstigatedD || 0);
+    car.declared = true;
+  });
+  // NPCs' own Skill Checks auto-resolve immediately (same spirit as their
+  // whole Declare step being automated) -- only Heroes click their own.
+  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
+    const car = ls.cars[p.id];
+    if (car.triggered) rollCarSkillCheck(race, p);
+  });
+  ls.declLocked = true;
+}
+function rollCarSkillCheck(race, p) {
+  const ls = race.legState, car = ls.cars[p.id];
+  if (car.skillCheck) return; // already rolled
+  const stats = carStats(p);
+  car.skillCheck = rollCheck(stats.skill, car.net, ls.leg.finalTN);
+  for (let i = 0; i < car.skillCheck.fumbleLevels; i++) rollOneOutOfControl(race, p);
+}
+function rollOneOutOfControl(race, p) {
+  const car = race.legState.cars[p.id];
+  const entry = GDATA.OUT_OF_CONTROL[rollD(10) - 1];
+  applyOutOfControlAffects(race, p, entry.affects || []);
+  car.outOfControlRolls.push({ text: entry.text, applied: (entry.affects || []).slice() });
+}
+function applyOutOfControlAffects(race, p, affects) {
+  const car = race.legState.cars[p.id];
+  const stats = carStats(p);
+  const tier = carTier(carDivision(p));
+  affects.forEach(a => {
+    if (a.type === "hp") {
+      const dmg = Math.max(0, tier * a.tierMult - stats.armor);
+      p.hp = Math.max(0, p.hp - dmg);
+      if (p.hp === 0 && !p.out) { p.out = true; p.outLeg = race.legIndex; }
+    } else if (a.type === "loseHexes") {
+      car.hexesLost = (car.hexesLost || 0) + a.amount;
+    } else if (a.type === "laneShift") {
+      const course = getCourse(race.courseId);
+      if (a.dir === "in" && p.lane > 1) p.lane -= 1;
+      else if (a.dir === "out" && p.lane < course.lanes) p.lane += 1;
+    } else if (a.type === "gearReset") {
+      p.gear = 1;
+    } else if (a.type === "stopped") {
+      car.stopped = true;
+    }
+  });
+}
+function describeOutOfControlAffects(affects, tier) {
+  if (!affects || !affects.length) return "No lasting effect.";
+  return affects.map(a => {
+    if (a.type === "hp") return `${Math.max(0, tier * a.tierMult)} HP damage (Tier ${tier} × ${a.tierMult}, before Armor)`;
+    if (a.type === "loseHexes") return `lose ${a.amount} hexes of this Leg's movement`;
+    if (a.type === "laneShift") return `pushed 1 lane ${a.dir === "in" ? "inward" : "outward"}`;
+    if (a.type === "gearReset") return `gear drops to 1 next Leg`;
+    if (a.type === "stopped") return `this Leg's movement ends now`;
+    return "";
+  }).filter(Boolean).join("; ");
+}
+function finishLeg() {
+  const race = STATE.race, ls = race.legState;
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  // Precompute each car's final movement/Slip breakdown (independent of
+  // where anyone else ends up) before collision resolution, which only
+  // needs the totals, not how they were built up.
+  const movementInfo = {};
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const car = ls.cars[p.id];
+    const movement = car.stopped ? 0 : Math.max(0, (car.gearMovement || 0) - (car.hexesLost || 0));
+    const declaredSlipHexes = car.slip ? (car.slipHexes || 0) : 0;
+    const actualSlipHexes = Math.min(declaredSlipHexes, movement);
+    // Slingshot: an inward Slip that touches a curve grants +1 bonus
+    // Movement per hex actually Slipped this Leg -- pure extra forward
+    // movement, gated on an ACTIVE dive toward the inside this Leg.
+    const slingshotBonus = car.slipAdvantage < 0 ? actualSlipHexes : 0;
+    movementInfo[p.id] = { total: movement + slingshotBonus, actualSlipHexes, slingshotBonus };
+  });
+  // Movement + Slip, resolved with the "no two cars share a hex" collision
+  // rule (see RULE_CHANGES.md 2026-10-03, replacing Crowded Field) --
+  // Circus Maximus's own turn order (lowest Speed first), drifting to an
+  // open neighbor hex or auto-rolling Out-of-Control if fully boxed in.
+  const results = resolveCarCollisions(race, geom, p => {
+    const info = movementInfo[p.id];
+    return { movement: info.total, slipHexes: info.actualSlipHexes };
+  }, true);
+  race.participants.forEach(p => {
+    if (p.out) return;
+    const r = results[p.id], info = movementInfo[p.id];
+    p.cumulative += r.movement;
+    p.lane = r.finalLaneIdx0 + 1;
+    p.hexPos = r.finalHexPos;
+    p.laps = (p.laps || 0) + r.lapsGained;
+    p.history.push({ leg: race.legIndex + 1, movement: r.movement, lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: info.actualSlipHexes, slingshotBonus: info.slingshotBonus, gear: p.gear });
+  });
+  // Race Log: Out-of-Control descriptions rolled this Leg, one entry per
+  // roll (multiple Fumble Levels each get their own line), plus each car's
+  // finishing order this Leg by real track position (cosmetic -- it has no
+  // effect on actual Movement).
+  const ringParams = hexRingParamsForCourse(course);
+  const ordered = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
+  const rows = ordered.map((p, i) => ({
+    id: p.id, name: participantLabel(p), type: p.type, position: i + 1,
+    movement: (ls.cars[p.id] && ls.cars[p.id].gearMovement != null) ? (p.history[p.history.length - 1] || {}).movement || 0 : 0,
+    out: !!p.out
+  }));
+  const outOfControl = [];
+  race.participants.forEach(p => {
+    const car = ls.cars[p.id];
+    (car.outOfControlRolls || []).forEach(roll => outOfControl.push({ name: participantLabel(p), text: roll.text }));
+  });
+  race.log.push({ legIndex: race.legIndex, rows, outOfControl });
+
+  // The race has no fixed Leg count -- it ends the moment any racer
+  // completes the required laps, or every Hero is destroyed.
+  const someoneFinished = race.participants.some(p => !p.out && (p.laps || 0) >= course.laps);
+  const heroesLeft = race.participants.some(p => p.type === "hero" && !p.out);
+  if (someoneFinished || !heroesLeft) {
+    race.finished = true;
+  } else {
+    race.legIndex += 1;
+    initLegState(race);
+  }
+  saveState();
+}
+
+/* ============================== UI ============================== */
+let CURRENT_TAB = "hangar";
+function setTab(tab) { CURRENT_TAB = tab; render(); }
+function render() {
+  document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === CURRENT_TAB));
+  const root = document.getElementById("view");
+  if (CURRENT_TAB === "introduction") root.innerHTML = renderIntroduction();
+  else if (CURRENT_TAB === "hangar") root.innerHTML = renderHangarBay();
+  else if (CURRENT_TAB === "course") root.innerHTML = renderCourse();
+  else if (CURRENT_TAB === "race") root.innerHTML = renderRace();
+  else if (CURRENT_TAB === "instructions") root.innerHTML = renderInstructions();
+  else root.innerHTML = renderReference();
+}
+
+/* ---------- Hangar Bay: build cars directly (no separate Ship Class layer --
+   see RULE_CHANGES.md 2026-10-03: a car is just six numbers now, there's no
+   complex stat block worth templating separately from the Ship itself). ---------- */
+function renderHangarBay() {
+  let html = `<section class="card"><h2>Ships</h2>
+    <div class="row"><button onclick="App.addShip()">+ Add Ship</button>
+    <label>Division <select onchange="App.setHangarAddDivision(this.value)">
+      ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === (STATE._hangarAddDivision || "Comet") ? "selected" : ""}>${d} (Tier ${GDATA.DIVISION_TIER[d]})</option>`).join("")}
+    </select></label>
+    <button class="ghost" onclick="App.randomShipName()">🎲 Name Idea</button> <span id="nameIdea" class="muted"></span></div>`;
+  if (!STATE.ships.length) html += `<p class="muted">No ships yet.</p>`;
+  STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
+  GDATA.DIVISIONS.forEach(div => {
+    const ships = STATE.ships.filter(s => s.division === div);
+    const collapsed = !!STATE._hangarDivCollapse[div];
+    html += `<div class="divgroup"><div class="divhead" onclick="App.toggleHangarDiv('${div}')">
+      <button class="ghost collapse-btn" tabindex="-1">${collapsed ? "▸" : "▾"}</button>
+      <b>${div}</b> <span class="muted">Tier ${GDATA.DIVISION_TIER[div]} · ${ships.length} ${ships.length === 1 ? "ship" : "ships"}</span></div>`;
+    if (!collapsed) {
+      html += `<div class="divbody">`;
+      if (!ships.length) html += `<p class="muted">No ${div} ships yet.</p>`;
+      ships.forEach(ship => { html += renderShipCard(ship); });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  });
+  html += `</section>`;
+  return html;
+}
+const STAT_LABEL = { speed: "Speed", health: "Health", armor: "Armor", attack: "Attack", damage: "Damage", skill: "Skill" };
+function renderShipCard(ship) {
+  const tier = carTier(ship.division);
+  const collapsed = !!ship._collapsed;
+  const remaining = buildPointsRemaining(ship);
+  let html = `<div class="subcard">
+    <div class="row">
+      <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipCollapse('${ship.id}')">${collapsed ? "▸" : "▾"}</button>
+      ${iconThumbImg(ship)}
+      <input class="name-input" value="${esc(ship.name)}" onchange="App.updateShip('${ship.id}','name',this.value)">
+      ${collapsed ? "" : `<button class="ghost" title="Random ship name" onclick="App.rerollShipName('${ship.id}')">🎲</button>`}
+      <label>Division
+        <select onchange="App.updateShipDivision('${ship.id}',this.value)">
+          ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === ship.division ? "selected" : ""}>${d}</option>`).join("")}
+        </select></label>
+      <span class="tag">Tier ${tier}</span>
+      <span class="tag">Crew ${ship.crew.length}/${tierCrewCount(tier)}</span>
+      <span class="tag ${remaining < 0 ? "danger" : ""}">${remaining} build pt${remaining === 1 ? "" : "s"} left</span>
+      <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
+    </div>`;
+  if (!collapsed) {
+    html += `<table class="mktable shiptable"><tr>${CAR_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
+      ${CAR_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="${statBase(s, tier)}" value="${ship[s]}" onchange="App.updateShipStat('${ship.id}','${s}',this.value)">`)} <span class="muted">(${GDATA.STAT_COSTS[s]}pt)</span></td>`).join("")}
+    </tr></table>`;
+    html += `<div class="row" style="align-items:flex-start"><b>Crew</b><div style="flex:1;min-width:0">
+      <p class="muted" style="margin:0 0 6px">Flavor only -- crew has no stats of its own; the ship's Skill above is what rolls.</p>
+      ${ship.crew.map((name, i) => `<div class="row" style="margin:2px 0">
+        <input value="${esc(name)}" onchange="App.updateCrewName('${ship.id}',${i},this.value)">
+        <button class="ghost" title="Random name" onclick="App.rerollCrewName('${ship.id}',${i})">🎲</button>
+      </div>`).join("")}
+    </div></div>`;
+    html += renderShipIconPicker(ship);
+  }
+  html += `</div>`;
+  return html;
+}
+function renderShipIconPicker(ship) {
+  const used = usedShipIconKeys(ship.id);
+  const swatches = GDATA.SHIP_ICON_COLORS.flatMap(color => GDATA.SHIP_ICON_NUMBERS.map(num => {
+    const selected = ship.iconColor === color && ship.iconNumber === num;
+    const takenByOther = used.has(`${ship.division}|${color}|${num}`) && !selected;
+    const cls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
+    const title = takenByOther ? "Already used by another ship" : (selected ? `${color} ${num} (click to remove)` : `${color} ${num}`);
+    const action = takenByOther ? "disabled" : `onclick="App.updateShipIcon('${ship.id}','${selected ? "" : color}','${selected ? "" : num}')"`;
+    return `<button type="button" class="${cls}" ${action} title="${title}"><img src="${esc(shipIconPath(ship.division, num, color))}" alt="${color} ${num}"></button>`;
+  })).join("");
+  return `<div class="row"><b>Icon</b></div><div class="iconpicker">${swatches}</div>`;
+}
+
+/* ---------- Racecourse: Circular Track only -- see RULE_CHANGES.md 2026-10-03.
+   The straight/Legs (non-hex) track type is gone entirely. ---------- */
+function renderCourse() {
+  let html = `<div class="grid2">`;
+  html += `<section class="card"><h2>Design a Racecourse</h2>
+    <div class="formrow"><label>Race Name</label>
+      <input id="cName" placeholder="Roll or type a name">
+      <button class="ghost" onclick="App.rollDraftName()">🎲</button></div>
+    <div class="formrow"><label>Division</label>
+      <select id="cDiv">${GDATA.DIVISIONS.map(d => `<option value="${d}">${d} (Tier ${GDATA.DIVISION_TIER[d]})</option>`).join("")}</select></div>
+    <p class="muted">6 lanes on a real hex grid, each exactly 6 hexes longer per lap than the one inside it (an exact property of hex ring math). Race runs Leg by Leg until a racer completes the required laps -- there's no fixed Leg count.</p>
+    <div class="formrow"><label>Inner Lane Hexes (approx.)</label>${numStepper(`<input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)">`)}</div>
+    <div class="formrow"><label>Laps to Finish</label>${numStepper(`<input id="cLaps" type="number" min="1" value="3">`)}</div>
+    <div class="formrow"><label>Apply Leg Modifier To</label>
+      <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
+    <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
+      <tr><td>Hexes/Lap</td>${laneHexesArray({ lanes: 6, innerHexes: 50 }).map((h, i) => `<td id="laneHexCol${i}">${h}</td>`).join("")}</tr></table>
+    <button onclick="App.generateCourse()">Generate Racecourse</button>
+  </section>`;
+
+  html += `<section class="card"><h2>Saved Racecourses</h2>`;
+  if (!STATE.courses.length) html += `<p class="muted">None yet — generate one on the left.</p>`;
+  STATE.courses.forEach(c => {
+    html += `<div class="subcard">
+      <div class="row"><b>${esc(c.name)}</b> <span class="tag">${c.division}</span>
+        <span class="tag">${c.lanes} lanes, inner ~${c.innerHexes} hexes</span> <span class="tag">${c.laps} laps</span>
+        <span class="muted">Legs are rolled fresh each race</span>
+        <button class="danger" onclick="App.deleteCourse('${c.id}')">Delete</button></div>
+    </div>`;
+  });
+  html += `</section></div>`;
+  return html;
+}
+
+/* ---------- Race Setup ---------- */
+function renderRaceSetup() {
+  let html = `<section class="card"><h2>Set Up a Race</h2>`;
+  if (!STATE.courses.length) { html += `<p class="muted">Create a racecourse first (Racecourse tab).</p></section>`; return html; }
+  if (!STATE.ships.length) { html += `<p class="muted">Build at least one ship first (Hangar Bay tab).</p></section>`; return html; }
+  let courseId = STATE._raceSetupCourse;
+  if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses[0].id;
+  const course = getCourse(courseId);
+  const division = course.division;
+  STATE._raceSetupShips = STATE._raceSetupShips || [];
+  html += `<div class="formrow"><label>Racecourse</label><select id="raceCourseSel" onchange="App.setRaceSetupCourse(this.value)">
+    ${STATE.courses.map(c => `<option value="${c.id}" ${c.id === courseId ? "selected" : ""}>${esc(c.name)} (${c.division}, ${c.laps} laps)</option>`).join("")}
+  </select></div>`;
+  html += `<p class="muted">${course.lanes} lanes, inner lane ~${course.innerHexes} hexes around, ${course.laps} laps to finish. Ships are assigned a starting lane automatically; may Slip a lane during the race.</p>`;
+  const eligible = STATE.ships.filter(s => s.division === division);
+  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division only)</span></label><div>
+    ${eligible.length ? eligible.map(s => `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)}</label>`).join("")
+      : `<span class="muted">No ${division} Division ships built yet — build one in the Hangar Bay and set its Division to ${division}.</span>`}
+  </div></div>`;
+  html += `<div class="formrow" style="align-items:flex-start"><label>NPC Racers</label><div>
+    <div class="row">
+      <input id="npcName" placeholder="NPC name"><button class="ghost" title="Random ship name" onclick="App.rollNpcName()">🎲</button>
+      <label>Aggression ${numStepper(`<input id="npcAggression" type="number" min="1" max="10" value="${STATE._draftNpcAggression || 5}" style="width:48px">`)}</label>
+      <button class="ghost" title="Randomize Aggression" onclick="App.randomizeDraftNpcAggression()">🎲</button>
+      <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
+    </div>
+    <p class="muted" style="margin:0 0 6px">NPCs are full cars built the same way a Hero's ship is (same Division/Tier budget, spent evenly). Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
+    <div id="npcList">${(STATE._draftNpcs || []).map((n, i) => `<span class="tag">${esc(n.name)} <span class="muted">(Aggr ${n.aggression})</span> <a href="#" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join(" ")}</div>
+  </div></div>`;
+  html += `<button onclick="App.beginRace()">Start Race</button></section>`;
+  return html;
+}
+
+/* ---------- Standings ---------- */
 function renderStandings(race) {
   const course = getCourse(race.courseId);
-  const circular = course.trackType === "circular";
-  const ringParams = circular ? hexRingParamsForCourse(course) : null;
-  const maxPossible = Math.max(1, course.legs.length * race.participants.length);
+  const ringParams = hexRingParamsForCourse(course);
   const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
   let html = `<section class="card"><div class="row spread"><h3>Standings</h3>
     <div>
@@ -2390,637 +1231,256 @@ function renderStandings(race) {
       <button id="raceReplayBtn" class="ghost" ${legsCompleted ? "" : "disabled"} onclick="App.playRaceReplay(false)">▶ Show Entire Race</button>
     </div>
   </div>`;
-  if (circular) html += `<div class="circtrack-wrap" id="circtrackWrap">${renderCircularTrackSvg(race, course)}</div>`;
+  html += `<div class="circtrack-wrap" id="circtrackWrap">${renderCircularTrackSvg(race, course)}</div>`;
   html += `<div class="board" id="standingsBoard">`;
-  // On a Circular Track, list racers in actual running order (1st to last by
-  // real track position), and size each bar by that same real position --
-  // not cumulative Movement, which (see trackProgress()) can diverge from
-  // where a ship actually sits once lane length, free Slip lane changes, and
-  // Slingshot bonus Movement are in the mix. Straight/Legs courses keep
-  // participant order and their own cumulative score (no single shared
-  // "race distance" to normalize bars against the same way).
-  const ordered = circular ? [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams)) : race.participants;
+  // Racers are listed 1st to last by real track position, and each bar is
+  // sized by that same real position -- not cumulative Movement, which can
+  // diverge from where a car actually sits (see trackProgress()).
+  const ordered = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
   ordered.forEach(p => {
-    const icon = p.type === "hero" ? getShip(p.shipId) : p;
     const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
-    const pct = circular
-      ? Math.min(100, Math.round((trackProgress(p, ringParams) / (course.laps * 6)) * 100))
-      : Math.min(100, Math.round((p.cumulative / maxPossible) * 100));
-    const iconDiv = iconDivisionOf(icon);
-    const iconImg = icon && icon.iconColor && icon.iconNumber && iconDiv
-      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(iconDiv, icon.iconNumber, icon.iconColor))}" style="left:${pct}%" title="${esc(iconDiv)} ${esc(icon.iconColor)} ${esc(icon.iconNumber)}">`
+    const pct = Math.min(100, Math.round((trackProgress(p, ringParams) / (course.laps * 6)) * 100));
+    const div = p.type === "hero" ? getShip(p.shipId).division : p.iconDivision;
+    const iconImg = p.iconColor && p.iconNumber && div
+      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(div, p.iconNumber, p.iconColor))}" style="left:${pct}%" title="${esc(div)} ${esc(p.iconColor)} ${esc(p.iconNumber)}">`
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
-    const circTag = circular ? ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}` : "";
-    // NPC Aggression is public knowledge (see RULE_CHANGES.md) -- shown
-    // wherever else a racer's other public info (lane, lap, Initiative) is.
+    const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated Maneuvers and Slip">Aggr ${p.aggression || 5}</span>` : "";
-    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(icon)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
+    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
           <div class="boardbar"><div class="boardfill${p.out ? " dead" : ""}" id="boardfill-${p.id}" style="width:${pct}%"></div></div>
           ${iconImg}
         </div>
       </div>
-      <span class="boardpts" id="boardpts-${p.id}">${circular ? "" : p.cumulative}</span></div>`;
+      <span class="boardpts" id="boardpts-${p.id}"></span></div>`;
   });
   html += `</div></section>`;
   return html;
 }
-/* UI only, no mechanics affected (see APP_CHANGES.md): each phase card can be
-   collapsed to its header via the button below, purely manually -- it never
-   collapses on its own. The "Done" tag is just a status hint. */
-function phaseIsComplete(race, key) {
-  const heroes = activeHeroes(race);
-  const ls = race.legState;
-  if (key === "decl") return ls.declLocked;
-  if (key === "phaseI" || key === "phaseII") return heroes.every(p => p.out || !!ls.perShip[p.id].resistance);
-  return heroes.every(p => { const ps = ls.perShip[p.id]; return p.out || ps.autoLast || !!ps.results[key]; });
-}
-function renderPhaseCardOpen(race, key, title) {
-  const ls = race.legState;
-  // Defensive: a race already in progress before phase collapsing shipped has
-  // no phaseCollapsed field on its legState -- without this, opening the Race
-  // tab on such a race throws and the whole tab silently fails to render.
-  ls.phaseCollapsed = ls.phaseCollapsed || {};
-  const complete = phaseIsComplete(race, key);
-  const collapsed = !!ls.phaseCollapsed[key];
-  const header = `<section class="card"><h3>
-    <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.togglePhaseCollapse('${key}')">${collapsed ? "▸" : "▾"}</button>
-    ${title}${complete ? ' <span class="tag success">Done</span>' : ""}
-  </h3>`;
-  return { header, collapsed };
-}
-function renderFinalStandings(race) {
+
+/* ---------- Race ---------- */
+function renderRace() {
+  if (!STATE.race) return renderRaceSetup();
+  const race = STATE.race;
   const course = getCourse(race.courseId);
-  const circular = course.trackType === "circular";
-  const sorted = [...race.participants].sort((a, b) => b.cumulative - a.cumulative);
-  let html = `<ol class="finallist">`;
-  sorted.forEach((p, i) => {
-    const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
-    const oocTag = p.type === "hero" && p.out ? ` <span class="tag danger">OOC</span>` : "";
-    const detail = circular ? `${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} hexes` : `${p.cumulative} pts`;
-    html += `<li>${i === 0 ? "🏆 " : ""}<b>${esc(label)}</b> — ${detail}${oocTag}</li>`;
-  });
-  html += `</ol>`;
+  if (!course) return `<p class="muted">Course for this race was deleted. <button onclick="App.abandonRace()">Clear Race</button></p>`;
+  let html = "";
+  html += `<div class="row spread"><h2><span style="color:var(--muted)">${esc(course.division)}-Division</span> ${esc(course.name)}</h2>
+    <button class="danger" onclick="App.abandonRace()">Abandon Race</button></div>`;
+  html += renderStandings(race);
+  if (race.finished) {
+    html += `<section class="card winner"><h2>🏁 Race Complete</h2>${renderFinalStandings(race)}
+      <button onclick="App.abandonRace()">Start a New Race</button></section>`;
+    html += renderLog(race);
+    return html;
+  }
+  const leg = race.legState.leg;
+  const naturalTN = legNaturalTN(leg);
+  const tnTag = naturalTN > leg.finalTN ? ` <span class="tag">capped from ${naturalTN}</span>` : "";
+  html += `<section class="card"><h2>Leg ${race.legIndex + 1}</h2>
+    <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
+  </section>`;
+  html += renderDeclarations(race);
+  if (race.legState.declLocked) html += renderResolve(race);
+  html += renderLog(race);
   return html;
 }
 
-// Abbreviated position labels for the Declarations table's cramped Maneuver
-// column only -- POS_LABEL's full names ("Navigator", "Spotter") run too
-// wide once the target name is appended too.
-const POS_ABBR = { pilot: "Pil", navigator: "Nav", spotter: "Spt", engineer: "Eng" };
-function declaredManeuversText(ps, participants) {
-  const targetName = tid => {
-    const t = participants && participants.find(p => p.id === tid);
-    if (!t) return "?";
-    return t.type === "hero" ? shipName(t.shipId) : t.name;
-  };
-  const parts = POSITIONS.filter(pos => ps.maneuvers && ps.maneuvers[pos]).map(pos => {
-    // Heroes track one target list per position; NPCs share a single target
-    // across every position that rolled a Maneuver this Leg (see autoDeclareNpc()).
-    const targetIds = ps.maneuverTargets ? (ps.maneuverTargets[pos] || []) : (ps.maneuverTargetId ? [ps.maneuverTargetId] : []);
-    const names = targetIds.map(targetName);
-    return `${POS_ABBR[pos]}: ${ps.maneuvers[pos]}${names.length ? ` (${names.join(", ")})` : ""}`;
-  });
-  return parts.length ? parts.join("<br>") : "—";
-}
-// Declarations table's Racer column: the icon is tall enough for three lines
-// of text beside it, so the name (split at the first word) and any short
-// note (NPC, Aggression, etc.) each get their own line instead of running
-// together on one wide line -- lets the column itself stay narrow.
-function renderRacerCell(obj, noteText) {
-  const words = (obj.name || "").trim().split(/\s+/).filter(Boolean);
-  const line1 = esc(words[0] || "");
-  const line2 = esc(words.slice(1).join(" "));
-  return `<td class="racercell">${iconThumbImg(obj)}<span class="racerlines"><span>${line1}</span><span>${line2}</span><span class="muted">${noteText ? esc(noteText) : ""}</span></span></td>`;
-}
+/* ---------- Declarations ---------- */
 function renderDeclarations(race) {
   const ls = race.legState;
-  const course = getCourse(race.courseId);
-  const circular = course.trackType === "circular";
-  const { header, collapsed } = renderPhaseCardOpen(race, "decl", "Phase 0: Declare Intentions");
+  const { header, collapsed } = renderPhaseCardOpen(race, "decl", "Declare Intentions");
   let html = header;
   if (ls.declLocked) {
     if (!collapsed) {
-      // Columns build left-to-right into Pilot Total at the far right:
-      // Pilot Total = Net Leg Acc + Crowded D + Slip A/D + Maneuver Net, and
-      // Maneuver Net = Maneuver Rec'd + Maneuver Inst'd. All four of
-      // Maneuver Rec'd / Maneuver Inst'd / Maneuver Net / Pilot Total are the
-      // PILOT position's own numbers specifically (not summed across all 4
-      // crew positions) -- that's what the Pilot's own Performance roll
-      // actually uses (see pilotPreviewTotal()). Other positions' own
-      // Maneuver received/instigated amounts are tracked on their own cards
-      // below, not repeated here.
-      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Accel</th>${circular ? "<th>Crowded D</th>" : ""}<th>Net Leg Acc</th>${circular ? "<th>Lane</th><th>Slip A/D</th>" : ""}<th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Maneuver Rec'd + Maneuver Inst'd, the Pilot's own.">Maneuver Net</th><th title="Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net -- the Pilot's own running total. Not the Pilot's final net: Conditions/Resistance/grants happen in later phases.">Pilot Total</th></tr>`;
-      Object.entries(ls.perShip).forEach(([pid, ps]) => {
-        const p = race.participants.find(x => x.id === pid);
-        if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
-        const ship = getShip(p.shipId);
-        const slipTag = ps.slip ? ` <span class="tag">Slipped ${ps.slip} ${ps.slipHexes} (${netLabel(ps.slipAdvantage || 0)})</span>` : "";
-        const crowdedCell = circular ? `<td>${netLabel(ps.crowdedFieldD || 0)}</td>` : "";
-        const laneSlipCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(ps.slipAdvantage || 0)}</td>` : "";
-        const manRecvPilot = (ps.maneuverReceivedByPos && ps.maneuverReceivedByPos.pilot) || 0;
-        const manInstPilot = (ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos.pilot) || 0;
-        const maneuverNet = -manRecvPilot - manInstPilot;
-        html += `<tr>${renderRacerCell(ship, "")}<td>${ps.accel}-G</td>${crowdedCell}<td>${netLabel(ps.netLegAcc)}</td>${laneSlipCell}
-          <td>${declaredManeuversText(ps, race.participants)}</td><td>${netLabel(-manRecvPilot)}</td><td>${netLabel(-manInstPilot)}</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotPreviewTotal(ps))}</td></tr>`;
-      });
-      Object.entries(ls.npcState).forEach(([pid, ns]) => {
-        const p = race.participants.find(x => x.id === pid);
-        if (p.out && p.outLeg !== race.legIndex) return; // wreck stays until the next Leg begins
-        // NPC automation (see RULE_CHANGES.md): Aggression is public
-        // knowledge, shown right on the name. NPCs have no Net Leg Acc,
-        // Crowded D, or Maneuver Inst'd self-cost of their own (no
-        // per-position Task Checks to land on -- see APP_CHANGES.md), so
-        // those stay "--"; Pilot Total still works out via the same formula
-        // to the Slip A/D minus Maneuver Rec'd total that actually drives
-        // its single Performance roll (see rollNpc()).
-        const slipTag = ns.slip ? ` <span class="tag">Slipped ${ns.slip} ${ns.slipHexes} (${netLabel(ns.slipAdvantage || 0)})${ns.huntedThisLeg ? " 🎯" : ""}</span>` : "";
-        const crowdedCell = circular ? `<td>—</td>` : "";
-        const laneSlipCell = circular ? `<td>${p.lane}${slipTag}</td><td>${netLabel(ns.slipAdvantage || 0)}</td>` : "";
-        const maneuverNet = -(ns.maneuverReceivedD || 0);
-        const pilotTotal = (ns.slipAdvantage || 0) + maneuverNet;
-        html += `<tr>${renderRacerCell(p, `NPC, Aggr ${p.aggression || 5}`)}<td>—</td>${crowdedCell}<td>—</td>${laneSlipCell}<td>${declaredManeuversText(ns, race.participants)}</td><td>${netLabel(-(ns.maneuverReceivedD || 0))}</td><td>—</td><td>${netLabel(maneuverNet)}</td><td>${netLabel(pilotTotal)}</td></tr>`;
+      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Gear</th><th>Slip A/D</th><th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Slip A/D + Maneuver Rec'd + Maneuver Inst'd -- the net fed into this car's Skill Check, if one is triggered.">Net</th></tr>`;
+      race.participants.forEach(p => {
+        if (p.out && p.outLeg !== race.legIndex) return;
+        const car = ls.cars[p.id];
+        const slipTag = car.slip ? ` <span class="tag">Slipped ${car.slip} ${car.slipHexes} (${netLabel(car.slipAdvantage || 0)})</span>` : "";
+        const maneuverTarget = race.participants.find(x => x.id === car.maneuverTarget);
+        const maneuverText = car.maneuver ? `${car.maneuver}${maneuverTarget ? ` (${participantLabel(maneuverTarget)})` : ""}` : "—";
+        html += `<tr>${renderRacerCell(p)}<td>${p.gear}${car.gearChange ? ` (${car.gearChange > 0 ? "+" : ""}${car.gearChange})` : ""}</td><td>${p.lane}${slipTag}</td>
+          <td>${maneuverText}</td><td>${netLabel(-car.maneuverReceivedD)}</td><td>${netLabel(-car.maneuverInstigatedD)}</td><td>${netLabel(car.net)}</td></tr>`;
       });
       html += `</table>`;
-      html += `<p class="muted" style="margin:4px 0 0">Pilot Total = Net Leg Acc${circular ? " + Crowded D + Slip A/D" : ""} + Maneuver Net, all specific to the Pilot position. Doesn't include Phase I Conditions, Resistance, or Engineer/Spotter/Navigator grants, which are tracked in their own cards below.</p>`;
     }
     html += `</section>`;
     return html;
   }
-  const heroes = activeHeroes(race);
-  const allDeclared = heroes.every(p => ls.perShip[p.id].declared);
+  const heroes = race.participants.filter(p => p.type === "hero" && (!p.out || p.outLeg === race.legIndex));
+  const allDeclared = heroes.every(p => ls.cars[p.id].declared);
   html += `<p class="muted">Intentions are declared privately, one ship at a time. Once every ship has declared, lock to reveal them all at once.</p>`;
   html += `<table class="mktable"><tr><th>Ship</th><th>Status</th><th></th></tr>`;
   heroes.forEach(p => {
-    const ps = ls.perShip[p.id];
-    const ship = getShip(p.shipId);
-    html += `<tr><td>${iconThumbImg(ship)} ${esc(ship.name)}</td>
-      <td>${ps.declared ? '<span class="tag success">Declared</span>' : '<span class="tag">Not yet declared</span>'}</td>
-      <td><button class="${ps.declared ? "ghost" : ""}" onclick="App.openDeclModal('${p.id}')">${ps.declared ? "Review / Edit" : "Declare Intentions"}</button></td></tr>`;
+    const car = ls.cars[p.id];
+    html += `<tr><td>${iconThumbImg(getShip(p.shipId))} ${esc(shipName(p.shipId))}</td>
+      <td>${car.declared ? '<span class="tag success">Declared</span>' : '<span class="tag">Not yet declared</span>'}</td>
+      <td><button class="${car.declared ? "ghost" : ""}" onclick="App.openDeclModal('${p.id}')">${car.declared ? "Review / Edit" : "Declare Intentions"}</button></td></tr>`;
   });
   html += `</table>`;
   html += `<button ${allDeclared ? "" : "disabled"} onclick="App.lockDecl()">Lock Declarations (Reveal)</button>`;
-  if (!allDeclared) {
-    html += ` <span class="muted">Waiting on: ${heroes.filter(p => !ls.perShip[p.id].declared).map(p => esc(shipName(p.shipId))).join(", ")}</span>`;
-  }
+  if (!allDeclared) html += ` <span class="muted">Waiting on: ${heroes.filter(p => !ls.cars[p.id].declared).map(p => esc(shipName(p.shipId))).join(", ")}</span>`;
   html += `</section>`;
-  if (STATE._openDeclFor && ls.perShip[STATE._openDeclFor]) html += renderDeclModal(race, STATE._openDeclFor);
+  if (STATE._openDeclFor && ls.cars[STATE._openDeclFor]) html += renderDeclModal(race, STATE._openDeclFor);
   return html;
 }
-
+function renderRacerCell(p) {
+  const name = p.type === "hero" ? shipName(p.shipId) : p.name;
+  const icon = p.type === "hero" ? getShip(p.shipId) : p;
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const line1 = esc(words[0] || "");
+  const line2 = esc(words.slice(1).join(" "));
+  const note = p.type === "npc" ? `NPC, Aggr ${p.aggression || 5}` : "";
+  return `<td class="racercell">${iconThumbImg(icon)}<span class="racerlines"><span>${line1}</span><span>${line2}</span><span class="muted">${esc(note)}</span></span></td>`;
+}
 function renderDeclModal(race, pid) {
-  const ps = race.legState.perShip[pid];
+  const ls = race.legState, car = ls.cars[pid];
   const p = race.participants.find(x => x.id === pid);
-  const ship = getShip(p.shipId);
-  const cls = getShipClass(ship.shipClass);
   const course = getCourse(race.courseId);
-  // House rule (see RULE_CHANGES.md): on a Circular Track, a Racing Maneuver
-  // can only target a ship within MANEUVER_RANGE_HEXES hexes -- see
-  // hexesWithinManeuverRange(). Straight/Legs courses have no hexes, so
-  // targeting stays unrestricted there.
-  const maneuverGeom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-  const others = race.participants.filter(x => x.id !== pid && !x.out && (!maneuverGeom || hexesWithinManeuverRange(maneuverGeom, p, x))); // can't target a ship that's out of the race, or (Circular Track) out of range
-  const crewIds = [...new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean))];
-  // Circular Track Slip (see RULE_CHANGES.md): a Slip costs no Movement
-  // Points, but its magnitude is capped by both how many lanes are
-  // physically available in that direction AND the declared Acceleration --
-  // a ship can't Slip more hexes than its own declared G rate this Leg.
-  // Direction availability (whether "Slip Left"/"Slip Right" even appears)
-  // stays lane-only; only the magnitude cap for the chosen direction also
-  // considers Accel.
-  const slipMaxLeft = p.lane - 1;
-  const slipMaxRight = course.lanes - p.lane;
-  const slipMax = ps.slip === "left" ? Math.min(slipMaxLeft, ps.accel) : ps.slip === "right" ? Math.min(slipMaxRight, ps.accel) : 0;
-  // Current effective Pilot Mk (see APP_CHANGES.md/user request): shown here so
-  // the Pilot can see any Disadvantage/Advantage already carried into this Leg
-  // (e.g. from a prior Leg's Fumble, or Crowded Field from how the last Leg
-  // ended) BEFORE deciding what Acceleration to declare. Resistance/grants/
-  // Maneuvers-received aren't rolled/chosen yet at Declare time, and
-  // netLegAcc/slipAdvantage aren't computed until lockDeclarations() (they
-  // depend on the Accel/Slip being chosen in this very modal), so only
-  // carried Conditions plus the already-known crowdedFieldD go in here.
-  const disp = computeShipDisplay(ship);
-  const pilotNet = netForPosition(ps, disp, "pilot", ps.crowdedFieldD || 0);
+  const geom = circTrackGeometry(course);
+  const others = race.participants.filter(x => x.id !== pid && !x.out && hexesWithinManeuverRange(geom, p, x));
+  const slipMaxLeft = p.lane - 1, slipMaxRight = course.lanes - p.lane;
+  const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
+  const slipMax = car.slip === "left" ? slipMaxLeft : car.slip === "right" ? slipMaxRight : 0;
   return `<div class="modal-overlay" onclick="if(event.target===this) App.closeDeclModal()">
     <div class="modal-box">
-      <div class="row spread"><h3>${iconThumbImg(ship)} ${esc(ship.name)} — Declare Intentions</h3><button class="ghost" onclick="App.closeDeclModal()">✕</button></div>
-      <p class="muted">Only this ship's crew should be looking right now.</p>
-      <table class="mktable"><tr><th>Crewman</th><th>Positions</th><th>Resistance Skill Mk</th><th>Current Leg Pilot Mk</th></tr>
-        ${crewIds.map(cid => {
-          const crewman = getCrew(cid);
-          const heldPositions = POSITIONS.filter(pos => ship.assignments[pos] === cid);
-          return `<tr><td>${esc(crewman.name)}</td><td>${heldPositions.map(x => POS_LABEL[x]).join(", ")}</td><td>${formatMk(crewman.skills.resistance.score, crewman.skills.resistance.adv)}</td><td>${heldPositions.includes("pilot") ? formatMk(disp.pilot.finalScore, pilotNet) : "—"}</td></tr>`;
-        }).join("")}
-      </table>
-      <div class="formrow"><label>Acceleration (G)</label>
-        ${numStepper(`<input type="number" min="1" max="${effectiveMaxThrust(p, cls)}" value="${ps.accel}" onchange="App.setDecl('${pid}','accel',this.value)">`)}
-        <span class="muted">/ ${effectiveMaxThrust(p, cls)}-G max${effectiveMaxThrust(p, cls) < cls.maxThrust ? " (reduced by Fumble)" : ""}</span></div>
-      ${course.trackType === "circular" ? `<div class="formrow"><label>Slip (currently Lane ${p.lane})</label>
-        <select onchange="App.setDecl('${pid}','slip',this.value)">
-          <option value="" ${!ps.slip ? "selected" : ""}>No change</option>
-          ${slipMaxLeft > 0 ? `<option value="left" ${ps.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
-          ${slipMaxRight > 0 ? `<option value="right" ${ps.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
+      <div class="row spread"><h3>${iconThumbImg(getShip(p.shipId))} ${esc(shipName(p.shipId))} — Declare Intentions</h3><button class="ghost" onclick="App.closeDeclModal()">✕</button></div>
+      <div class="formrow"><label>Gear (currently ${p.gear})</label>
+        <select onchange="App.setDecl('${pid}','gearChange',this.value)">
+          <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down (-1)</option>
+          <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
+          <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
         </select>
-        ${ps.slip ? ` ${numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, ps.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px">`)} hex(es) / ${slipMax} max` : ""}
+        <span class="muted">-> Gear ${newGear} this Leg (${newGear === 0 ? "no movement" : `${GDATA.GEAR_DICE[newGear].n}D${GDATA.GEAR_DICE[newGear].d} + Speed`})</span></div>
+      <div class="formrow"><label>Slip (currently Lane ${p.lane})</label>
+        <select onchange="App.setDecl('${pid}','slip',this.value)">
+          <option value="" ${!car.slip ? "selected" : ""}>No change</option>
+          ${slipMaxLeft > 0 ? `<option value="left" ${car.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
+          ${slipMaxRight > 0 ? `<option value="right" ${car.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
+        </select>
+        ${car.slip ? ` ${numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px">`)} hex(es) / ${slipMax} max` : ""}
       </div>
-      <p class="muted" style="margin:-4px 0 10px">Your Slip hexes are worked in with your ordinary movement wherever it covers the most real ground for the Leg, not always first or last. Touching a curve anywhere along the way grants +1 Advantage per hex outward or -1 Disadvantage per hex inward.</p>` : ""}
-      <div class="formrow" style="align-items:flex-start"><label>Racing Maneuvers</label><div style="flex:1;min-width:0">
-        <p class="muted" style="margin:0 0 8px">Each position may run one Maneuver against the <b>same position</b> on chosen ships.</p>
-        ${POSITIONS.map(pos => {
-          const mvName = (ps.maneuvers && ps.maneuvers[pos]) || "";
-          const posMvs = GDATA.MANEUVERS.filter(m => (m.position || "pilot") === pos);
-          const tgts = (ps.maneuverTargets && ps.maneuverTargets[pos]) || [];
-          return `<div class="manrow">
-            <div class="manhead"><span class="manpos">${POS_LABEL[pos]}</span>
-              <select class="monoselect" onchange="App.setPosManeuver('${pid}','${pos}',this.value)">
-                <option value="">none</option>
-                ${posMvs.map(m => `<option value="${m.name}" ${mvName === m.name ? "selected" : ""}>${padNbsp(m.name, 14)}${padNbsp(m.disadv === "Tier" ? "Tier" : m.disadv + "D", 6)}${m.desc}</option>`).join("")}
-              </select>
-            </div>
-            ${mvName ? `<div class="mantargets">
-              ${others.length ? `<div class="row" style="margin:4px 0 4px"><span class="muted">Targets:</span> <button class="ghost" onclick="App.togglePosAllTargets('${pid}','${pos}')">${others.every(o => tgts.includes(o.id)) ? "Clear All" : "Select All"}</button></div>
-              <div class="chkgrid">${others.map(o => `<label class="chkline"><input type="checkbox" ${tgts.includes(o.id) ? "checked" : ""} onchange="App.togglePosTarget('${pid}','${pos}','${o.id}',this.checked)"> ${esc(participantLabel(o))}</label>`).join("")}</div>`
-                : `<span class="muted">no other racers to target</span>`}
-            </div>` : ""}
-          </div>`;
-        }).join("")}
+      <p class="muted" style="margin:-4px 0 10px">The first hex of Slip is free; any more hexes of Slip, high gear, your path crossing or landing on another car's hex, or running/receiving a Maneuver each trigger a Skill Check this Leg. Two cars can never end a Leg on the same hex -- an unavoidable collision drifts you to an open neighboring hex, or (if fully boxed in) rolls you straight onto the Out-of-Control Chart. Touching a curve anywhere along the way grants +1 Advantage per hex outward or -1 Disadvantage per hex inward.</p>
+      <div class="formrow" style="align-items:flex-start"><label>Maneuver</label><div style="flex:1;min-width:0">
+        <select class="monoselect" onchange="App.setManeuver('${pid}',this.value)">
+          <option value="">none</option>
+          ${GDATA.MANEUVERS.map(m => `<option value="${m.name}" ${car.maneuver === m.name ? "selected" : ""}>${padNbsp(m.name, 10)}${m.desc}</option>`).join("")}
+        </select>
+        ${car.maneuver ? `<div class="chkgrid" style="margin-top:6px">${others.length ? others.map(o => `<label class="chkline"><input type="radio" name="mantarget-${pid}" ${car.maneuverTarget === o.id ? "checked" : ""} onchange="App.setManeuverTarget('${pid}','${o.id}')"> ${esc(participantLabel(o))}</label>`).join("") : `<span class="muted">no other racers in range</span>`}</div>` : ""}
       </div></div>
       <button onclick="App.confirmDecl('${pid}')">I'm Done — Confirm Declaration</button>
     </div>
   </div>`;
 }
+function renderPhaseCardOpen(race, key, title) {
+  const ls = race.legState;
+  ls.phaseCollapsed = ls.phaseCollapsed || {};
+  const collapsed = !!ls.phaseCollapsed[key];
+  const header = `<section class="card"><h3>
+    <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.togglePhaseCollapse('${key}')">${collapsed ? "▸" : "▾"}</button>
+    ${title}
+  </h3>`;
+  return { header, collapsed };
+}
 
-function renderPhaseI(race) {
-  const { header, collapsed } = renderPhaseCardOpen(race, "phaseI", "Phase I — Crew Task Check Modifications");
-  let html = header;
-  if (!collapsed) {
-    activeHeroes(race).forEach(p => {
-      const ship = getShip(p.shipId);
-      const cls = getShipClass(ship.shipClass);
-      const ps = race.legState.perShip[p.id];
-      html += `<div class="subcard"><div class="row">${iconThumbImg(ship)} <b>${esc(ship.name)}</b>${shipStatusTags(p, cls)}`;
-      if (ps.autoLast) html += ` <span class="tag danger">OUT THIS LEG</span>`;
-      html += `</div>`;
-      if (!p.out) {
-        // Per-crewman conditions (like Resistance): checking one applies −1
-        // Disadvantage to every position that crewman holds this Leg.
-        const crewIds = [...new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean))];
-        // Conditions lock explicitly (button) or automatically once Resistance is
-        // rolled -- either way they're fixed for the rest of the Leg.
-        const locked = !!ps.condLocked || !!ps.resistance;
-        const lockReason = ps.resistance ? " (Resistance already rolled.)" : "";
-        html += `<p class="muted" style="margin:4px 0">Check a condition to apply −1 Disadvantage to that crewman's position(s) this Leg.${locked ? ` <b>Locked for this Leg.</b>${lockReason}` : ""}</p>`;
-        html += `<table class="mktable"><tr><th>Crewman</th><th>Positions</th><th>Conditions</th></tr>`;
-        crewIds.forEach(cid => {
-          const crewman = getCrew(cid);
-          const heldPositions = POSITIONS.filter(pos => ship.assignments[pos] === cid);
-          const flags = (ps._condFlags && ps._condFlags[cid]) || {};
-          html += `<tr><td>${esc(crewman ? crewman.name : "?")}</td><td>${heldPositions.map(x => POS_LABEL[x]).join(", ")}</td>
-            <td><div class="condgrid">${GDATA.CONDITIONS.map((c, ci) => `<label class="chkline"><input type="checkbox" ${flags[c.name] ? "checked" : ""} ${locked ? "disabled" : ""} onchange="App.toggleCond('${p.id}','${cid}',${ci},this.checked)"> ${esc(c.name)}</label>`).join("")}</div></td></tr>`;
-        });
-        html += `</table>`;
-        if (!locked) html += `<button onclick="App.lockConditions('${p.id}')">Lock Conditions for this Leg</button>`;
-        else html += `<span class="tag">🔒 Conditions locked</span>`;
+/* ---------- Resolve: gear movement + (if triggered) the Skill Check ---------- */
+function renderResolve(race) {
+  const ls = race.legState;
+  let html = `<section class="card"><h3>Resolve the Leg</h3>`;
+  const active = race.participants.filter(p => !p.out || p.outLeg === race.legIndex);
+  active.forEach(p => {
+    const car = ls.cars[p.id];
+    const label = p.type === "hero" ? shipName(p.shipId) : p.name;
+    html += `<div class="subcard"><div class="row">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p)} <b>${esc(label)}</b>${shipStatusTags(p)}</div>`;
+    if (p.out) { html += `</div>`; return; }
+    html += `<p>Gear ${p.gear}: rolled <b>${car.gearMovement}</b> hex${car.gearMovement === 1 ? "" : "es"} this Leg${car.slipAdvantage ? ` (Slip ${netLabel(car.slipAdvantage)})` : ""}</p>`;
+    if (car.maneuver) {
+      const target = race.participants.find(x => x.id === car.maneuverTarget);
+      if (car.maneuver === "Attack" && car.attackResult) {
+        html += `<p>Attack on ${target ? esc(participantLabel(target)) : "?"}: ${car.attackResult.hit ? `<b>Hit</b> for ${car.attackResult.dmg} HP` : "<b>Miss</b>"}</p>`;
+      } else if (car.maneuver) {
+        html += `<p>${esc(car.maneuver)}${target ? ` on ${esc(participantLabel(target))}` : ""}</p>`;
       }
-      html += `</div>`;
-    });
-  }
-  html += `</section>`;
-  return html;
-}
-
-/* Itemized A/D line for a Resistance check (mirrors legAdSourcesHtml): the
-   crewman's Resistance Advantage/Disadvantage plus −1 per Phase I condition. */
-function resistanceAdSourcesHtml(resAdv, condCount, net) {
-  const items = [];
-  if (resAdv) items.push(`Crew skill ${netLabel(resAdv)}`);
-  if (condCount) items.push(`Conditions ${netLabel(-condCount)}`);
-  return `<p class="mkline"><span class="muted">Leg Advantages/Disadvantages:</span> ${items.length ? items.join(" · ") : "none this Leg"} &nbsp; → net <b>${netLabel(net)}</b></p>`;
-}
-function renderPhaseII(race) {
-  const { header, collapsed } = renderPhaseCardOpen(race, "phaseII", "Phase II — Resist Uncompensated G-Forces");
-  let html = header;
-  if (!collapsed) {
-    activeHeroes(race).forEach(p => {
-      const ship = getShip(p.shipId);
-      const cls = getShipClass(ship.shipClass);
-      const ps = race.legState.perShip[p.id];
-      const uncompensated = Math.max(0, ps.accel - cls.damper);
-      const tn = uncompensated * 3;
-      html += `<div class="subcard"><div class="row">${iconThumbImg(ship)} <b>${esc(ship.name)}</b>${shipStatusTags(p, cls)} <span class="muted">TN ${tn}</span> ${ps.autoLast ? '<span class="tag danger">OUT THIS LEG</span>' : ""}</div>`;
-      if (!p.out) {
-        const crewIds = [...new Set(POSITIONS.map(pos => ship.assignments[pos]).filter(Boolean))];
-        crewIds.forEach(cid => {
-          const crewman = getCrew(cid);
-          if (!crewman) return;
-          const heldPositions = POSITIONS.filter(pos => ship.assignments[pos] === cid);
-          const resScore = crewman.skills.resistance.score;
-          const resAdv = crewman.skills.resistance.adv || 0;
-          const condFlags = (ps._condFlags && ps._condFlags[cid]) || {};
-          const condCount = Object.values(condFlags).filter(Boolean).length;
-          const net = resAdv - condCount;
-          const posLabel = heldPositions.map(x => POS_LABEL[x]).join(", ");
-          html += `<div class="resistrow">`;
-          // Same header shape as the other phase cards' roll blocks.
-          html += `<p class="mkline"><b>${posLabel}:</b> ${esc(crewman.name)} &nbsp; Ship Skill Mk: <b>${formatMk(resScore, resAdv)}</b> &nbsp; Leg Ship Skill Mk: <b>${formatMk(resScore, net)}</b> &nbsp; <span class="muted">vs TN ${tn}</span></p>`;
-          html += resistanceAdSourcesHtml(resAdv, condCount, net);
-          const r = ps.resistance && ps.resistance[cid];
-          if (r) {
-            if (r.skipped) {
-              html += `<p class="muted">No strain (TN ${r.tn}).</p>`;
-            } else if (r.dice) {
-              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (D)");
-              html += `<p>Rolled ${r.dice.join(", ")} → chosen ${r.chosen} + ${r.score} = <b>${r.total}</b> vs TN ${r.tn} → <b>${outcome}</b></p>`;
-            } else {
-              const outcome = r.fumble ? "FUMBLE — passed out!" : (r.pass ? "Success" : "Failed (D)");
-              html += `<p><b>${outcome}</b>${r.total != null ? ` (${r.total} vs ${r.tn})` : ""}</p>`;
-            }
-          }
-          html += `</div>`;
-        });
-        if (!ps.resistance) html += `<button onclick="App.doResistance('${p.id}')">Roll Resistance</button>`;
+    }
+    if (p.type === "hero") {
+      if (!car.triggered) {
+        html += `<p class="muted">No Skill Check needed this Leg.</p>`;
+      } else if (!car.skillCheck) {
+        html += `<p class="muted">Net: <b>${netLabel(car.net)}</b> vs TN ${ls.leg.finalTN}</p>
+          <button onclick="App.doSkillCheck('${p.id}')">Roll Skill Check</button>`;
+      } else {
+        const rc = car.skillCheck;
+        html += `<p>Rolled ${rc.dice.join(", ")} → chosen ${rc.chosen} + ${carStats(p).skill} = <b>${rc.total}</b> vs TN ${rc.tn} → <b>${outcomeLabel(rc)}</b></p>`;
+        const tier = carTier(carDivision(p));
+        const rollsNeeded = rc.fumbleLevels;
+        const rollsDone = car.outOfControlRolls.length;
+        if (rollsDone < rollsNeeded) {
+          html += `<button class="ghost" onclick="App.doOutOfControl('${p.id}')">Roll on Out-of-Control Chart${rollsNeeded > 1 ? ` (${rollsDone + 1} of ${rollsNeeded})` : ""}</button>`;
+        } else {
+          car.outOfControlRolls.forEach((roll, i) => {
+            html += `<p class="fumbletext">${rollsNeeded > 1 ? `<b>Roll ${i + 1} of ${rollsNeeded}:</b> ` : ""}${esc(roll.text)}</p>
+              <p class="muted">Applied: ${describeOutOfControlAffects(roll.applied, tier)}</p>`;
+          });
+        }
       }
-      html += `</div>`;
-    });
-  }
-  html += `</section>`;
-  return html;
-}
-
-/* Compact human-readable summary of a fumble's applied affects (used in the roll block). */
-function describeFumbleAffects(affects, cls) {
-  if (!affects || !affects.length) return "No lasting mechanical effect.";
-  return affects.map(a => {
-    if (a.type === "disadvantage") {
-      return `${POS_LABEL[a.position] || a.position} ${netLabel(-a.levels)} for ${a.legs} Leg${a.legs > 1 ? "s" : ""}`;
+    } else if (car.triggered && car.skillCheck) {
+      const rc = car.skillCheck;
+      html += `<p class="muted">Skill Check: rolled ${rc.dice.join(", ")} → <b>${rc.total}</b> vs TN ${rc.tn} → ${outcomeLabel(rc)}</p>`;
+      if (car.outOfControlRolls.length) car.outOfControlRolls.forEach(roll => { html += `<p class="fumbletext">${esc(roll.text)}</p>`; });
     }
-    if (a.type === "hp") {
-      const dmg = Math.max(0, (cls.tier * a.tierMult) - (cls.dr || 0));
-      return `${dmg} HP damage (Tier ${cls.tier} × ${a.tierMult}${cls.dr ? `, − DR ${cls.dr}` : ""})`;
-    }
-    if (a.type === "accel") {
-      return a.mode === "set"
-        ? `Acceleration reduced to ${a.value}-G (rest of race)`
-        : `−${a.value} to max Acceleration (rest of race)`;
-    }
-    if (a.type === "last") {
-      return `forced to finish last for ${a.legs} Leg${a.legs > 1 ? "s" : ""}`;
-    }
-    return "";
-  }).filter(Boolean).join("; ");
-}
-
-/* Compact per-ship status line shown in every Phase Card header: HP, DESTROYED,
-   Acceleration cap, forced-last, and any active multi-Leg fumble penalties. */
-function shipStatusTags(participant, cls) {
-  if (!participant || participant.type !== "hero") return "";
-  const maxHp = participant.maxHp != null ? participant.maxHp : (cls ? cls.hp : 0);
-  const hp = participant.hp != null ? participant.hp : maxHp;
-  let tags = "";
-  const hpDanger = participant.out || hp < maxHp / 2; // red only below half total HP
-  tags += ` <span class="tag${hpDanger ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
-  if (participant.out) tags += ` <span class="tag danger">OOC — out of race</span>`;
-  if (cls) {
-    const effMax = effectiveMaxThrust(participant, cls);
-    if (effMax < cls.maxThrust) tags += ` <span class="tag danger">Max ${effMax}-G</span>`;
-  }
-  if ((participant.forcedLastLegs || 0) > 0) {
-    tags += ` <span class="tag danger">Forced last (${participant.forcedLastLegs} Leg${participant.forcedLastLegs > 1 ? "s" : ""})</span>`;
-  }
-  const legIndex = STATE.race ? STATE.race.legIndex : 0;
-  (participant.penalties || []).forEach(pen => {
-    const left = penaltyLegsLeft(pen, legIndex);
-    if (left <= 0) return; // window already past
-    const active = legIndex >= pen.startLeg; // in effect this Leg vs. starting next Leg
-    const when = active ? `${left} Leg${left > 1 ? "s" : ""} left` : `next ${left} Leg${left > 1 ? "s" : ""}`;
-    // Show the Advantage/Disadvantage letter (A/D), e.g. "Spotter DD".
-    tags += ` <span class="tag danger">${POS_LABEL[pen.position] || pen.position} ${netLabel(pen.amount)} (${when})</span>`;
+    html += `</div>`;
   });
+  const allResolved = active.every(p => {
+    if (p.out) return true;
+    const car = ls.cars[p.id];
+    if (!car.triggered) return true;
+    if (!car.skillCheck) return false;
+    return car.outOfControlRolls.length >= car.skillCheck.fumbleLevels;
+  });
+  html += `<button ${allResolved ? "" : "disabled"} onclick="App.doFinishLeg()">Finish Leg &amp; Update Board</button>`;
+  if (!allResolved) html += ` <span class="muted">Waiting on every triggered Skill Check (and any Out-of-Control rolls) to finish.</span>`;
+  html += `</section>`;
+  return html;
+}
+function shipStatusTags(p) {
+  const maxHp = p.maxHp != null ? p.maxHp : 0;
+  const hp = p.hp != null ? p.hp : maxHp;
+  let tags = "";
+  const hpDanger = p.out || hp < maxHp / 2;
+  tags += ` <span class="tag${hpDanger ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
+  if (p.out) tags += ` <span class="tag danger">${p.type === "hero" ? "OOC — out of race" : "out — removed from race"}</span>`;
   return tags;
 }
 
-/* Itemized list of every Advantage/Disadvantage in effect on this position THIS
-   Leg (see RULE_CHANGES.md / user request) -- crew skill, Ship AI, carried Fumble
-   Disadvantage + manual Conditions, Resistance, grants, Racing Maneuvers
-   (received + this position's own self-cost), and (Pilot only) Acceleration and
-   a Circular Track Slip -- ending in the net used on the dice pool. Only
-   nonzero sources are listed; net matches netForPosition(). */
-function legAdSourcesHtml(ps, disp, phase) {
-  const d = disp[phase];
-  const items = [];
-  const add = (label, n) => { if (n) items.push(`${label} ${netLabel(n)}`); };
-  add("Crew skill", d.crewAdv);
-  add("Ship AI", d.shipAIAdv);
-  add("Conditions", ps.conditions[phase]);      // carried Fumble Disadvantage + manual Condition toggles
-  add("Resistance", ps.resistanceDelta[phase]);
-  add("Grant", ps.grants[phase]);
-  add("Maneuver", -((ps.maneuverReceivedByPos && ps.maneuverReceivedByPos[phase]) || 0));
-  add("Maneuver used", -((ps.maneuverInstigatedByPos && ps.maneuverInstigatedByPos[phase]) || 0));
-  if (phase === "pilot") {
-    add("Acceleration", ps.netLegAcc || 0);
-    add("Slip", ps.slipAdvantage || 0);
-    add("Crowded Field", ps.crowdedFieldD || 0);
-  }
-  const extra = phase === "pilot" ? pilotExtraNet(ps) : 0;
-  const net = netForPosition(ps, disp, phase, extra);
-  const list = items.length ? items.join(" · ") : "none this Leg";
-  return `<p class="mkline"><span class="muted">Leg Advantages/Disadvantages:</span> ${list} &nbsp; → net <b>${netLabel(net)}</b></p>`;
-}
-/* Shared by Phases III-VI: shows this position's Ship Skill Mk / Leg Ship Skill Mk
-   right where the roll happens, then the roll button/result and phase-specific follow-up. */
-function renderPhaseRollBlock(pid, ps, disp, tn, phase, grantTargets, forcedTarget, circular) {
-  const res = ps.results[phase];
-  const extra = phase === "pilot" ? pilotExtraNet(ps) : 0;
-  const net = netForPosition(ps, disp, phase, extra);
-  const sb = phase === "pilot" ? speedBonus(ps.accel) : 0;
-  let html = `<p class="mkline"><b>${POS_LABEL[phase]}:</b> ${esc(disp[phase].crewName)} &nbsp; Ship Skill Mk: <b>${disp[phase].mk}</b> &nbsp; Leg Ship Skill Mk: <b>${formatMk(disp[phase].finalScore, net)}</b>`;
-  if (sb) html += ` &nbsp; <span class="muted">+${sb} Speed Bonus @ ${ps.accel}-G — applied only afterward, to see who wins the Leg</span>`;
-  html += ` &nbsp; <span class="muted">vs TN ${tn}</span></p>`;
-  html += legAdSourcesHtml(ps, disp, phase);
-  if (!res) {
-    if (phase !== "pilot" && !forcedTarget) {
-      // House rule (see RULE_CHANGES.md): Engineer/Spotter must specify who
-      // receives their grant BEFORE rolling -- Roll/Play It Safe are withheld
-      // until a target is chosen. A Critical Success/Fumble still offers its
-      // own choice afterward, overriding whatever was picked here.
-      const chosen = ps.grantChoice[phase];
-      html += `<div class="row"><label>Grant to (choose before rolling):
-        <select onchange="App.setGrantChoice('${pid}','${phase}',this.value)">
-          <option value="">-- choose --</option>
-          ${grantTargets.map(t => `<option value="${t}" ${chosen === t ? "selected" : ""}>${POS_LABEL[t]}</option>`).join("")}
-        </select></label></div>`;
-      if (!chosen) {
-        html += `<p class="muted">Choose who receives ${POS_LABEL[phase]}'s grant before rolling.</p>`;
-        return html;
-      }
-    }
-    html += `<button onclick="App.doPhase('${pid}','${phase}')">Roll ${POS_LABEL[phase]}</button>`;
-    if (phase !== "pilot") html += ` <button class="ghost" onclick="App.doSkipPhase('${pid}','${phase}')">Play It Safe (counts as Failure)</button>`;
-    return html;
-  }
-  const rc = res.rc;
-  if (res.skipped) {
-    html += `<p><b>Played It Safe</b> — counts as a Failure.</p>`;
-  } else {
-    html += `<p>Rolled ${rc.dice.join(", ")} → chosen ${rc.chosen} + ${disp[phase].finalScore} = <b>${rc.total}</b> vs TN ${tn} → <b>${outcomeLabel(rc)}</b></p>`;
-  }
-  if (phase === "pilot" && res) {
-    // House rule (see RULE_CHANGES.md): the Leg Ranking Score is Speed Bonus
-    // alone, +/- Crit/Fumble -- the TN roll above (d20 + Pilot Leg Skill
-    // Score) never contributes to it. Distinct from the Base Leg Result
-    // (see computeBaseLegResult()), which is Speed-Bonus-only.
-    let parts = `Speed Bonus ${sb}`;
-    if (res.critBonus) parts += ` + Crit Bonus ${res.critBonus} (${res.critBonus} Critical Success${res.critBonus > 1 ? "es" : ""})`;
-    if (res.fumblePenalty) parts += ` − Fumble Penalty ${res.fumblePenalty} (${res.fumblePenalty} Fumble${res.fumblePenalty > 1 ? "s" : ""})`;
-    let rankTotalDisp = `${res.rankTotal}`;
-    let previewMovement = Math.max(0, res.rankTotal);
-    if (circular && !rc.success) {
-      previewMovement = Math.ceil(previewMovement / 2);
-      rankTotalDisp += ` ÷2 (${rc.isFumble ? "Fumble" : "Failed"}, rounded up) = ${previewMovement}`;
-    }
-    if (circular && ps.slipAdvantage < 0) {
-      const slingshotHexes = Math.min(ps.slipHexes || 0, previewMovement);
-      if (slingshotHexes > 0) {
-        previewMovement += slingshotHexes;
-        rankTotalDisp += ` + Slingshot ${slingshotHexes} (${slingshotHexes} hex${slingshotHexes > 1 ? "es" : ""} Slipped inward through the curve) = ${previewMovement}`;
-      }
-    }
-    // The "who won the Leg" framing is Straight -- Legs-specific (points-based
-    // standings); on a Circular Track this SAME score becomes movement in
-    // hexes (see finishLeg()), not a Leg win/loss, so the caveat doesn't apply.
-    const rankingNote = circular ? "" : " (used only to determine who won the Leg — the d20 roll and Skill Score above do not count toward it)";
-    html += `<p class="muted">Leg Ranking Score: ${parts} = <b>${rankTotalDisp}</b>${rankingNote}</p>`;
-  }
-  if (phase !== "pilot") {
-    // House rule (see RULE_CHANGES.md): the grant target (and, on a Crit/Fumble,
-    // therefore the amount too) was already locked in before rolling -- rollPhase()/
-    // skipPhase() apply it automatically the moment the result exists, no manual
-    // step. This is just a defensive self-heal for a result saved before that
-    // existed (an in-progress race from an older version of the app).
-    if (!res.applied) autoApplyGrant(pid, phase);
-    html += `<p class="muted">Applied ${netLabel(res.applied.amount)} to ${POS_LABEL[res.applied.targetPos]}.</p>`;
-  } else if (rc.isFumble) {
-    // House rule: fumbleLevels>1 needs that many SEPARATE Fumble Chart
-    // rolls, each one applying on its own (see applyFumbleAffects()) -- not
-    // one roll no matter how badly the check failed.
-    const rollsNeeded = rc.fumbleLevels;
-    const rollsDone = (ps.fumbleRolls || []).length;
-    if (rollsDone < rollsNeeded) {
-      html += `<button class="ghost" onclick="App.rollFumble('${pid}')">Roll on Fumble Chart${rollsNeeded > 1 ? ` (${rollsDone + 1} of ${rollsNeeded})` : ""}</button>`;
-    } else {
-      const participant = STATE.race.participants.find(p => p.id === pid);
-      const ship = getShip(participant.shipId);
-      const cls = getShipClass(ship.shipClass);
-      ps.fumbleRolls.forEach((roll, i) => {
-        html += `<p class="fumbletext">${rollsNeeded > 1 ? `<b>Fumble ${i + 1} of ${rollsNeeded}:</b> ` : ""}${esc(roll.text)}</p>`;
-        html += `<p class="muted">Applied: ${describeFumbleAffects(roll.applied, cls)}</p>`;
-      });
-    }
-  }
+/* ---------- Race Log / Final Standings ---------- */
+function renderFinalStandings(race) {
+  const course = getCourse(race.courseId);
+  const ringParams = hexRingParamsForCourse(course);
+  const sorted = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
+  let html = `<ol class="finallist">`;
+  sorted.forEach((p, i) => {
+    const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
+    const oocTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
+    html += `<li>${i === 0 ? "🏆 " : ""}<b>${esc(label)}</b> — ${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} hexes${oocTag}</li>`;
+  });
+  html += `</ol>`;
   return html;
 }
-
-function renderPhaseCrew(race, phase, title, grantTargets, forcedTarget) {
-  const prereqPhase = phase === "engineer" ? null : phase === "spotter" ? "engineer" : "spotter";
-  const prereqLabel = prereqPhase === "engineer" ? "Phase III (Engineer)" : "Phase IV (Spotter)";
-  const { header, collapsed } = renderPhaseCardOpen(race, phase, title);
-  let html = header;
-  if (!collapsed) {
-    activeHeroes(race).forEach(p => {
-      const ship = getShip(p.shipId);
-      const cls = getShipClass(ship.shipClass);
-      const ps = race.legState.perShip[p.id];
-      html += `<div class="subcard"><div class="row">${iconThumbImg(ship)} <b>${esc(ship.name)}</b>${shipStatusTags(p, cls)}</div>`;
-      if (p.out) {
-        // Destroyed this Leg -- shown with its DESTROYED status, no more phases.
-      } else if (ps.autoLast) {
-        html += `<span class="tag danger">OUT THIS LEG</span>`;
-      } else if (!ps.resistance) {
-        html += `<span class="muted">Waiting on Phase II (Resistance).</span>`;
-      } else if (prereqPhase && !ps.results[prereqPhase]) {
-        html += `<span class="muted">Waiting on ${prereqLabel}.</span>`;
-      } else {
-        const disp = computeShipDisplay(ship);
-        const tn = race.legState.leg.finalTN;
-        html += renderPhaseRollBlock(p.id, ps, disp, tn, phase, grantTargets, forcedTarget, getCourse(race.courseId).trackType === "circular");
-      }
-      html += `</div>`;
-    });
-  }
-  html += `</section>`;
-  return html;
-}
-
-function renderPhaseVI(race) {
-  const { header, collapsed } = renderPhaseCardOpen(race, "pilot", "Phase VI — Pilot");
-  let html = header;
-  if (!collapsed) {
-    activeHeroes(race).forEach(p => {
-      const ship = getShip(p.shipId);
-      const cls = getShipClass(ship.shipClass);
-      const ps = race.legState.perShip[p.id];
-      html += `<div class="subcard"><div class="row">${iconThumbImg(ship)} <b>${esc(ship.name)}</b>${shipStatusTags(p, cls)}</div>`;
-      if (p.out) {
-        // Destroyed this Leg -- shown with its DESTROYED status, no more phases.
-      } else if (ps.autoLast) {
-        html += `<span class="tag danger">OUT THIS LEG</span>`;
-      } else if (!ps.results.navigator) {
-        html += `<span class="muted">Waiting on Phase V (Navigator).</span>`;
-      } else {
-        const disp = computeShipDisplay(ship);
-        const tn = race.legState.leg.finalTN;
-        html += renderPhaseRollBlock(p.id, ps, disp, tn, "pilot", [], null, getCourse(race.courseId).trackType === "circular");
-      }
-      html += `</div>`;
-    });
-  }
-  html += `</section>`;
-  return html;
-}
-
-function renderLegClose(race) {
-  const ls = race.legState;
-  const allPilotDone = activeHeroes(race).every(p => { const ps = ls.perShip[p.id]; return p.out || ps.autoLast || ps.results.pilot; });
-  let html = `<section class="card"><h3>Phases VII–IX — Resolve the Leg</h3>`;
-  if (!allPilotDone) { html += `<p class="muted">Waiting for all ships to complete Phase VI (Pilot).</p></section>`; return html; }
-  if (ls.baseLegResult === null) {
-    html += `<button onclick="App.doBaseResult()">Compute Base Leg Result</button></section>`;
-    return html;
-  }
-  html += `<p>Base Leg Result: <b>${ls.baseLegResult}</b></p>`;
-  const npcs = race.participants.filter(p => p.type === "npc" && !p.out); // removed NPCs no longer roll
-  if (npcs.length) {
-    html += `<table class="mktable"><tr><th>NPC</th><th>Roll</th><th>Result</th></tr>`;
-    npcs.forEach(n => {
-      const r = ls.npcResults[n.id];
-      const advNote = r && r.net ? ` <span class="tag ${r.net < 0 ? "danger" : ""}">${r.net < 0 ? Math.abs(r.net) + " Disadvantage" : r.net + " Advantage"} (maneuver)</span>` : "";
-      const rollTxt = r ? `[${r.dice.join(", ")}] → kept ${r.chosen} → ${r.name} (${r.mod >= 0 ? "+" : ""}${r.mod})${advNote}` : `<button onclick="App.doNpc('${n.id}')">Roll</button>`;
-      html += `<tr><td>${esc(n.name)}</td><td>${rollTxt}</td><td>${r ? r.total : ""}</td></tr>`;
-    });
-    html += `</table>`;
-  }
-  const npcsDone = npcs.every(n => ls.npcResults[n.id]);
-  if (npcsDone) html += `<button onclick="App.doFinishLeg()">Finish Leg &amp; Update Board</button>`;
-  html += `</section>`;
-  return html;
-}
-
 function renderLog(race) {
   if (!race.log.length) return "";
   let html = `<section class="card"><details><summary>Race Log</summary>`;
   [...race.log].reverse().forEach(entry => {
-    html += `<h4>Leg ${entry.legIndex + 1}</h4><table class="mktable"><tr><th>Pos</th><th>Racer</th><th>Result</th><th>Movement</th></tr>`;
+    html += `<h4>Leg ${entry.legIndex + 1}</h4><table class="mktable"><tr><th>Pos</th><th>Racer</th><th>Movement</th></tr>`;
     entry.rows.forEach(r => {
-      html += `<tr><td>${r.position}</td><td>${esc(r.name)}${r.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${r.out ? "OOC" : (r.autoLast ? "OUT" : r.total)}</td><td>+${r.movement}</td></tr>`;
+      html += `<tr><td>${r.position}</td><td>${esc(r.name)}${r.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${r.out ? "OOC" : "+" + r.movement}</td></tr>`;
     });
     html += `</table>`;
-    if (entry.fumbles && entry.fumbles.length) {
-      html += `<div class="logfumbles"><b>Fumbles this Leg:</b>`;
-      entry.fumbles.forEach(f => {
-        html += `<p class="fumbletext"><b>${esc(f.name)}:</b> ${esc(f.text)}</p>`;
-      });
+    if (entry.outOfControl && entry.outOfControl.length) {
+      html += `<div class="logfumbles"><b>Out of Control this Leg:</b>`;
+      entry.outOfControl.forEach(f => { html += `<p class="fumbletext"><b>${esc(f.name)}:</b> ${esc(f.text)}</p>`; });
       html += `</div>`;
     }
   });
@@ -3028,17 +1488,15 @@ function renderLog(race) {
   return html;
 }
 
-/* ---------- Introduction ---------- */
+/* ---------- Introduction / Instructions / Reference ---------- */
 function renderIntroduction() {
   return `<section class="card">
     <p class="flavortext">Engines screaming at the edge of failure. Pilots threading impossibly narrow corridors of space. Crews gambling everything on a single, perfect run.</p>
     <p class="flavortext">Welcome to GASCAR.</p>
     <p>This volume pulls back the curtain on the most dangerous sport in civilized space, where sublight racers tear through asteroid belts, skim planetary atmospheres, and chase victory across entire star systems under the unforgiving laws of physics and competition.</p>
-    <p>Inside, you'll find the full machinery of GASCAR: the history and racing divisions, the crews who make the impossible routine, and the ships that redefine what "safe operating limits" mean. From razor-edged Spark-class Skiffs to system-spanning Nova-class Clippers, and the brutal, ground-hugging Flash-class Skimmers that started it all, every class is built to win or break trying.</p>
-    <p>Meet five distinct race crew specialists built on the new Archetype Racer Crewman, each with the skills, instincts, and nerve required to survive high-G burns and split-second decisions. Explore a lineup of cutting-edge racing machines, each tuned for a different philosophy of speed, precision, endurance, aggression, or raw power.</p>
-    <p>But racing is more than machines and men. Sponsors pull strings, bend rules, and sometimes break them outright. Circuits span worlds, each racecourse a carefully engineered gauntlet of hazards, strategy, and spectacle. And behind it all lies a complete system for designing abstract racecourses and running high-stakes competitions where every Leg counts and every mistake can be final.</p>
-    <p>And, of course, no Warp Space product would be complete without Plot Hooks… nearly 30 of them here.</p>
-    <p>Whether you're building a team, running a race, or simply trying to keep your ship from tearing itself apart at 18-G, this book gives you everything you need.</p>
+    <p>Inside, you'll find the full machinery of GASCAR: the history and racing divisions, and the ships that redefine what "safe operating limits" mean. From razor-edged Spark-class Skiffs to system-spanning Nova-class Clippers, and the brutal, ground-hugging Flash-class Skimmers that started it all, every class is built to win or break trying. Each ship is one entity on the track -- a single Pilot's seat of the pants, backed by however many crew it takes to keep it running -- and every race comes down to that one Pilot's nerve.</p>
+    <p>But racing is more than machines and men. Circuits span worlds, each racecourse a carefully engineered gauntlet of hazards, strategy, and spectacle. And behind it all lies a complete system for designing abstract racecourses and running high-stakes competitions where every Leg counts and every mistake can be final.</p>
+    <p>Whether you're building a ship, running a race, or simply trying to keep your hull from tearing itself apart at full burn, this book gives you everything you need.</p>
     <p class="flavortext">Strap in.</p>
     <p class="flavortext">The corridor is narrow. The engines are hot.</p>
     <p class="flavortext">And for a few fleeting moments… you may just be the fastest thing in the system.</p>
@@ -3046,66 +1504,39 @@ function renderIntroduction() {
     <h3>GASCAR Divisions, Circuits, and Races</h3>
     <p>The Galactic Association for Spaceship Competitive Astro-Racing, known as GASCAR, is the primary regulatory and promotional authority for organized spaceship racing across the Federation. Founded several centuries after the expansion of reliable sublight travel pre-A.C., the organization arose from a loose collection of engineering clubs, courier guilds, and thrill-seeking pilots who began staging informal velocity competitions between planets, moons, and orbital stations. As both the technology, the crowds, and the explosions grew larger, the need for standardized safety rules, race corridors, and ship classifications eventually gave rise to GASCAR.</p>
     <p class="introcaption muted">GASCAR followed mankind into the Eos Galaxy</p>
-    <p>Unlike military flight demonstrations or commercial courier trials, GASCAR races are conducted entirely under sublight propulsion and take place within the bounds of a single star system. Racecourses typically weave through complex gravitational environments-skimming planetary magnetospheres, threading asteroid belts, and diving through tightly controlled orbital corridors. The result is a form of competition that rewards not only raw acceleration, but also precise navigation, sensor awareness, and exceptional piloting skill.</p>
-    <p>At the top of GASCAR's organizational structure are the Divisions. Each Division defines a set of performance parameters that every competing ship must meet. Within each Division, GASCAR sanctions numerous race Circuits, each consisting of a season of multiple races spread across Imperial space. Every Circuit season culminates in the Division Championship, a premier event hosted each year by a different star system.</p>
-    <p>Because the width and breath of the Imperium is so large, circuits tend to follow a circular route around or through a sector or two. They may have a race in one system, and a week later, they are 20 lightyears away, racing again in another system.</p>
-    <p>Spark and Comet Division races are often described as frantic and technical, with small craft darting through obstacles at extreme speeds. Races last less than 12 hours, through some may take place over multiple days where each Leg can last up to 12 hours. Spark and Comet seasons typically last one year</p>
-    <p>Meteor Division races emphasize sustained acceleration and tactical course management lasting long enough to stretch the limits of the class's 100-day operating duration, though most last less than 30 days. A Meteor season typically lasts two years.</p>
-    <p>Nova Division races emphasize bursts of high acceleration and strategic course management lasting long enough to stretch the limits of the class's 200-day operating duration. Nova Division racers compete in longer endurance events where precision, thermal management, and engine discipline become decisive factors. Races average 150 days. A Nova season typically spans five years.</p>
-
-    <h3>Licensing and Public Perception</h3>
-    <p>GASCAR itself does not manufacture ships nor sponsor individual teams. Instead, it licenses racing corridors, certifies vessel configurations, and enforces strict engineering and safety standards designed to prevent the sport from devolving into uncontrolled experimental rocketry. Even so, racing vessels routinely push the limits of known propulsion technology, which many consider TL8 due to their high-tech nature. Engines run hotter, hull frames are lighter, and automation systems are more aggressive than those found on conventional spacecraft.</p>
-    <p>The spectacle has made GASCAR one of the most widely followed sporting institutions in civilized space. Entire economies form around major race events, from engineering sponsors and sensor-tracking broadcasters to betting syndicates and celebrity pilots whose reputations rival those of military aces.</p>
-    <p>For the crews who compete, however, the appeal is simpler. A GASCAR race represents the purest contest of speed and skill available to a pilot: a narrow corridor of space, engines burning plaid, and the knowledge that for a few extraordinary minutes the fastest thing in the system might just be you.</p>
+    <p>Unlike military flight demonstrations or commercial courier trials, GASCAR races are conducted entirely under sublight propulsion and take place within the bounds of a single star system. Racecourses typically weave through complex gravitational environments-skimming planetary magnetospheres, threading asteroid belts, and diving through tightly controlled orbital corridors. The result is a form of competition that rewards not only raw acceleration, but also precise navigation and exceptional piloting skill.</p>
+    <p>At the top of GASCAR's organizational structure are the Divisions. Each Division defines a Tier of performance every competing ship is built to. Within each Division, GASCAR sanctions numerous race Circuits, each consisting of a season of multiple races spread across Imperial space. Every Circuit season culminates in the Division Championship, a premier event hosted each year by a different star system.</p>
+    <p>Spark and Comet Division races are often described as frantic and technical, with small craft darting through obstacles at extreme speeds. Meteor Division races emphasize sustained acceleration and tactical course management over much longer tracks. Nova Division racers compete in longer endurance events where precision and engine discipline become decisive factors.</p>
 
     <h3>Flash Division</h3>
-    <p>Not all GASCAR competition takes place in the vacuum of space. Across the Federation, a parallel form of racing has developed using gravitic surfacecraft known as skimmers. These small anti-gravity racers compete in low-altitude racecourses that weave through planetary terrain, urban skylines, canyon systems, and natural hazards. Though technically a separate subclass of competition, most Flash races operate under the broader guidance and regulatory framework of GASCAR.</p>
-    <p>Flash racers are tightly restricted by design. No craft may exceed five tons displacement, and they are not allowed to break the local speed of sound. In practice this caps most racers at roughly 750 miles per hour depending on atmospheric conditions. These racers are also granted a special exemption from standard civilian anti-gravity regulations. While most civilian anti-gravity vehicles are limited to operating within three yards of the ground, Flash Division skimmers are permitted to climb as high as one hundred yards above the surface during a race. The restriction on speed still exists for both safety and environmental reasons; sonic booms through populated areas or fragile terrain would make many racecourses impossible to operate.</p>
-    <p>Each world typically hosts several Flash races, which together feed into larger regional Flash Circuits, with racecourses adapted to regional geography. Desert worlds favor long canyon runs and salt-flat sprint tracks. Ocean planets often use island chains and floating beacons. Urban worlds weave their racecourses through skyscraper corridors and elevated infrastructure. While the terrain varies widely, all local leagues (or local race series) share common GASCAR standards for checkpoint marking, safety enforcement, and race officiation.</p>
-    <p>For many pilots, the local skimmer leagues represent the first step in a professional racing career. The craft are smaller, the races shorter, and the entry costs dramatically lower than orbital competitions. Yet the danger remains very real. At near-sonic speeds only a few dozen yards above the ground, a pilot must rely on reflexes and precision rather than raw acceleration. More than one famous Spark-class racer began his career threading a skimmer through canyon walls at seven hundred miles an hour.</p>
-    <p>Though considered the grassroots division of GASCAR, Flash Division Circuits maintain passionate followings and produce some of the most aggressive drivers in the sport. Many veterans of the spaceborne divisions quietly admit that if a driver can master skimmer racing, the transition to space is merely a matter of learning to fall upward.</p>
-
-    <h3>Sponsors</h3>
-    <p>Sponsors are a mix of noble houses, corporations, and the occasional slightly questionable organization who somehow still has their logo on a championship hull. Sponsors are both beneficial and detrimental to their ships. To reflect this, players may give a +1 bonus to Pilot, Navigator, Spotter, or Engineer; to compensate, they must take a -1 penalty someplace else.</p>
+    <p>Not all GASCAR competition takes place in the vacuum of space. Across the Federation, a parallel form of racing has developed using gravitic surfacecraft known as skimmers. These small anti-gravity racers compete in low-altitude racecourses that weave through planetary terrain, urban skylines, canyon systems, and natural hazards. Though technically a separate subclass of competition, most Flash races operate under the broader guidance and regulatory framework of GASCAR. Flash racers are tightly restricted by design -- no craft may exceed five tons displacement, and they are not allowed to break the local speed of sound.</p>
 
     <h3>Combat</h3>
-    <p>Although GASCAR ships can carry weapons, their use in sanctioned competition is strictly prohibited. Beam weapons, missiles, railguns, and slug throwers are universally condemned, and every race is monitored through ship telemetry to reconstruct incidents. Electronic warfare can disable or corrupt that telemetry, however, making sabotage or attacks possible. If your campaign reaches that level, use the Warp Space: Ships & Combat rules.</p>
-    <p>For simplicity, assume every ships carries a basic Foreign Object Detection and Removal (FODaR) system for clearing debris from the course. These low-powered systems are not intended for combat, but clever pilots may try to misuse them. Resolve such actions using the Racing Maneuvers: Attack rules.</p>
+    <p>Although GASCAR ships can carry weapons, their use in sanctioned competition is strictly prohibited. Every race is monitored through ship telemetry to reconstruct incidents, and electronic warfare can disable or corrupt that telemetry, making sabotage or attacks possible mid-race. For simplicity, assume every ship carries a basic Foreign Object Detection and Removal (FODaR) system for clearing debris from the course -- clever pilots may try to misuse it. Resolve such actions using the Attack Maneuver rules.</p>
   </section>`;
 }
-
-/* ---------- Reference ---------- */
 function renderInstructions() {
   return `<section class="card"><h2>How to Use This App</h2>
     <p class="muted" style="margin-top:-6px">v${APP_VERSION}</p>
-    <p class="muted">Build things in this order, then run the race. Each tab only shows what's relevant once earlier steps are done — for example, Hangar Bay is empty until you have at least one Ship Class, and Race won't let you start until a Racecourse and its Ships exist.</p>
+    <p class="muted">Build things in this order, then run the race.</p>
 
-    <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is the reusable stat block a Ship is built from: Division, Max Thrust, Ship AI (Pilot/Navigator/Spotter scores + Advantage), Armor, Frame Strength, and Compartmentalization. Click <b>"Default"</b> on a new Class to seed it from that Division's book stats, then tweak from there. Every Division has a build-points cap (shown on the card) — you can build over it, but Total Points turns red as a flag, not a hard block. Flash Division also has a hard, non-negotiable 5-G Max Thrust ceiling (it's sub-sonic).</p>
+    <h3>1. Hangar Bay — build ships</h3>
+    <p>Each ship is one entity: a Division (which just picks a Tier and a flavor pool, nothing mechanical beyond that), a crew size fixed by Tier (flavor names only, no stats of their own), and six numbers -- Speed, Health, Armor, Attack, Damage, Skill -- bought up from a baseline on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Skill is what rolls the Skill Check; Speed adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver.</p>
 
-    <h3>2. Cantina — build Crew</h3>
-    <p>Name each Hero and put points into their five skills: Pilot, Navigator, Spotter, Engineer, and Resistance. Each skill is a Score plus Advantage/Disadvantage levels — neither has a purchase limit, they just get steeply pricier the higher you push them (Advantage cost doubles each level). The only cap in the game is on the <b>Leg</b>: no matter how much Advantage a position has, it only ever counts up to AAAAA in an actual race. Unspent Points track XP you haven't allocated yet.</p>
+    <h3>2. Racecourse — design a race</h3>
+    <p>Every course is a Circular Track: a real hex-grid, 6 lanes, each exactly 6 hexes longer per lap than the one inside it. Set the Division (flavor + Tier), inner lane hex count, and laps to finish -- the race has no fixed Leg count, it ends the moment any racer completes the required laps.</p>
 
-    <h3>3. Hangar Bay — build Ships</h3>
-    <p>Use the <b>Division dropdown</b> next to "+ Add Ship" to choose what Division the new Ship races in — the Ship Class dropdown on each Ship card only lists Classes legal for that same Division, so the two can never mismatch. Then assign Crew to the four positions (Pilot, Navigator, Spotter, Engineer). A Ship's crew size is fixed by its Division; if you have fewer crew than positions, one person can hold more than one position. Every position must be filled before a Ship is race-legal (a 🔒 tag shows what's missing).</p>
-
-    <h3>4. Racecourse — design a race</h3>
-    <p>Set the course's Division (which Ships are eligible to enter) and pick a Track. <b>Straight — Legs</b> also asks for a Type — Drag Race is always 1 Leg; Short, Medium, and Long roll dice (2d5 / 2d10 / 2d20) to determine how many Legs the race has. Generate or hand-edit each Leg's Tier and TN; a course feature/modifier can nudge the TN up or down from the Tier-based baseline.</p>
-    <p><b>Circular — Distance Tracking</b> is an alternate way to run the race, on a real hex-grid track: the course has 6 lanes, each exactly 6 hexes longer per lap than the one inside it (an exact property of the hex grid, not a chosen number; inner lane defaults to roughly 50 hexes), and you set how many laps finish the race. Each Leg, a Hero moves hexes equal to their own <b>Leg Ranking Score</b> (Speed Bonus, +1 per Critical Success Level, -1 per Fumble Level) — but a <b>Failed or Fumbled Pilot Task Check halves that Leg's Movement, rounded up</b>, applied before Slip is worked out (stacks with, doesn't replace, the usual -1/level Fumble hit to the Leg Ranking Score itself). NPCs move off the Base Leg Result (the Heroes' average Speed Bonus alone) instead and are never halved. The race has no fixed Leg count — it ends the moment any racer completes the required laps. At the start of the Race every ship rolls <b>Initiative</b> (d20 + its Max Acceleration; NPCs have no Ship Class, so they roll a bare d20) and lanes are assigned in that order, innermost lane to outermost, highest Initiative first — a tie is broken by re-rolling just the tied ships against each other. During Declare Intentions, the Pilot can declare one or more lanes of Slip left (inward) or right (outward); once the Leg's movement is known, the declared Slip hexes are worked in with the ordinary forward movement wherever it covers the most real ground for the Leg (not always first or last), at no cost beyond ordinary movement (a Fumble/halving that leaves less movement than declared shrinks the Slip to match). It costs no Advantage/Disadvantage only if the whole Leg (start position through the ship's declared Acceleration worth of movement) stays on a straightaway — touching a curve anywhere along that path grants +1 Advantage per hex slipped outward or costs −1 Disadvantage per hex slipped inward. An inward Slip that touches a curve <b>also</b> grants <b>+1 bonus Movement per hex actually Slipped</b> (Slingshot), on top of ordinary movement, pure free speed for cutting the inside line — this only fires for a Slip actually declared and executed that Leg, not just for sitting in the inside lane. Ships can only Slip into an adjacent lane's hex that's actually next to their current one. If two or more ships end a Leg sharing the same hex (<b>Crowded Field</b>), each of their Pilots starts the next Leg with 1 Level of Disadvantage per ship sharing that hex (2 ships sharing costs 2 D each, 3 ships costs 3 D each, and so on).</p>
-
-    <h3>5. Race — run it</h3>
-    <p>Race Setup filters selectable Ships to the chosen course's Division, and you can add NPC racers alongside your Heroes — each one gets an <b>Aggression</b> score (1-10, a Randomize button is right there) that drives its behavior all race long; it's public information, shown next to its name on Standings and in Declarations. Each Leg then walks through, in order:</p>
+    <h3>3. Race — run it</h3>
+    <p>Race Setup filters selectable ships to the course's Division, and you can add NPC racers -- full cars in their own right, built the same way, each with an Aggression score (1-10) that drives its behavior. Each Leg:</p>
     <ol>
-      <li><b>Declarations</b> — every Ship sets its Acceleration (capped by its Class's Max Thrust, reduced by any active Fumble penalties) and may run one Racing Maneuver per position against a target's same position. On a Circular Track, a Maneuver can only target a ship within 2 hexes; straight/Legs courses have no hexes, so targeting is unrestricted there. NPCs declare automatically here too: each of its 4 crew positions independently rolls against its <b>Leg Aggression</b> (its own Aggression plus its current standings position minus 1 — a ship further back gambles more, regardless of personality) to see whether it runs a Maneuver, how hard, and against whoever's closest ahead of it; on a Circular Track its Pilot may also automatically Slip, sometimes hunting down a rival to get within Maneuver range.</li>
-      <li><b>Phase I (Conditions)</b> — apply per-crewman conditions (Wounded, Under Fire, etc.); each one is Disadvantage on every position that crewman holds. Lock conditions once set so they hold for the whole Leg.</li>
-      <li><b>Resistance</b> — every crewman rolls to resist G-forces from the declared Acceleration vs. the Damper Rating; a failed roll costs Disadvantage on that crewman's positions for the rest of the Leg.</li>
-      <li><b>Engineer → Spotter → Navigator</b> — each rolls their Task Check and grants Advantage/Disadvantage to a chosen Ship (their own or a rival's); a Critical Success or Fumble can offer a bigger or different choice.</li>
-      <li><b>Pilot</b> — rolls last. The Pilot's TN check (Score + accumulated Advantage/Disadvantage) determines pass/fail and Critical/Fumble, but who actually <i>wins</i> the Leg is decided separately: Speed Bonus (= declared Acceleration) plus 1 per Critical Success level, minus 1 per Fumble level.</li>
-      <li><b>NPCs</b> auto-roll off the Base Leg Result once every Hero has finished — its own Maneuvers-received and (Circular Track) Slip this Leg can swing that roll toward Advantage or Disadvantage, same as a Hero's own Task Check. <b>Standings</b> then shows finishing order for the Leg; a Ship reduced to 0 HP is marked OOC (Out of Commission) and stays frozen at its crash position for the rest of the race.</li>
+      <li><b>Declare</b> — shift your gear by at most 1 (0-5), optionally Slip a lane (Circular Track), and optionally run one Maneuver against a car within 2 hexes. NPCs declare automatically, driven by their Leg Aggression (Aggression + current standings position - 1 -- a car further back gambles more).</li>
+      <li><b>Resolve</b> — movement is unconditional: your current gear's die (1D4 up to 2D6, scaling with gear 1-5; gear 0 is no movement) plus your Speed stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Speed stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in. A Skill Check (d20 + Skill + Advantage/Disadvantage vs the Leg's TN) only fires if something risky happened this Leg -- more than 1 hex of Slip, high gear (4-5), your path crossing or landing on another car's hex, or running/receiving a Maneuver. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
+      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP; a miss does nothing further. It still costs the instigator Tier Disadvantage on their own Skill Check either way.</li>
+      <li>A ship reduced to 0 HP (by Attack or an Out-of-Control hit) is marked out of the race and frozen at its crash position for the rest of the race.</li>
     </ol>
-    <p>On a Circular Track, <b>Show Last Leg</b>/<b>Show Entire Race</b> (above the Standings track) replay each Ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through so its path stays visible on the track. Click anywhere to clear the trail.</p>
+    <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 
-    <p class="muted">The <b>Reference</b> tab has Division stat tables, the full Racing Maneuvers list, NPC Performance, both Fumble Charts, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
+    <p class="muted">The <b>Reference</b> tab has the Division table, the Maneuvers list, the Out-of-Control Chart, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
   </section>`;
 }
 function renderReference() {
@@ -3123,52 +1554,30 @@ function renderReference() {
   </section>`;
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
-    <tr><th>Division</th><th>Max Tier</th><th>Common Name</th><th>Suggested Max Thrust</th><th>Damper</th><th>Crew</th></tr>
-    ${GDATA.DIVISIONS.map(d => { const c = GDATA.SHIP_CLASSES[d]; return `<tr><td>${d}</td><td>${c.tier}</td><td>${c.common}</td><td>${c.maxThrust}-G</td><td>${c.damper}-G</td><td>${c.crew || 1}</td></tr>`; }).join("")}
+    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Build Points</th></tr>
+    ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
   </table></section>`;
 
-  html += `<section class="card" style="grid-row: span 2;"><h2>Racing Maneuvers</h2>
-    <p class="muted">Each position runs its own Maneuver during Declarations against a target's <b>same</b> position (Pilot always instigates). Target position only matters against Hero ships — against an NPC, it applies as normal and stacks cumulatively with other positions' Maneuvers on that same NPC.</p>
+  html += `<section class="card"><h2>Racing Maneuvers</h2>
+    <p class="muted">One Maneuver per car per Leg, against a car within 2 hexes.</p>
     <table class="mktable">
-    <tr><th>Position</th><th>Maneuver</th><th>Description</th><th>Disadvantage</th></tr>
-    ${GDATA.MANEUVERS.map(m => `<tr><td>${POS_LABEL[m.position] || m.position}</td><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.disadv === 1 ? "1 D" : `${m.disadv} D's`}</td></tr>`).join("")}
+    <tr><th>Maneuver</th><th>Description</th><th>Self Cost</th><th>Deals</th></tr>
+    ${GDATA.MANEUVERS.map(m => `<tr><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.selfD === "Tier" ? "Tier D's" : (m.selfD === 1 ? "1 D" : `${m.selfD} D's`)}</td><td>${m.targetD == null ? "Attack roll -> Damage stat" : (m.targetD === 1 ? "1 D" : `${m.targetD} D's`)}</td></tr>`).join("")}
   </table></section>`;
 
-  html += `<section class="card"><h2>NPC Performance (1d6)</h2><table class="mktable">
-    <tr><th>Roll</th><th>Result</th><th>Modifier</th></tr>
-    ${GDATA.NPC_PERFORMANCE.map(n => `<tr><td>${n.roll}</td><td>${n.name} — ${esc(n.desc)}</td><td>${n.mod >= 0 ? "+" : ""}${n.mod}</td></tr>`).join("")}
-  </table></section>`;
-
-  html += `<section class="card"><h2>Flash Division Fumble Chart (1d10)</h2><table class="mktable">
-    <tr><th>Roll</th><th>Result</th></tr>
-    ${GDATA.FLASH_FUMBLES.map((f, i) => `<tr><td>${i + 1}</td><td>${esc(f.text)}</td></tr>`).join("")}
-  </table></section>`;
-
-  html += `<section class="card"><h2>Spaceflight Fumble Chart (1d10)</h2><table class="mktable">
-    <tr><th>Roll</th><th>Result</th></tr>
-    ${GDATA.SPACEFLIGHT_FUMBLES.map((f, i) => `<tr><td>${i + 1}</td><td>${esc(f.text)}</td></tr>`).join("")}
+  html += `<section class="card" style="grid-row: span 2;"><h2>Out-of-Control Chart (1d10)</h2>
+    <p class="muted">Rolled once per Fumble Level on a failed Skill Check -- every roll's effects apply and stack.</p>
+    <table class="mktable"><tr><th>Roll</th><th>Result</th></tr>
+    ${GDATA.OUT_OF_CONTROL.map((o, i) => `<tr><td>${i + 1}</td><td>${esc(o.text)}</td></tr>`).join("")}
   </table></section>`;
 
   html += `</div>`;
   return html;
 }
 
-// Replay path trail (see APP_CHANGES.md): as App.playRaceReplay() steps a
-// ship through a Leg, a dot is dropped at the center of each hex it
-// passes through, in a per-ship color from this palette (cycling by
-// participant index, so it stays stable across different Legs/replays for
-// the same ship). Colors chosen to read clearly against the dark track
-// background (--panel2/--border in style.css) and stay distinct from the
-// gold used elsewhere for the finish line/UI accents.
+/* ---------- Replay trail ---------- */
 const REPLAY_TRAIL_COLORS = ["#ff5a5a", "#5ad1ff", "#7dff5a", "#ffb84d", "#c77dff", "#ff5ac7", "#5affea", "#ffe45a"];
 function replayTrailColorFor(participantIdx) { return REPLAY_TRAIL_COLORS[participantIdx % REPLAY_TRAIL_COLORS.length]; }
-// Dots dropped by the CURRENTLY-running (or most recently finished) replay,
-// so a later click anywhere on the page can clear them. A normal render()
-// rebuilds the whole circtrack SVG from scratch anyway (see
-// renderCircularTrackSvg()'s own comment), which already drops these dots
-// along with the old DOM nodes -- this array only needs to handle the case
-// where the SAME SVG is still on screen and the user clicks to explicitly
-// clear the trail without triggering a re-render.
 let REPLAY_TRAIL_DOTS = [];
 function paintReplayTrailDot(geom, laneIdx0, hexPos, color) {
   const svg = document.querySelector(".circtrack");
@@ -3198,12 +1607,6 @@ function ensureReplayTrailClickListener() {
 /* ============================== Actions (exposed as window.App) ============================== */
 const App = {
   /* Shared */
-  // Handles every .numstep -/+ button click (see numStepper()): finds the
-  // one <input> in the same wrapper, steps its value by delta*step clamped
-  // to the input's own min/max, then dispatches real 'input' and 'change'
-  // events -- some fields wire up oninput (e.g. the course builder's live
-  // preview), others onchange, so firing both lets either keep working
-  // completely unchanged.
   stepNum(btn, delta) {
     const input = btn.parentElement.querySelector("input");
     if (!input || input.disabled) return;
@@ -3216,45 +1619,6 @@ const App = {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   },
 
-  /* Crew */
-  addPresetCrew() {
-    const idx = parseInt(document.getElementById("presetCrew").value, 10);
-    const preset = GDATA.PRESET_CREW[idx];
-    STATE.crew.push({
-      id: uid("crew"), name: preset.name, unspentPoints: 0,
-      skills: {
-        pilot: { ...preset.pilot }, navigator: { ...preset.navigator },
-        spotter: { ...preset.spotter }, engineer: { ...preset.engineer }, resistance: { ...preset.resistance }
-      }
-    });
-    saveState(); render();
-  },
-  addBlankCrew() {
-    STATE.crew.push({
-      id: uid("crew"), name: rollHeroName(), unspentPoints: 0,
-      skills: { pilot: { score: 0, adv: 0 }, navigator: { score: 0, adv: 0 }, spotter: { score: 0, adv: 0 }, engineer: { score: 0, adv: 0 }, resistance: { score: 0, adv: 0 } }
-    });
-    saveState(); render();
-  },
-  rerollCrewName(id) { getCrew(id).name = rollHeroName(); saveState(); render(); },
-  deleteCrew(id) {
-    if (!confirm("Delete this crewman?")) return;
-    STATE.crew = STATE.crew.filter(c => c.id !== id);
-    STATE.ships.forEach(s => POSITIONS.forEach(p => { if (s.assignments[p] === id) s.assignments[p] = ""; }));
-    saveState(); render();
-  },
-  updateCrew(id, field, val) { getCrew(id)[field] = val; saveState(); },
-  toggleCrewCollapse(id) { const c = getCrew(id); c._collapsed = !c._collapsed; saveState(); render(); },
-  updateUnspentPoints(id, val) { getCrew(id).unspentPoints = clampInt(val, -9999, 9999, 0); saveState(); render(); },
-  updateSkill(id, pos, field, val) {
-    const c = getCrew(id);
-    // House rule (see RULE_CHANGES.md): Advantage has no purchase limit -- only the
-    // effective Leg skill is capped at AAAAA (see MAX_ADV / netForPosition). Buying
-    // past AAAAA is legal, it's just wasted in a Leg.
-    c.skills[pos][field] = clampInt(val, field === "adv" ? -5 : 0, field === "adv" ? 999 : 30, 0);
-    saveState(); render();
-  },
-
   /* Ships */
   setHangarAddDivision(val) {
     if (!GDATA.DIVISIONS.includes(val)) return;
@@ -3262,18 +1626,16 @@ const App = {
     saveState(); render();
   },
   addShip() {
-    if (!STATE.shipClasses.length) { alert("Create a Ship Class in the Shipyard tab first."); return; }
-    // Build into whichever Division is selected next to the Add Ship button
-    // (defaults to Comet); cls and shipClass must always agree, so there must be
-    // an actual Class in that Division to build from.
     const division = STATE._hangarAddDivision || "Comet";
-    const defaultClass = STATE.shipClasses.find(c => c.division === division);
-    if (!defaultClass) { alert(`No ${division} Division Ship Classes yet. Build one in the Shipyard tab first.`); return; }
-    STATE.ships.push({ id: uid("ship"), name: "New Ship", cls: defaultClass.division, shipClass: defaultClass.name, sponsorBonusPos: "", sponsorPenaltyPos: "", iconColor: "", iconNumber: "", assignments: { pilot: "", navigator: "", spotter: "", engineer: "" } });
-    // Make sure the Division group the new ship lands in is open, or it'd be
-    // added into a collapsed tree node and appear to do nothing.
+    const tier = carTier(division);
+    STATE.ships.push({
+      id: uid("ship"), name: "New Ship", division,
+      crew: Array.from({ length: tierCrewCount(tier) }, () => rollHeroName()),
+      ...freshCarStats(division),
+      iconColor: "", iconNumber: ""
+    });
     STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-    STATE._hangarDivCollapse[defaultClass.division] = false;
+    STATE._hangarDivCollapse[division] = false;
     saveState(); render();
   },
   deleteShip(id) {
@@ -3281,85 +1643,47 @@ const App = {
     STATE.ships = STATE.ships.filter(s => s.id !== id);
     saveState(); render();
   },
-  updateShip(id, field, val) {
+  updateShip(id, field, val) { getShip(id)[field] = val; saveState(); },
+  updateShipDivision(id, val) {
+    if (!GDATA.DIVISIONS.includes(val)) return;
     const ship = getShip(id);
-    ship[field] = val;
-    if (field === "shipClass") {
-      // House rule (see APP_CHANGES.md): a Ship's icon number must match its
-      // Class's -- switching Class invalidates a now-mismatched icon.
-      const sc = STATE.shipClasses.find(c => c.name === val);
-      const classIcon = sc ? sc.icon : "";
-      if (ship.iconNumber !== classIcon) { ship.iconColor = ""; ship.iconNumber = ""; }
-    }
-    if (field === "cls") {
-      // The Ship Class dropdown is filtered to the ship's own Division -- if the
-      // current Class isn't legal for the Division just switched to, drop to the
-      // first legal Class for it (or none, if it has no Classes yet).
-      if (!shipClassNamesForDivision(val).includes(ship.shipClass)) {
-        ship.shipClass = shipClassNamesForDivision(val)[0] || "";
-        const sc = STATE.shipClasses.find(c => c.name === ship.shipClass);
-        const classIcon = sc ? sc.icon : "";
-        if (ship.iconNumber !== classIcon) { ship.iconColor = ""; ship.iconNumber = ""; }
-      }
-      // The ship just moved to another Division group -- keep it open so it stays visible.
-      STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-      STATE._hangarDivCollapse[val] = false;
-    }
+    const newTier = carTier(val), oldTier = carTier(ship.division);
+    ship.division = val;
+    // Crew count follows Tier -- grow with blank-filled names, or shrink
+    // (trimming from the end) if the new Division's Tier is lower.
+    const want = tierCrewCount(newTier);
+    while (ship.crew.length < want) ship.crew.push(rollHeroName());
+    if (ship.crew.length > want) ship.crew = ship.crew.slice(0, want);
+    // Stat bases shift with Tier (Health especially) -- never drop a stat
+    // the player already raised above the new base.
+    CAR_STATS.forEach(stat => { ship[stat] = Math.max(ship[stat], statBase(stat, newTier)); });
+    if (ship.iconColor && ship.iconNumber && newTier !== oldTier) { /* icon stays -- division-scoped uniqueness is re-checked on next pick */ }
+    STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
+    STATE._hangarDivCollapse[val] = false;
     saveState(); render();
   },
-  // Crew dropdown: show each crewman's abbreviated skills only while the list is
-  // open (native <option>s can't differ between open/closed, so swap the text on
-  // focus/blur). The closed box keeps showing just the selected name.
-  crewDDtoggle(btn) {
-    const dd = btn.parentElement;
-    const wasOpen = dd.classList.contains("open");
-    document.querySelectorAll(".crewdd.open").forEach(d => d.classList.remove("open"));
-    if (!wasOpen) dd.classList.add("open");
-  },
-  crewDDpick(shipId, pos, crewId) {
-    // assignCrew re-renders (rebuilding the DOM), which closes the menu.
-    App.assignCrew(shipId, pos, crewId);
-  },
-  assignCrew(shipId, pos, crewId) {
-    const ship = getShip(shipId);
-    if (crewId) {
-      const required = minCrewFor(ship);
-      const cap = maxPositionsPerCrewman(ship);
-      const heldElsewhere = POSITIONS.filter(p => p !== pos && ship.assignments[p] === crewId).length;
-      if (heldElsewhere + 1 > cap) {
-        alert(`${getCrew(crewId).name} can only crew up to ${cap} position(s) on this ship -- it requires exactly ${required} distinct crew across its ${POSITIONS.length} positions.`);
-        render();
-        return;
-      }
-      // House rule (see RULE_CHANGES.md): crew size is exact, not just a floor --
-      // bringing in a new distinct crewman can't push the ship's total past it.
-      const simulated = { ...ship.assignments, [pos]: crewId };
-      const resultingDistinct = new Set(POSITIONS.map(p => simulated[p]).filter(Boolean)).size;
-      if (resultingDistinct > required) {
-        alert(`This Ship Class takes exactly ${required} crew -- assigning ${getCrew(crewId).name} here would bring it to ${resultingDistinct} distinct crew. Reassign someone already on this ship instead, or free up a position first.`);
-        render();
-        return;
-      }
-    }
-    ship.assignments[pos] = crewId;
+  updateShipStat(id, stat, val) {
+    const ship = getShip(id);
+    const tier = carTier(ship.division);
+    ship[stat] = clampInt(val, statBase(stat, tier), 999, ship[stat]);
     saveState(); render();
   },
+  updateCrewName(id, idx, val) { getShip(id).crew[idx] = val; saveState(); },
+  rerollCrewName(id, idx) { getShip(id).crew[idx] = rollHeroName(); saveState(); render(); },
   randomShipName() { document.getElementById("nameIdea").textContent = rollShipName(); },
   rerollShipName(id) { getShip(id).name = rollShipName(); saveState(); render(); },
   toggleShipCollapse(id) { const s = getShip(id); s._collapsed = !s._collapsed; saveState(); render(); },
+  toggleHangarDiv(div) {
+    STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
+    STATE._hangarDivCollapse[div] = !STATE._hangarDivCollapse[div];
+    saveState(); render();
+  },
   updateShipIcon(id, color, num) {
     const ship = getShip(id);
     if (!ship) return;
     if (!color || !num) { ship.iconColor = ""; ship.iconNumber = ""; saveState(); render(); return; }
-    // House rule (see APP_CHANGES.md): a Ship's icon number must match its
-    // Ship Class's icon number -- only the color is free.
-    const sc = STATE.shipClasses.find(c => c.name === ship.shipClass);
-    if (!sc || !sc.icon) { alert(`Give "${ship.shipClass}" an Icon in the Shipyard tab first.`); return; }
-    if (num !== sc.icon) { alert(`This ship's icon number must match its Ship Class's icon (${sc.icon}).`); return; }
-    // Uniqueness is per-Division: the same color+number in a different Division
-    // is a different ship, so only clashes within this class's Division count.
-    if (STATE.ships.some(s => s.id !== id && s.iconColor === color && s.iconNumber === num && shipClassDivision(s.shipClass) === sc.division)) {
-      alert(`That icon is already used by another ${sc.division} ship.`);
+    if (STATE.ships.some(s => s.id !== id && s.iconColor === color && s.iconNumber === num && s.division === ship.division)) {
+      alert(`That icon is already used by another ${ship.division} ship.`);
       return;
     }
     ship.iconColor = color; ship.iconNumber = num;
@@ -3367,166 +1691,13 @@ const App = {
   },
   togglePhaseCollapse(key) {
     const ls = STATE.race.legState;
+    ls.phaseCollapsed = ls.phaseCollapsed || {};
     ls.phaseCollapsed[key] = !ls.phaseCollapsed[key];
     saveState(); render();
   },
 
-  /* Ship Classes */
-  addShipClass() {
-    STATE.shipClasses.push({
-      id: uid("shipclass"), name: "New Class", common: "Custom",
-      division: "Comet",
-      maxThrust: 10,
-      frame: "Standard", armor: 0, compartment: "Standard",
-      legDice: { n: 2, d: 10 }, icon: "",
-      ai: { control: 0, controlAdv: 0, nav: 0, navAdv: 0, sensors: 0, sensorsAdv: 0 }
-    });
-    // Keep the new class's Division group open so it doesn't land in a collapsed node.
-    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
-    STATE._shipyardDivCollapse["Comet"] = false;
-    saveState(); render();
-  },
-  addPresetShipClass() {
-    const division = document.getElementById("presetShipClass").value;
-    const divStats = GDATA.SHIP_CLASSES[division];
-    STATE.shipClasses.push({
-      id: uid("shipclass"), name: division, common: divStats.common,
-      division,
-      maxThrust: divStats.maxThrust,
-      frame: divStats.frame || "Standard", armor: divStats.armor || 0, compartment: divStats.compartment || "Standard",
-      legDice: { n: 2, d: 10 }, icon: "",
-      ai: { control: divStats.ai.control, controlAdv: divStats.ai.controlAdv, nav: divStats.ai.nav, navAdv: divStats.ai.navAdv, sensors: divStats.ai.sensors, sensorsAdv: divStats.ai.sensorsAdv }
-    });
-    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
-    STATE._shipyardDivCollapse[division] = false;
-    saveState(); render();
-  },
-  deleteShipClass(id) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    if (!sc) return;
-    const dependent = STATE.ships.filter(s => s.shipClass === sc.name);
-    const remaining = STATE.shipClasses.filter(c => c.id !== id);
-    if (dependent.length && !remaining.length) {
-      alert(`Can't delete "${sc.name}" -- ${dependent.length} ship(s) in the Hangar Bay use it and it's the only Ship Class left. Create another Class first, or delete those ships.`);
-      return;
-    }
-    if (!confirm(`Delete ship class "${sc.name}"?${dependent.length ? ` ${dependent.length} ship(s) using it will be reassigned to "${remaining[0].name}".` : ""}`)) return;
-    STATE.shipClasses = remaining;
-    dependent.forEach(s => { s.shipClass = remaining[0].name; });
-    saveState(); render();
-  },
-  toggleShipClassCollapse(id) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    sc._collapsed = !sc._collapsed; saveState(); render();
-  },
-  toggleShipyardDiv(div) {
-    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
-    STATE._shipyardDivCollapse[div] = !STATE._shipyardDivCollapse[div];
-    saveState(); render();
-  },
-  toggleHangarDiv(div) {
-    STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-    STATE._hangarDivCollapse[div] = !STATE._hangarDivCollapse[div];
-    saveState(); render();
-  },
-  updateShipClassName(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    const oldName = sc.name;
-    const newName = val.trim();
-    if (!newName || newName === oldName) { render(); return; }
-    if (STATE.shipClasses.some(c => c.id !== id && c.name === newName)) {
-      alert(`"${newName}" is already in use by another ship class.`);
-      render();
-      return;
-    }
-    sc.name = newName;
-    STATE.ships.forEach(s => { if (s.shipClass === oldName) s.shipClass = newName; });
-    saveState(); render();
-  },
-  updateShipClassIcon(id, num) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    if (!sc) return;
-    // Icon numbers are per-Division, so only another Class in the SAME Division clashes.
-    if (num && STATE.shipClasses.some(c => c.id !== id && c.icon === num && c.division === sc.division)) {
-      alert(`Icon ${num} is already used by another ${sc.division} Ship Class.`);
-      return;
-    }
-    sc.icon = num || "";
-    // House rule (see APP_CHANGES.md): a Ship's icon number always matches its
-    // Class's -- if the Class's icon just changed (or was cleared), any Ship
-    // built from it whose number no longer matches loses its icon and must
-    // repick a color for the new number.
-    STATE.ships.forEach(s => {
-      if (s.shipClass === sc.name && s.iconNumber !== sc.icon) { s.iconColor = ""; s.iconNumber = ""; }
-    });
-    saveState(); render();
-  },
-  updateShipClassDivision(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    if (!GDATA.DIVISIONS.includes(val)) return;
-    mutateShipClassWithCapCheck(sc, () => {
-      sc.division = val;
-      // House rule (see RULE_CHANGES.md): Spark ships get no Ship AI Score at all -- locked at 0.
-      if (val === "Spark") { sc.ai.control = 0; sc.ai.nav = 0; sc.ai.sensors = 0; }
-      // Flash ships are sub-sonic -- clamp Max Thrust to 5-G on switching to Flash.
-      sc.maxThrust = Math.min(sc.maxThrust, maxThrustCap(val));
-      // Icon numbers are per-Division; if this icon now clashes in the new
-      // Division, drop it (and its ships' icons) so nothing points at a
-      // duplicate. The picker can then re-pick a free number.
-      if (sc.icon && STATE.shipClasses.some(c => c.id !== sc.id && c.icon === sc.icon && c.division === val)) {
-        sc.icon = "";
-        STATE.ships.forEach(s => { if (s.shipClass === sc.name) { s.iconColor = ""; s.iconNumber = ""; } });
-      }
-      // Keep the target Division group open so the moved class stays visible.
-      STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
-      STATE._shipyardDivCollapse[val] = false;
-    });
-  },
-  applyShipClassDefault(id) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    const divStats = GDATA.SHIP_CLASSES[sc.division];
-    if (!confirm(`Reset "${sc.name}" to the book ${sc.division}-class stats? This overwrites Acc, Spotter, Navigator, Pilot, Frame Strength, Armor, and Compartmentalization.`)) return;
-    sc.maxThrust = divStats.maxThrust;
-    sc.ai = { control: divStats.ai.control, controlAdv: divStats.ai.controlAdv, nav: divStats.ai.nav, navAdv: divStats.ai.navAdv, sensors: divStats.ai.sensors, sensorsAdv: divStats.ai.sensorsAdv };
-    sc.frame = divStats.frame || "Standard";
-    sc.armor = divStats.armor || 0;
-    sc.compartment = divStats.compartment || "Standard";
-    saveState(); render();
-  },
-  updateShipClassMaxThrust(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    mutateShipClassWithCapCheck(sc, () => {
-      sc.maxThrust = clampInt(val, 0, maxThrustCap(sc.division), sc.maxThrust);
-    });
-  },
-  updateShipClassFrame(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    if (!GDATA.FRAME_STRENGTH.some(f => f.name === val)) return;
-    mutateShipClassWithCapCheck(sc, () => { sc.frame = val; });
-  },
-  updateShipClassArmor(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    mutateShipClassWithCapCheck(sc, () => { sc.armor = clampInt(val, 0, 30, sc.armor); });
-  },
-  updateShipClassCompartment(id, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    if (!GDATA.COMPARTMENTALIZATION.some(c => c.name === val)) return;
-    mutateShipClassWithCapCheck(sc, () => { sc.compartment = val; });
-  },
-  updateShipClassAI(id, key, val) {
-    const sc = STATE.shipClasses.find(c => c.id === id);
-    const isAdv = key.endsWith("Adv");
-    if (sc.division === "Spark" && !isAdv) return; // AI Score locked at 0 for Spark
-    mutateShipClassWithCapCheck(sc, () => {
-      // Same "no purchase limit, only a Leg cap" rule as crew Advantage (see updateSkill).
-      sc.ai[key] = clampInt(val, isAdv ? -5 : 0, isAdv ? 999 : 30, sc.ai[key]);
-    });
-  },
-
   /* Course */
   rollDraftName() { document.getElementById("cName").value = rollRaceName(); },
-  draftDivChanged() { },
-  setDraftTrackType(val) { STATE._draftTrackType = val; render(); },
   previewLaneHexes(val) {
     const inner = clampInt(val, 1, 999, 50);
     laneHexesArray({ lanes: 6, innerHexes: inner }).forEach((h, i) => {
@@ -3534,177 +1705,23 @@ const App = {
       if (cell) cell.textContent = h;
     });
   },
-  rollDraftLegCount() {
-    const type = document.getElementById("cType").value;
-    document.getElementById("cLegs").value = rollLegCount(type);
-  },
   generateCourse() {
     const name = document.getElementById("cName").value.trim() || rollRaceName();
     const division = document.getElementById("cDiv").value;
     const mode = document.getElementById("cMode").value;
-    const trackType = STATE._draftTrackType || "legs";
-    if (trackType === "circular") {
-      // Circular Track / Distance Tracking (see RULE_CHANGES.md): there's no
-      // pre-built Leg list -- every Leg of every race on this course is rolled
-      // fresh, on the spot, by rollCircularLeg() (see initLegState()).
-      const innerHexes = clampInt(document.getElementById("cInnerHexes").value, 1, 999, 50);
-      const laps = clampInt(document.getElementById("cLaps").value, 1, 999, 3);
-      STATE.courses.push({ id: uid("course"), name, division, trackType, lanes: 6, innerHexes, laps, legMode: mode, legs: [] });
-    } else {
-      const type = document.getElementById("cType").value;
-      const count = clampInt(document.getElementById("cLegs").value, 1, 60, 4);
-      const legs = [];
-      for (let i = 0; i < count; i++) {
-        const leg = rollLeg(division);
-        leg.finalMode = mode;
-        leg.finalTN = mode === "tier" ? leg.tnTierMod : (mode === "tn" ? leg.tnTnMod : leg.baseTN);
-        legs.push(leg);
-      }
-      STATE.courses.push({ id: uid("course"), name, division, trackType, type, legs });
-    }
+    const innerHexes = clampInt(document.getElementById("cInnerHexes").value, 1, 999, 50);
+    const laps = clampInt(document.getElementById("cLaps").value, 1, 999, 3);
+    STATE.courses.push({ id: uid("course"), name, division, lanes: 6, innerHexes, laps, legMode: mode });
     saveState(); render();
   },
-  toggleCourseView(id) { STATE._expanded = STATE._expanded === id ? null : id; render(); },
   deleteCourse(id) {
     if (!confirm("Delete this racecourse?")) return;
     STATE.courses = STATE.courses.filter(c => c.id !== id);
     saveState(); render();
   },
-  setFinalTN(courseId, idx, val) {
-    getCourse(courseId).legs[idx].finalTN = clampInt(val, 1, 999, 0);
-    saveState();
-  },
-  rerollLeg(courseId, idx) {
-    const c = getCourse(courseId);
-    const leg = rollLeg(c.division);
-    leg.finalMode = c.legs[idx].finalMode;
-    leg.finalTN = leg.finalMode === "tier" ? leg.tnTierMod : (leg.finalMode === "tn" ? leg.tnTnMod : leg.baseTN);
-    c.legs[idx] = leg;
-    saveState(); render();
-  },
 
   /* Race setup */
   rollNpcName() { document.getElementById("npcName").value = rollShipName(); },
-  playRaceReplay(lastLegOnly) {
-    const race = STATE.race;
-    if (!race) return;
-    const course = getCourse(race.courseId);
-    const circular = course.trackType === "circular";
-    const laneHexes = circular ? laneHexesArray(course) : null;
-    const maxPossible = Math.max(1, course.legs.length * race.participants.length);
-    const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
-    if (!legsCompleted) return;
-    // "Show Last Leg" starts the replay at the most recently completed Leg
-    // instead of Leg 1 -- everything below is otherwise identical to "Show
-    // Entire Race," just beginning from a later point.
-    const fromLeg = lastLegOnly ? legsCompleted - 1 : 0;
-    const btnAll = document.getElementById("raceReplayBtn");
-    const btnLast = document.getElementById("raceReplayLastLegBtn");
-    if (btnAll) btnAll.disabled = true;
-    if (btnLast) btnLast.disabled = true;
-    const geom = circular ? circTrackGeometry(course) : null;
-    if (geom) ensureReplayTrailClickListener();
-    const tracks = geom ? race.participants.map(p => ({ p, perLeg: buildCircularLegWaypoints(p, geom) })) : null;
-    if (geom) {
-      race.participants.forEach((p, i) => {
-        // Walk backward from the Leg just before fromLeg looking for this
-        // participant's last real waypoint -- a participant that dropped out
-        // (p.out) before fromLeg has no waypoints that far, so it should stay
-        // put at wherever it actually is rather than snapping back to the
-        // race's starting line.
-        const perLeg = tracks[i].perLeg;
-        let startPos = null;
-        for (let li = Math.min(fromLeg, perLeg.length) - 1; li >= 0 && !startPos; li--) {
-          const wp = perLeg[li];
-          if (wp && wp.length) startPos = wp[wp.length - 1];
-        }
-        if (!startPos) startPos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0 };
-        const g = document.getElementById(`circracer-${p.id}`);
-        if (g) g.setAttribute("transform", circRacerTransform(geom, startPos).transform);
-      });
-    }
-    let leg = fromLeg;
-    // Linear-board per-Leg cadence (straight courses); also matches the
-    // .boardfill/.boardicon CSS transition (1.2s -- see style.css) so a
-    // straight course's next Leg starts the instant the current one finishes,
-    // with no idle gap/pause. hexStepDelay is the circular track's per-hex
-    // hop cadence -- kept in sync with .circracer's own transition duration
-    // (see style.css) for the same no-pause reason, just much shorter since
-    // each hop covers one hex instead of a whole Leg. Both run at half speed
-    // of their original cadence (see APP_CHANGES.md).
-    const stepDelay = 1200;
-    const hexStepDelay = 200;
-    function updateBoardsForLeg(legIdx) {
-      race.participants.forEach(p => {
-        const h = p.history || [];
-        let sum = 0;
-        for (let j = 0; j <= legIdx && j < h.length; j++) sum += h[j].movement;
-        // Distance Tracking: progress toward the fixed finish line (lane 1's
-        // own starting line) -- see renderStandings() for why the starting
-        // stagger is subtracted from the required distance.
-        const req = circular ? Math.max(1, course.laps * laneHexes[p.lane - 1] - (p.startHexPos || 0)) : maxPossible;
-        const pct = Math.min(100, Math.round((sum / req) * 100));
-        const fill = document.getElementById(`boardfill-${p.id}`);
-        const pts = document.getElementById(`boardpts-${p.id}`);
-        const icon = document.getElementById(`boardicon-${p.id}`);
-        if (fill) fill.style.width = pct + "%";
-        if (pts) pts.textContent = circular ? pct + "%" : String(sum);
-        if (icon) icon.style.left = pct + "%";
-      });
-    }
-    // Snap every bar (and its icon) back to its state as of the end of the
-    // Leg just before fromLeg -- 0% when replaying the whole race -- before
-    // replaying forward from there.
-    updateBoardsForLeg(fromLeg - 1);
-    function playCircularLeg(legIdx, done) {
-      const maxSteps = Math.max(1, ...tracks.map(t => (t.perLeg[legIdx] || []).length));
-      let sub = 0;
-      function tick() {
-        if (STATE.race !== race) return; // race was abandoned/replaced mid-replay
-        tracks.forEach((t, i) => {
-          const wp = t.perLeg[legIdx];
-          if (!wp || !wp.length) return;
-          const point = wp[Math.min(sub, wp.length - 1)];
-          const g = document.getElementById(`circracer-${t.p.id}`);
-          if (!g) return;
-          // Pass the racer's CURRENTLY-displayed rotation through so
-          // circRacerTransform() can pick the equivalent angle closest to it
-          // -- see its own comment -- so the CSS-transitioned turn always
-          // animates the short way around instead of occasionally spinning a
-          // full circle.
-          const m = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
-          const prevRotDeg = m ? parseFloat(m[1]) : null;
-          g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
-          // Path trail (see APP_CHANGES.md): drop a dot at the center of the
-          // hex this ship just moved into, in its own color, so each racer's
-          // path through the Leg stays visible on the track. Cleared by
-          // clicking anywhere.
-          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(i));
-        });
-        sub += 1;
-        if (sub < maxSteps) setTimeout(tick, hexStepDelay);
-        else done();
-      }
-      tick();
-    }
-    function step() {
-      if (STATE.race !== race) return; // race was abandoned/replaced mid-replay
-      if (geom) {
-        playCircularLeg(leg, () => {
-          updateBoardsForLeg(leg);
-          leg += 1;
-          if (leg < legsCompleted) step();
-          else { if (btnAll) btnAll.disabled = false; if (btnLast) btnLast.disabled = false; }
-        });
-      } else {
-        updateBoardsForLeg(leg);
-        leg += 1;
-        if (leg < legsCompleted) setTimeout(step, stepDelay);
-        else { if (btnAll) btnAll.disabled = false; if (btnLast) btnLast.disabled = false; }
-      }
-    }
-    setTimeout(step, 400);
-  },
   addDraftNpc() {
     const input = document.getElementById("npcName");
     const v = input.value.trim();
@@ -3712,7 +1729,7 @@ const App = {
     const aggression = clampInt(document.getElementById("npcAggression").value, 1, 10, 5);
     STATE._draftNpcs = STATE._draftNpcs || [];
     STATE._draftNpcs.push({ name: v, aggression });
-    STATE._draftNpcAggression = aggression; // remembered for the next Add, like a default
+    STATE._draftNpcAggression = aggression;
     input.value = "";
     render();
   },
@@ -3722,28 +1739,21 @@ const App = {
     STATE._raceSetupCourse = id;
     const course = getCourse(id);
     const div = course ? course.division : null;
-    // Drop any selected ships that aren't in the newly-chosen Division.
-    STATE._raceSetupShips = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && (s.cls || "Comet") === div; });
+    STATE._raceSetupShips = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && s.division === div; });
     saveState(); render();
   },
   toggleRaceShip(id, checked) {
     STATE._raceSetupShips = (STATE._raceSetupShips || []).filter(x => x !== id);
     if (checked) STATE._raceSetupShips.push(id);
-    saveState(); // no render -- keep the other checkboxes as the user left them
+    saveState();
   },
   beginRace() {
     let courseId = STATE._raceSetupCourse;
     if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses.length ? STATE.courses[0].id : null;
     if (!courseId) { alert("Create a racecourse first."); return; }
     const division = getCourse(courseId).division;
-    // Only ships of the course's Division are valid racers.
-    const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && (s.cls || "Comet") === division; });
+    const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && s.division === division; });
     if (!shipIds.length) { alert(`Select at least one ${division} Division ship.`); return; }
-    const underCrewed = shipIds.map(getShip).filter(ship => !shipCrewComplete(ship));
-    if (underCrewed.length) {
-      alert("Locked out of racing -- every position must be filled:\n" + underCrewed.map(crewLockMessage).join("\n"));
-      return;
-    }
     startRace(courseId, shipIds, STATE._draftNpcs || []);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
@@ -3756,148 +1766,143 @@ const App = {
 
   /* Race play */
   setDecl(pid, field, val) {
-    const ps = STATE.race.legState.perShip[pid];
-    if (field === "accel") {
-      const p = STATE.race.participants.find(x => x.id === pid);
-      const cls = getShipClass(getShip(p.shipId).shipClass);
-      // House rule (see RULE_CHANGES.md): declared Acceleration is at least 1-G --
-      // a racer is always under power. effectiveMaxThrust already floors the max at
-      // 1, so even a Fumble-reduced ship can still declare (and only) 1-G.
-      ps.accel = clampInt(val, 1, effectiveMaxThrust(p, cls), ps.accel);
-      // A Slip is also capped at the declared Acceleration (see RULE_CHANGES.md)
-      // -- lowering Accel below an already-declared Slip magnitude re-clamps it,
-      // and re-renders so the Slip section's shown max/value stay in sync.
-      if (ps.slip) {
-        const course = getCourse(STATE.race.courseId);
-        const maxLane = Math.min(ps.slip === "left" ? p.lane - 1 : course.lanes - p.lane, ps.accel);
-        ps.slipHexes = clampInt(ps.slipHexes, 1, Math.max(1, maxLane), ps.slipHexes || 1);
-      }
-      saveState(); render();
-      return;
-    } else if (field === "slip") {
-      // Circular Track Slip (see RULE_CHANGES.md): changing direction defaults
-      // the magnitude to 1 hex and re-renders so the magnitude input (and its
-      // max, which depends on direction) shows/updates. lockDeclarations()
-      // re-clamps the final magnitude authoritatively at lock time.
-      ps.slip = val;
-      ps.slipHexes = val ? (ps.slipHexes || 1) : 0;
-      saveState(); render();
-      return;
-    } else if (field === "slipHexes") {
-      const p = STATE.race.participants.find(x => x.id === pid);
-      const course = getCourse(STATE.race.courseId);
-      // Capped by both the lanes actually available AND the declared
-      // Acceleration (see RULE_CHANGES.md).
-      const maxLane = Math.min(ps.slip === "left" ? p.lane - 1 : course.lanes - p.lane, ps.accel);
-      ps.slipHexes = clampInt(val, 1, Math.max(1, maxLane), ps.slipHexes || 1);
-    } else ps[field] = val;
-    saveState();
-  },
-  setPosManeuver(pid, pos, val) {
-    const ps = STATE.race.legState.perShip[pid];
-    ps.maneuvers = ps.maneuvers || { pilot: "", navigator: "", spotter: "", engineer: "" };
-    ps.maneuverTargets = ps.maneuverTargets || { pilot: [], navigator: [], spotter: [], engineer: [] };
-    ps.maneuvers[pos] = val;
-    if (!val) ps.maneuverTargets[pos] = []; // clearing the Maneuver clears its targets
-    saveState(); render(); // re-render to show/hide this position's target list
-  },
-  togglePosTarget(pid, pos, targetId, checked) {
-    const ps = STATE.race.legState.perShip[pid];
-    ps.maneuverTargets[pos] = (ps.maneuverTargets[pos] || []).filter(t => t !== targetId);
-    if (checked) ps.maneuverTargets[pos].push(targetId);
-    saveState();
-  },
-  togglePosAllTargets(pid, pos) {
-    const race = STATE.race, ps = race.legState.perShip[pid];
+    const race = STATE.race, car = race.legState.cars[pid];
     const p = race.participants.find(x => x.id === pid);
-    const course = getCourse(race.courseId);
-    const geom = course.trackType === "circular" ? circTrackGeometry(course) : null;
-    const others = race.participants.filter(x => x.id !== pid && !x.out && (!geom || hexesWithinManeuverRange(geom, p, x)));
-    const cur = ps.maneuverTargets[pos] || [];
-    const allOn = others.every(o => cur.includes(o.id));
-    ps.maneuverTargets[pos] = allOn ? [] : others.map(o => o.id);
+    if (field === "gearChange") {
+      car.gearChange = clampInt(val, -1, 1, 0);
+      // Clamp against the board's own min/max gear.
+      if (p.gear + car.gearChange < 0) car.gearChange = -p.gear;
+      if (p.gear + car.gearChange > GDATA.MAX_GEAR) car.gearChange = GDATA.MAX_GEAR - p.gear;
+      saveState(); render();
+      return;
+    }
+    if (field === "slip") {
+      car.slip = val;
+      car.slipHexes = val ? (car.slipHexes || 1) : 0;
+      saveState(); render();
+      return;
+    }
+    if (field === "slipHexes") {
+      const course = getCourse(race.courseId);
+      const maxLane = car.slip === "left" ? p.lane - 1 : course.lanes - p.lane;
+      car.slipHexes = clampInt(val, 1, Math.max(1, maxLane), car.slipHexes || 1);
+      saveState();
+      return;
+    }
+    car[field] = val;
+    saveState();
+  },
+  setManeuver(pid, val) {
+    const car = STATE.race.legState.cars[pid];
+    car.maneuver = val;
+    if (!val) car.maneuverTarget = "";
     saveState(); render();
+  },
+  setManeuverTarget(pid, targetId) {
+    STATE.race.legState.cars[pid].maneuverTarget = targetId;
+    saveState();
   },
   openDeclModal(pid) { STATE._openDeclFor = pid; render(); },
   closeDeclModal() { STATE._openDeclFor = null; render(); },
   confirmDecl(pid) {
-    STATE.race.legState.perShip[pid].declared = true;
+    STATE.race.legState.cars[pid].declared = true;
     STATE._openDeclFor = null;
     saveState(); render();
   },
   lockDecl() {
     const race = STATE.race;
-    const heroes = activeHeroes(race);
-    const allDeclared = heroes.every(p => race.legState.perShip[p.id].declared);
+    const heroes = race.participants.filter(p => p.type === "hero" && (!p.out || p.outLeg === race.legIndex));
+    const allDeclared = heroes.every(p => race.legState.cars[p.id].declared);
     if (!allDeclared) { alert("Not all ships have declared their intentions yet."); return; }
-    const underCrewed = heroes.map(p => getShip(p.shipId)).filter(ship => !shipCrewComplete(ship));
-    if (underCrewed.length) {
-      alert("Locked out of racing -- every position must be filled:\n" + underCrewed.map(crewLockMessage).join("\n"));
-      return;
-    }
     lockDeclarations(); render();
   },
-  toggleCond(pid, crewId, condIdx, checked) {
-    const ps = STATE.race.legState.perShip[pid];
-    if (ps.condLocked || ps.resistance) { render(); return; } // conditions are locked for this Leg
-    const ship = getShip(STATE.race.participants.find(x => x.id === pid).shipId);
-    const cond = GDATA.CONDITIONS[condIdx];
-    if (!cond) return;
-    ps._condFlags = ps._condFlags || {};
-    ps._condFlags[crewId] = ps._condFlags[crewId] || {};
-    const wasOn = !!ps._condFlags[crewId][cond.name];
-    ps._condFlags[crewId][cond.name] = checked;
-    // Apply −1 (or restore +1) to every position this crewman holds.
-    const heldPositions = POSITIONS.filter(pos => ship.assignments[pos] === crewId);
-    const delta = checked && !wasOn ? -1 : (!checked && wasOn ? 1 : 0);
-    heldPositions.forEach(pos => { ps.conditions[pos] += delta; });
+  doSkillCheck(pid) {
+    const race = STATE.race;
+    const p = race.participants.find(x => x.id === pid);
+    rollCarSkillCheck(race, p);
     saveState(); render();
   },
-  lockConditions(pid) {
-    STATE.race.legState.perShip[pid].condLocked = true;
+  doOutOfControl(pid) {
+    const race = STATE.race;
+    const p = race.participants.find(x => x.id === pid);
+    rollOneOutOfControl(race, p);
     saveState(); render();
   },
-  doResistance(pid) { rollResistance(pid); render(); },
-  doPhase(pid, phase) { rollPhase(pid, phase); render(); },
-  doSkipPhase(pid, phase) { skipPhase(pid, phase); render(); },
-  setGrantChoice(pid, phase, val) { STATE.race.legState.perShip[pid].grantChoice[phase] = val; saveState(); render(); },
-  rollFumble(pid) {
-    const race = STATE.race, course = getCourse(race.courseId);
-    const table = course.division === "Flash" ? GDATA.FLASH_FUMBLES : GDATA.SPACEFLIGHT_FUMBLES;
-    const entry = table[rollD(10) - 1];
-    const ps = race.legState.perShip[pid];
-    const participant = race.participants.find(p => p.id === pid);
-    const wasOut = !!participant.out;
-    applyFumbleAffects(pid, entry);
-    const justWentOut = participant.out && !wasOut;
-    // A Fumble's own affects still all apply as written (e.g. a future-Leg
-    // crew Disadvantage, harmlessly unused once the ship can't declare
-    // again) -- this only decides what TEXT to show. If this same roll's HP
-    // damage is what just knocked the ship OOC, the entry's narrated
-    // future-Leg penalty/last-place language no longer describes anything
-    // that will happen, so entries that combine HP damage with that kind of
-    // language carry an oocText (see data.js) trimmed down to just the
-    // crash itself.
-    const displayText = justWentOut && entry.oocText ? entry.oocText : entry.text;
-    ps.fumbleRolls = ps.fumbleRolls || [];
-    ps.fumbleRolls.push({ text: displayText, applied: (entry.affects || []).slice() });
-    // A destroyed ship stays in the race until the Leg ends (see finishLeg) --
-    // don't end the race here even if it was the last living Hero.
-    saveState(); render();
-    // Announce a kill with the Fumble description that caused it.
-    if (justWentOut) {
-      alert(`💥 ${shipName(participant.shipId)} is Out of Commission (OOC) and out of the race!\n\n${displayText}`);
-    }
-  },
-  doBaseResult() {
-    computeBaseLegResult();
-    // Roll every NPC automatically -- their result depends on the Base Leg
-    // Result just computed, so this is the natural moment; no per-NPC clicking.
-    STATE.race.participants.filter(p => p.type === "npc" && !p.out).forEach(n => rollNpc(n.id));
-    render();
-  },
-  doNpc(pid) { rollNpc(pid); render(); },
   doFinishLeg() { finishLeg(); render(); },
+  playRaceReplay(lastLegOnly) {
+    const race = STATE.race;
+    if (!race) return;
+    const course = getCourse(race.courseId);
+    const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
+    if (!legsCompleted) return;
+    const fromLeg = lastLegOnly ? legsCompleted - 1 : 0;
+    const btnAll = document.getElementById("raceReplayBtn");
+    const btnLast = document.getElementById("raceReplayLastLegBtn");
+    if (btnAll) btnAll.disabled = true;
+    if (btnLast) btnLast.disabled = true;
+    const geom = circTrackGeometry(course);
+    ensureReplayTrailClickListener();
+    const ringParams = hexRingParamsForCourse(course);
+    const tracks = race.participants.map(p => ({ p, perLeg: buildCircularLegWaypoints(p, geom) }));
+    race.participants.forEach((p, i) => {
+      const perLeg = tracks[i].perLeg;
+      let startPos = null;
+      for (let li = Math.min(fromLeg, perLeg.length) - 1; li >= 0 && !startPos; li--) {
+        const wp = perLeg[li];
+        if (wp && wp.length) startPos = wp[wp.length - 1];
+      }
+      if (!startPos) startPos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0 };
+      const g = document.getElementById(`circracer-${p.id}`);
+      if (g) g.setAttribute("transform", circRacerTransform(geom, startPos).transform);
+    });
+    let leg = fromLeg;
+    const hexStepDelay = 200;
+    function updateBoardsForLeg(legIdx) {
+      race.participants.forEach(p => {
+        const h = p.history || [];
+        let laneAtLeg = p.startLane || 1, hexPosAtLeg = p.startHexPos || 0, lapsAtLeg = 0;
+        for (let j = 0; j <= legIdx && j < h.length; j++) { laneAtLeg = h[j].lane; hexPosAtLeg = h[j].hexPos; lapsAtLeg = h[j].laps; }
+        const pct = Math.min(100, Math.round((trackProgress({ laps: lapsAtLeg, lane: laneAtLeg, hexPos: hexPosAtLeg }, ringParams) / (course.laps * 6)) * 100));
+        const fill = document.getElementById(`boardfill-${p.id}`);
+        const icon = document.getElementById(`boardicon-${p.id}`);
+        if (fill) fill.style.width = pct + "%";
+        if (icon) icon.style.left = pct + "%";
+      });
+    }
+    updateBoardsForLeg(fromLeg - 1);
+    function playLeg(legIdx, done) {
+      const maxSteps = Math.max(1, ...tracks.map(t => (t.perLeg[legIdx] || []).length));
+      let sub = 0;
+      function tick() {
+        if (STATE.race !== race) return;
+        tracks.forEach((t, i) => {
+          const wp = t.perLeg[legIdx];
+          if (!wp || !wp.length) return;
+          const point = wp[Math.min(sub, wp.length - 1)];
+          const g = document.getElementById(`circracer-${t.p.id}`);
+          if (!g) return;
+          const m = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
+          const prevRotDeg = m ? parseFloat(m[1]) : null;
+          g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
+          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(i));
+        });
+        sub += 1;
+        if (sub < maxSteps) setTimeout(tick, hexStepDelay);
+        else done();
+      }
+      tick();
+    }
+    function step() {
+      if (STATE.race !== race) return;
+      playLeg(leg, () => {
+        updateBoardsForLeg(leg);
+        leg += 1;
+        if (leg < legsCompleted) step();
+        else { if (btnAll) btnAll.disabled = false; if (btnLast) btnLast.disabled = false; }
+      });
+    }
+    setTimeout(step, 400);
+  },
 
   /* Reference */
   rollRefRaceName() { document.getElementById("refRaceName").textContent = rollRaceName(); },
@@ -3925,7 +1930,7 @@ const App = {
     reader.readAsText(file);
   },
   resetAll() {
-    if (!confirm("This clears ALL crew, ships, courses, and the current race. Continue?")) return;
+    if (!confirm("This clears ALL ships, courses, and the current race. Continue?")) return;
     STATE = defaultState(); saveState(); render();
   }
 };
@@ -3934,31 +1939,17 @@ window.App = App;
 /* ============================== Boot ============================== */
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tabbtn").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
-  // Close any open custom crew dropdown when clicking outside of it.
-  document.addEventListener("click", e => {
-    if (!e.target.closest(".crewdd")) {
-      document.querySelectorAll(".crewdd.open").forEach(d => d.classList.remove("open"));
-    }
-  });
   render();
   startUpdateCheck();
 });
-/* New-version banner (see APP_CHANGES.md): re-loads version.js (a fresh
-   <script> tag, not fetch()) and compares its LATEST_APP_VERSION against
-   this tab's own APP_VERSION. A stale tab left open across a deploy has no
-   other way to learn a new version exists -- GitHub Pages just keeps
-   serving the old cached copy until something forces a reload. A <script>
-   tag (not fetch, which is blocked cross-origin under file://) is what lets
-   this also work when testing against the local file:// copy -- the same
-   mechanism index.html already uses to load app.js itself. The cache-busting
-   query string forces a real re-read every time either way.
-   Also rechecks on every click (any button, tab, etc.) so an actively-used
-   tab picks up a new deploy almost immediately instead of waiting up to 5
-   minutes -- throttled to at most once per MIN_CHECK_GAP so a burst of
-   clicks (e.g. rolling dice repeatedly) still only costs one request, not
-   one per click. */
+/* New-version banner: re-loads version.js (a fresh <script> tag, not
+   fetch()) and compares its LATEST_APP_VERSION against this tab's own
+   APP_VERSION. Also rechecks on every click (any button, tab, etc.) so an
+   actively-used tab picks up a new deploy almost immediately instead of
+   waiting up to 5 minutes -- throttled to at most once per MIN_CHECK_GAP so
+   a burst of clicks still only costs one request. */
 function startUpdateCheck() {
-  const MIN_CHECK_GAP = 30 * 1000; // never actually check more than once per 30s, no matter how many clicks happen
+  const MIN_CHECK_GAP = 30 * 1000;
   let lastCheck = 0;
   const check = () => {
     const now = Date.now();
@@ -3976,12 +1967,12 @@ function startUpdateCheck() {
       }
       s.remove();
     };
-    s.onerror = () => s.remove(); // offline or blocked -- just skip this check, try again next tick
+    s.onerror = () => s.remove();
     document.head.appendChild(s);
   };
   const onVisible = () => { if (!document.hidden) check(); };
-  const intervalId = setInterval(check, 5 * 60 * 1000); // fallback: every 5 minutes even with no clicks
+  const intervalId = setInterval(check, 5 * 60 * 1000);
   document.addEventListener("visibilitychange", onVisible);
-  document.addEventListener("click", check); // any click anywhere -- throttle above keeps this cheap
-  setTimeout(check, 5000); // first check shortly after load, not competing with initial render
+  document.addEventListener("click", check);
+  setTimeout(check, 5000);
 }

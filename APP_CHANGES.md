@@ -15,6 +15,58 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-03 — Circus Maximus conversion: app.js rebuilt around single-entity cars (see RULE_CHANGES.md for the rule-level changes)
+- **Scope:** a ground-up rewrite of `app.js`'s game-logic and UI layers.
+  `data.js` was also rebuilt (new `GDATA.TIERS`/`STAT_COSTS`/`STAT_BASE`/
+  `GEAR_DICE`/`MANEUVERS`/`OUT_OF_CONTROL`; `SHIP_CLASSES`/`RACE_TYPES`/
+  `CONDITIONS`/`NPC_PERFORMANCE`/`FLASH_FUMBLES`/`SPACEFLIGHT_FUMBLES`/
+  `ARCHETYPE_ABILITIES` (confirmed unused anywhere in app.js)/`PRESET_CREW`
+  all removed). The hex-grid Circular Track engine (everything from
+  `laneHexesArray()` through `renderCircularTrackSvg()`/`trackProgress()`)
+  was copied over **byte-for-byte unchanged** — it's the one proven piece of
+  the old system this conversion deliberately kept.
+- **Data model:** `STATE.crew` and `STATE.shipClasses` are gone. A Ship IS
+  the car now — no separate Ship Class template layer (a car's whole build
+  is six numbers plus a crew-name list, not worth templating separately).
+  `STATE.ships[].{speed,health,armor,attack,damage,skill,crew:[names]}`
+  replaces the old Ship Class / crew-assignment / Ship AI structure. Race
+  participants (Hero ships AND NPCs) share one `legState.cars[pid]` shape
+  instead of the old split `perShip`/`npcState` objects, now that NPCs are
+  full entities too.
+- **Tabs:** Shipyard and Cantina are gone, folded into Hangar Bay (ship
+  creation now includes its own stat build and crew naming directly). The
+  Racecourse tab lost its straight/Legs vs. Circular Track toggle — every
+  course is Circular now.
+- **New Leg flow:** replaces the old Declare → Phase I (Conditions) → Phase
+  II (Resistance) → Phase III/IV/V (Engineer/Spotter/Navigator grants) →
+  Phase VI (Pilot) → resolve-with-NPCs pipeline with two phases: **Declare**
+  (gear shift, Slip, one Maneuver) and **Resolve** (gear-die movement for
+  everyone, then a Skill Check button per Hero only if triggered, with the
+  same multi-roll Out-of-Control Chart UI the old multi-Fumble-roll fix
+  already established). NPCs' own Skill Checks auto-resolve immediately at
+  lock time, same spirit as their whole Declare step being automated.
+- **A genuine bug caught and fixed during this rewrite:** `lockDeclarations()`'s
+  Maneuver resolution read `p.division` directly to compute a Tier-scaled
+  self-cost, but `division` only exists on NPC participants — a Hero's
+  Division lives on its Ship (`getShip(p.shipId).division`). This silently
+  fell back to Tier 1 for every Hero-instigated Maneuver with a Tier-based
+  cost (Attack). Fixed with a new `carDivision(p)` helper used everywhere a
+  participant's own Division is needed, and caught by a test that gave a
+  Tier-2 ship and asserted its Attack's self-cost was exactly 2, not 1.
+- **Testing:** ~90 headless-browser checks across 8 new test files — build-point
+  costs/baselines, gear-die movement scaling, Skill Check trigger conditions
+  (and non-triggers), Maneuver resolution (Nudge/Block/Ram always-land vs.
+  Attack's own hit/miss roll), multi-Fumble-Level Out-of-Control stacking,
+  15×3 fully randomized multi-Leg races run to completion (no NaN, no hangs,
+  gear always in bounds), Crowded Field and Slingshot re-verified unchanged,
+  Hangar Bay/Declare-modal UI actions, and the breaking migration (old
+  pre-conversion save data correctly cleared, a fresh post-conversion ship
+  survives a save/reload).
+- A full backup of the pre-conversion app was made first:
+  `D:\Dropbox\Home\Games\GASCAR\webapp backup 2026-10-03 (pre-Circus Maximus conversion)`.
+
+---
+
 ### 2026-10-02 — Standings board (Circular Track): ordered by real position, bars sized by real position, no more percentage text
 - **Bug fix, same root cause as the Leg Aggression standings fix below:** the
   Standings board's bars and ship-icon placement were sized by

@@ -1,38 +1,48 @@
-/* GASCAR — static game data transcribed from
-   "Warp Space: The Hangar Bay — GASCAR".
-   All tables live here so app.js stays pure logic. */
+/* GASCAR — static game data.
+   Circus Maximus conversion (see RULE_CHANGES.md 2026-10-03): every car is a
+   single entity (crew size is flavor, sized by Tier) built on a small
+   points-buy budget, resolved with a single d20+Advantage/Disadvantage roll
+   per Leg on top of a Circus-Maximus-style gear die for movement. */
 
 const GDATA = {};
 
-/* ---------- Division / Ship Class table (p.27) + AI stats from each Design block ---------- */
-GDATA.SHIP_CLASSES = {
-  Flash:  { tier: 1, tonnage: "5 tons", common: "Skimmer", maxThrust: 5,  damper: 2,  crew: 1,
-            legDice: { n: 1, d: 5 }, frame: "Super-Light Frame", armor: 0, compartment: "Standard",
-            ai: { control: 4, controlAdv: 1, nav: 1, navAdv: 0, sensors: 1, sensorsAdv: 0 } },
-  Spark:  { tier: 1, tonnage: "25-ton", common: "Skiff", maxThrust: 11, damper: 6,  crew: 1,
-            legDice: { n: 2, d: 5 }, frame: "Super-Light Frame", armor: 3, compartment: "Standard",
-            ai: { control: 0, controlAdv: 1, nav: 0, navAdv: 1, sensors: 0, sensorsAdv: 1 } },
-  Comet:  { tier: 2, tonnage: "100-ton", common: "Sloop", maxThrust: 14, damper: 9,  crew: 2,
-            legDice: { n: 2, d: 10 }, frame: "Super-Light Frame", armor: 2, compartment: "Standard",
-            ai: { control: 4, controlAdv: 1, nav: 3, navAdv: 0, sensors: 3, sensorsAdv: 0 } },
-  Meteor: { tier: 3, tonnage: "500-ton", common: "Cutter", maxThrust: 17, damper: 12, crew: 2,
-            legDice: { n: 3, d: 10 }, frame: "Super-Light Frame", armor: 2, compartment: "Standard",
-            ai: { control: 4, controlAdv: 1, nav: 4, navAdv: 1, sensors: 3, sensorsAdv: 0 } },
-  Nova:   { tier: 4, tonnage: "2,000-ton", common: "Clipper", maxThrust: 18, damper: 15, crew: 3,
-            legDice: { n: 4, d: 10 }, frame: "Super-Light Frame", armor: 2, compartment: "Reinforced Compartmentalization",
-            ai: { control: 5, controlAdv: 1, nav: 4, navAdv: 1, sensors: 2, sensorsAdv: 1 } }
+/* ---------- Tier table: the one progression axis ----------
+   Division (below) is flavor only and just PICKS a Tier -- everything
+   mechanical (crew size, build points) comes from Tier alone. buildPoints
+   starts at Circus Maximus's own flat 6 (Tier 1) and gains +1 per Tier. */
+GDATA.TIERS = {
+  1: { crew: 1, buildPoints: 6 },
+  2: { crew: 2, buildPoints: 7 },
+  3: { crew: 3, buildPoints: 8 },
+  4: { crew: 4, buildPoints: 9 }
 };
-GDATA.DIVISIONS = ["Flash", "Spark", "Comet", "Meteor", "Nova"];
 
-/* ---------- Determine Number of Legs (by race Type, not Division) ----------
-   Drag Race = 1 Leg flat; the rest roll dice and sum. Leg count is independent
-   of Division now -- a Medium race is 2d10 Legs whether it's Flash or Nova. */
-GDATA.RACE_TYPES = [
-  { name: "Drag Race", dice: { n: 1, d: 1 }, label: "1 Leg" },        // always 1
-  { name: "Short",     dice: { n: 2, d: 5 },  label: "2d5 Legs" },
-  { name: "Medium",    dice: { n: 2, d: 10 }, label: "2d10 Legs" },
-  { name: "Long",      dice: { n: 2, d: 20 }, label: "2d20 Legs" }
-];
+/* ---------- Divisions: flavor name -> Tier + which Leg Feature flavor pool
+   (FLASH_LEG_FEATURES vs SPACE_LEG_FEATURES) it draws from. No other
+   mechanical effect -- Tier alone drives crew size, build points, and TN. ---------- */
+GDATA.DIVISIONS = ["Flash", "Spark", "Comet", "Meteor", "Nova"];
+GDATA.DIVISION_TIER = { Flash: 1, Spark: 1, Comet: 2, Meteor: 3, Nova: 4 };
+GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: false, Nova: false };
+
+/* ---------- Car build stats (Circus Maximus's own five, plus Skill) ----------
+   One shared Tier-scaled point pool buys all six (see buildPointsSpent() in
+   app.js) -- costs and base values are Circus Maximus's own numbers, with
+   Health's base swapped for GASCAR's existing Tier x3 formula and Skill's
+   base kept at the book's 7. A car that spends nothing is still a competent,
+   generic racer, not a zero. Damage is a flat number (not a die) -- this
+   conversion uses ONE dice system (d20 + Advantage/Disadvantage) everywhere,
+   no secondary damage dice. Costs are pulled into their own object so Skill
+   can be switched to a separate budget later without touching every caller. */
+GDATA.STAT_COSTS = { speed: 2, health: 1, armor: 3, attack: 1, damage: 2, skill: 1 };
+GDATA.STAT_BASE = { speed: 0, armor: 0, attack: 0, damage: 1, skill: 7 }; // health's base is tier*3, computed, not listed here
+
+/* ---------- Movement Category (Circus Maximus's gear system, p.3) ----------
+   Shift by at most 1 level per Leg (clamped 0-5, starts at 0). The rolled
+   die (plus the car's own Speed stat) is that Leg's hex movement -- rolled
+   unconditionally every Leg, independent of the Skill Check below. */
+GDATA.GEAR_DICE = { 0: null, 1: { n: 1, d: 4 }, 2: { n: 1, d: 6 }, 3: { n: 1, d: 8 }, 4: { n: 1, d: 10 }, 5: { n: 2, d: 6 } };
+GDATA.MAX_GEAR = 5;
+GDATA.HIGH_GEAR_TRIGGER = 4; // gear 4 or 5 is "high gear" -- one of the Skill Check triggers
 
 /* ---------- Ship icon art (webapp/Divisions/Ship Icons/) ----------
    Only the Spark set exists so far (15 numbered hull silhouettes). White is
@@ -44,38 +54,6 @@ GDATA.SHIP_ICON_DIR = "Divisions/Ship Icons/";
 GDATA.SHIP_ICON_NUMBERS = ["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15"];
 GDATA.SHIP_CLASS_ICON_COLOR = "White";
 GDATA.SHIP_ICON_COLORS = ["Red", "Green", "Blue"];
-
-/* House rule (see RULE_CHANGES.md): each Division hard-caps a custom Ship
-   Class's total build (Max Thrust + Ship AI + hull), set to that Division's own
-   preset total under the current cost curves -- i.e. the preset itself sits right
-   at its Division's cap with no headroom to spare. Flash also has a separate
-   physical 5-G Max Thrust ceiling (see maxThrustCap() in app.js). */
-GDATA.DIVISION_CAPS = {
-  Flash:  { maxPoints: 20 },
-  Spark:  { maxPoints: 30 },
-  Comet:  { maxPoints: 40 },
-  Meteor: { maxPoints: 50 },
-  Nova:   { maxPoints: 60 }
-};
-
-/* ---------- Hull: Hit Points (Frame Strength) and Damage Reduction (Armor / Compartmentalization) ----------
-   Hit Points default to Tier x3; Damage Reduction defaults to 0. costFactor is
-   multiplied by Tier for the point cost (negative = refund). hpOp/multiplier
-   describe how the option modifies the base value -- see computeHitPoints()/
-   computeDamageReduction() in app.js. */
-GDATA.FRAME_STRENGTH = [
-  { name: "Standard", costFactor: 0, hpOp: null },
-  { name: "Super-Light Frame", costFactor: -2, hpOp: "div4" },
-  { name: "Light Frame", costFactor: -1, hpOp: "div2" },
-  { name: "Heavy Frame", costFactor: 1, hpOp: "mul2" },
-  { name: "Super-Heavy Frame", costFactor: 2, hpOp: "mul4" }
-];
-GDATA.COMPARTMENTALIZATION = [
-  { name: "Standard", costFactor: 0, multiplier: 1 },
-  { name: "Reinforced Compartmentalization", costFactor: 1, multiplier: 2 },
-  { name: "Total Compartmentalization", costFactor: 2, multiplier: 3 },
-  { name: "Fortress Compartmentalization", costFactor: 3, multiplier: 4 }
-];
 
 /* ---------- Race Name Generator (p.21, 1d10 x3) ---------- */
 GDATA.RACE_NAME = {
@@ -124,7 +102,10 @@ GDATA.HERO_LAST_NAMES = [
   "Simpson","Ross","Jones","Porter","Lewis","Hernandez","Green","Richardson","Hill","Lee"
 ];
 
-/* ---------- Flash Division Leg Feature table (p.22, 1d50) ---------- */
+/* ---------- Flash Division Leg Feature table (p.22, 1d50) ----------
+   Flavor text + a TN modifier, chosen by whichever Division a race's course
+   uses for flavor (Flash = atmospheric, everything else = deep-space). Pure
+   narration + TN variance -- no other mechanical hook. */
 GDATA.FLASH_LEG_FEATURES = [
   ["Canyon wall slalom through narrow rock spires", 2],
   ["Wide open desert sprint across flat terrain", -1],
@@ -232,139 +213,54 @@ GDATA.SPACE_LEG_FEATURES = [
   ["Clear deep-space sprint between beacons", -2]
 ];
 
-/* ---------- Racing Maneuvers (p.31) ----------
-   The Pilot always instigates a Maneuver, but each one now targets a specific
-   crew POSITION on the victim (see RULE_CHANGES.md). Against a HERO target the
-   Disadvantage lands on that position's Task Check; against an NPC (which has no
-   per-position rolls) it just applies to the NPC's single roll as normal. One
-   Maneuver per position at each Disadvantage level 1/2/3, plus Attack (special,
-   Tier levels, targets Pilot). */
+/* ---------- Racing Maneuvers (Circus Maximus conversion, see RULE_CHANGES.md) ----------
+   One Maneuver per car per Leg, car vs. car -- no crew positions left to
+   target. Nudge/Block/Ram always land: they deal Disadvantage to the target
+   AND trigger that Leg's Skill Check for both cars; the instigator pays its
+   own `selfD` in Disadvantage on its own Skill Check regardless of outcome.
+   Attack is the odd one out and the only one with its OWN d20+Advantage/
+   Disadvantage roll (the car's Attack score vs the Leg's TN, resolved via
+   the same rollCheck() as everything else) -- a miss does nothing beyond
+   the instigator's selfD; a hit deals the instigator's own Damage stat,
+   reduced by the target's Armor, to the target's HP (see
+   applyAttackDamage() in app.js). This gives the Attack build stat an
+   actual purpose instead of being a dead number on an auto-hit. Uniform for
+   a Hero or NPC target -- everyone has HP now, no "NPCs have no HP"
+   special case. */
 GDATA.MANEUVERS = [
-  { name: "Rub", desc: "A light nudge to unsettle the target without compromising position.", position: "pilot", disadv: 1 },
-  { name: "Force Wide", desc: "Push the target off the optimal racing line.", position: "pilot", disadv: 2 },
-  { name: "Spin Attempt", desc: "Attempt to destabilize the target completely.", position: "pilot", disadv: 3 },
-  { name: "Tail Wag", desc: "Wag the vehicle's stern to interfere with the target's course corrections.", position: "navigator", disadv: 1 },
-  { name: "Cross Wake", desc: "Cut across the target's plotted line, forcing a mid-Leg replot.", position: "navigator", disadv: 2 },
-  { name: "Brake Check", desc: "Sudden deceleration to disrupt the target's spacing and reaction time.", position: "navigator", disadv: 3 },
-  { name: "Dirty Air", desc: "Disrupt the airflow and sensor clarity of a trailing ship.", position: "spotter", disadv: 1 },
-  { name: "Sensor Ghost", desc: "Spoof a phantom contact, splitting the target's sensor attention.", position: "spotter", disadv: 2 },
-  { name: "Sensor Blind", desc: "Flood the target's sensors, washing out their read of the course ahead.", position: "spotter", disadv: 3 },
-  { name: "Bump", desc: "A firm hit that forces a reactor power drop.", position: "engineer", disadv: 1 },
-  { name: "Side Draft", desc: "Override the target's Damper correction to steal momentum and destabilize it.", position: "engineer", disadv: 2 },
-  { name: "Slam", desc: "Heavy contact intended to significantly disrupt performance.", position: "engineer", disadv: 3 },
-  { name: "Attack", desc: "Fire ship weapons at opponent. Automatically hits: a Hero target takes Tier HP damage, an NPC target is destroyed outright -- no Disadvantage to the target either way. Still costs the instigator Tier Disadvantage. Usually illegal.", position: "pilot", disadv: "Tier" }
+  { name: "Nudge", desc: "A light tap to unsettle the target's line.", selfD: 1, targetD: 1 },
+  { name: "Block", desc: "Cut across the target's line, forcing them wide.", selfD: 1, targetD: 2 },
+  { name: "Ram", desc: "A hard, deliberate hit to shove the target off its mark.", selfD: 2, targetD: 3 },
+  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP; a miss does nothing further. Still costs the instigator Tier Disadvantage either way. Usually illegal.", selfD: "Tier", targetD: null }
 ];
 
-/* ---------- NPC Performance table (p.35, 1d6) ---------- */
-GDATA.NPC_PERFORMANCE = [
-  { roll: 1, name: "Scramble", desc: "Something goes wrong: poor approach, traffic, or system hiccup.", mod: -3 },
-  { roll: 2, name: "Unstable", desc: "The ship struggles to hold a clean line, making constant corrections.", mod: -2 },
-  { roll: 3, name: "Steady Pace", desc: "Controlled and conservative.", mod: -1 },
-  { roll: 4, name: "Clean Run", desc: "Efficient and precise execution.", mod: 0 },
-  { roll: 5, name: "Overdriven", desc: "Pushed hard, uneven performance.", mod: 1 },
-  { roll: 6, name: "Aggressive Push", desc: "Right on the edge, strong gains.", mod: 2 }
+/* ---------- Out-of-Control Chart (Circus Maximus's stumble chart, converted to
+   GASCAR's hex track -- see RULE_CHANGES.md 2026-10-03) ----------
+   Rolled 1D10, once per Fumble Level (see rollCheck()'s fumbleLevels) on a
+   failed Skill Check -- every roll's effects apply; they stack. One
+   universal chart for every car, Tier and Division don't change which chart
+   is used (see RULE_CHANGES.md). `affects` is the exact, structured
+   mechanics applied automatically (see applyOutOfControlAffects() in
+   app.js):
+     { type: "hp", tierMult }      -- Tier x tierMult HP damage, reduced by Armor (min 0).
+     { type: "loseHexes", amount } -- lose this many hexes of this Leg's own movement (min 0 total).
+     { type: "laneShift", dir }    -- pushed 1 lane "in" (toward lane 1) or "out" (toward the highest lane), if room.
+     { type: "gearReset" }         -- Movement Category drops to 1 for next Leg.
+     { type: "stopped" }           -- this Leg's movement ends right now (0 hexes left to move). */
+GDATA.OUT_OF_CONTROL = [
+  { text: "Out of control, but you recover -- no ill effect.", affects: [] },
+  { text: "Out of control -- you lose ground, falling back a couple hexes.", affects: [{ type: "loseHexes", amount: 2 }] },
+  { text: "Out of control -- pushed toward the inside of the track.", affects: [{ type: "laneShift", dir: "in" }] },
+  { text: "Out of control -- pushed toward the outside of the track.", affects: [{ type: "laneShift", dir: "out" }] },
+  { text: "Out of control -- you lose significant ground this Leg.", affects: [{ type: "loseHexes", amount: 4 }] },
+  { text: "Out of control -- a glancing hit rattles the hull.", affects: [{ type: "hp", tierMult: 1 }] },
+  { text: "Out of control -- a hard knock, and you're shoved toward the inside.", affects: [{ type: "hp", tierMult: 1 }, { type: "laneShift", dir: "in" }] },
+  { text: "Out of control -- a solid hit to the hull.", affects: [{ type: "hp", tierMult: 2 }] },
+  { text: "Out of control -- a solid hit, and you lose ground recovering.", affects: [{ type: "hp", tierMult: 2 }, { type: "loseHexes", amount: 3 }] },
+  { text: "Skids out completely -- a heavy hit, dropped to first gear, and your Leg ends right there.", affects: [{ type: "hp", tierMult: 3 }, { type: "gearReset" }, { type: "stopped" }] }
 ];
 
-/* ---------- Crew Task Check Modifications (p.32) ---------- */
-GDATA.CONDITIONS = [
-  { name: "Drugged / Dazed / Stunned", who: "All" },
-  { name: "Low Visibility", who: "Driver" },
-  { name: "Under Fire", who: "All" },
-  { name: "Vehicle Damaged (per Major/Catastrophic Hit)", who: "All" },
-  { name: "Wounded", who: "All" }
-];
-
-/* ---------- Maneuver Fumble Charts (p.38, updated) ----------
-   Rolled 1D10 on a Pilot Fumble. Each entry's `affects` array is the exact,
-   structured game mechanics the app applies automatically (see RULE_CHANGES.md
-   and rollFumble()/applyFumbleAffects() in app.js). Affect types:
-     { type: "disadvantage", position, levels, legs }
-         -- position gets `levels` Levels of Disadvantage for the next `legs` Legs.
-     { type: "hp", tierMult }
-         -- ship takes (Tier x tierMult) HP damage, reduced by its DR (min 0).
-            If HP hits 0 the ship is out of the race.
-     { type: "accel", mode: "reduce"|"set", value }
-         -- "reduce": lower the ship's max thrust by `value` for the rest of the
-            race (cumulative). "set": cap the ship's max thrust at `value` for the
-            rest of the race.
-     { type: "last", legs }
-         -- ship is forced to finish LAST for `legs` Legs (this Leg + next legs-1);
-            it still plays its phases, its result is just floored to last place.
-   The `affects` column on the printed chart is authoritative over the flavor
-   text where they differ. */
-GDATA.FLASH_FUMBLES = [
-  { text: "The Driver is not paying attention. The vessel vaults into 2-1/2 inward somersaults. It would have probably landed upright, but it tried to add in a tuck at the last moment. Out for the remainder of the race.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 2, legs: 3 }, { type: "hp", tierMult: 3 }, { type: "last", legs: 3 } ] },
-  { text: "Your overcorrection causes a harsh swerve that rolls the vehicle once. It's dead in the water or on the side of the road. Engineer can restart it, but he's at two Levels of Disadvantage for the next two Legs. The vehicle comes in last this Leg.",
-    oocText: "Your overcorrection causes a harsh swerve that rolls the vehicle once. It's dead in the water or on the side of the road.",
-    affects: [ { type: "disadvantage", position: "engineer", levels: 2, legs: 2 }, { type: "hp", tierMult: 2 }, { type: "last", legs: 1 } ] },
-  { text: "You push the vehicle too hard. The transmission will eat itself if you Accelerate past the Damper Rating. Engineer is shook up and at one Level of Disadvantage for the next two Legs. The ship takes Tier x 2 HP.",
-    oocText: "You push the vehicle too hard, and the transmission eats itself.",
-    affects: [ { type: "disadvantage", position: "engineer", levels: 1, legs: 2 }, { type: "hp", tierMult: 2 }, { type: "accel", mode: "set", value: 2 } ] },
-  { text: "That mud puddle/swell was deeper than you thought. The vehicle jerks sharply, putting undue stress on all its systems. Pilot takes one Level of Disadvantage on the next Leg. The vehicle takes Tier x 2 HP.",
-    oocText: "That mud puddle/swell was deeper than you thought. The vehicle jerks sharply, putting undue stress on all its systems.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 2 }, { type: "hp", tierMult: 2 } ] },
-  { text: "Your reckless maneuvering causes a brief loss of control, leading to a wild, uncontrolled ride. It ends without a crash but leaves everyone's heart racing. Engineer is at one Level of Disadvantage on the next Leg.",
-    affects: [ { type: "disadvantage", position: "engineer", levels: 1, legs: 1 } ] },
-  { text: "Where did you learn to drive? Everyone close to you puts as much distance between you and themselves as possible. Vehicle takes Tier x 2 HP.",
-    affects: [ { type: "hp", tierMult: 2 } ] },
-  { text: "Your harsh maneuvers stress the vessel's frame, causing minor structural strain. Vehicle takes Tier HP.",
-    affects: [ { type: "hp", tierMult: 1 } ] },
-  { text: "Did you learn to drive from a correspondence course? Pilot takes one Level of Disadvantage for the next two Legs.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 2 } ] },
-  { text: "Your erratic driving nearly causes a major accident. You manage to avoid a collision by inches, leaving bystanders shaken and the vehicle scratched and dented. It was captured on video; news at 11. Pilot takes one level of Disadvantage for the next Leg while he grows accustomed to the slight pull to the left...",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 1 } ] },
-  { text: "Slow down, Scooter! You took that last turn a bit too tight, resulting in a minor scrape or bump. It's more embarrassing than harmful.",
-    affects: [] }
-];
-GDATA.SPACEFLIGHT_FUMBLES = [
-  { text: "Patience, Grasshopper. You engage the thrusters before feeding the course to the computer, causing the ship to hurtle off in a random direction at full Acceleration. All crewmembers are at two Levels of Disadvantage for the next Leg as they try to gets things back under control. Needless to say, the ship comes in last this Leg.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 2, legs: 1 }, { type: "disadvantage", position: "navigator", levels: 2, legs: 1 }, { type: "disadvantage", position: "spotter", levels: 2, legs: 1 }, { type: "disadvantage", position: "engineer", levels: 2, legs: 1 }, { type: "last", legs: 1 } ] },
-  { text: "Incoming! You almost didn't see that asteroid! Spotter is at two Levels of Disadvantage for the next two Legs as he regains his composure. Ship takes Tier x 2 HP, and comes in last place this Leg.",
-    oocText: "Incoming! You almost didn't see that asteroid!",
-    affects: [ { type: "disadvantage", position: "spotter", levels: 2, legs: 2 }, { type: "hp", tierMult: 2 }, { type: "last", legs: 1 } ] },
-  { text: "In a bid to save time and energy, you attempt a last minute slingshot maneuver. Clearly, you missed the lesson in Pilot school where you're supposed to reverse inertial dampers for half the run; they remind you with smoke signals. Navigator is at one Level of Disadvantage for two Legs as he works to correct the upcoming plots. Ship takes Tier x 2 HP, and Acceleration is reduced by 1-G for the remainder of the Race.",
-    oocText: "In a bid to save time and energy, you attempt a last minute slingshot maneuver. Clearly, you missed the lesson in Pilot school where you're supposed to reverse inertial dampers for half the run; they remind you with smoke signals.",
-    affects: [ { type: "disadvantage", position: "navigator", levels: 1, legs: 2 }, { type: "hp", tierMult: 2 }, { type: "accel", mode: "reduce", value: 1 } ] },
-  { text: "You forgot to release the parking brake. Inertial dampers scream as you drag them through spacetime. Pilot is at one Level of Disadvantage for the next two Legs as the the Engineer adds his screams over the intercom. Ship takes Tier x 2 HP.",
-    oocText: "You forgot to release the parking brake. Inertial dampers scream as you drag them through spacetime.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 2 }, { type: "hp", tierMult: 2 } ] },
-  { text: "You push the ship's gyroscopes beyond their limits, causing a loss of spatial orientation. Engineer is at one Level of Disadvantage for the next Leg while he recalibrates.",
-    affects: [ { type: "disadvantage", position: "engineer", levels: 1, legs: 1 } ] },
-  { text: "Piloting in 3-D is a ballet, not parkour. The Pilot overcorrects, sending the vessel at full speed towards the nearest structure or ship. The vessel takes Tier x 2 HP before the pilot gets things back under control.",
-    affects: [ { type: "hp", tierMult: 2 } ] },
-  { text: "You're gaining confidence but still manage to bump into something (station's docking arm, etc.). Superficial damage plus Tier HP.",
-    affects: [ { type: "hp", tierMult: 1 } ] },
-  { text: "In a sloth-like manner, your plotted course takes you through a planetary ring, an asteroid belt, or a well-documented meteor storm. Pilot is at one Level of Disadvantage for the next two Legs.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 2 } ] },
-  { text: "Poor takeoff/landing/docking damages the landing gear/docking clamps. If cruising, it's the gravitics, attitude jets, or control surfaces. Pilot is at one Level of Disadvantage for the next Leg.",
-    affects: [ { type: "disadvantage", position: "pilot", levels: 1, legs: 1 } ] },
-  { text: "Bad tacos from the night before rumble around in your stomach and leave particularly pungent odors on the bridge.",
-    affects: [] }
-];
-
-/* ---------- Archetype Abilities (p.15) ---------- */
-GDATA.ARCHETYPE_ABILITIES = [
-  { name: "Shipmate", cost: 10, prereq: "None", desc: "Has experience working aboard spaceships. Operates without Disadvantage in generic spaceborne operations." },
-  { name: "Racer", cost: 5, prereq: "Shipmate", desc: "Can work under the brutal acceleration and constant maneuvering of racing vessels. Gains Advantage on Uncompensated G-Force Resistance Task Checks." },
-  { name: "Race Driver", cost: 10, prereq: "None", desc: "Gains Advantage on Drive Task Checks made during high-speed maneuvering in groundcraft, including anti-gravity surfacecraft." },
-  { name: "Race Pilot", cost: 10, prereq: "Shipmate", desc: "Gains Advantage on Pilot Task Checks made during high-speed maneuvering: slingshot passes, atmospheric skimming, and other maneuvers." },
-  { name: "Race Navigator", cost: 10, prereq: "Shipmate", desc: "Gains Advantage on Navigator Task Checks made to plot race legs, gravitational slingshots, checkpoint approaches, and other course calculations." },
-  { name: "Race Spotter", cost: 10, prereq: "Shipmate", desc: "Gains Advantage on Spotter Task Checks when using sensors to detect navigational dangers such as debris, gravitational anomalies, and traffic." },
-  { name: "Race Engineer", cost: 10, prereq: "Shipmate", desc: "Gains Advantage on Engineer Task Checks related to the engines, reactor, or hull." },
-  { name: "Ace Racer", cost: 10, prereq: "Racer, Race Pilot | Race Navigator", desc: "Recognized as an elite competitor in one racing division. Once per race, may specify what all dice roll on one Task Check." }
-];
-
-/* ---------- Preset crew from "Stars of the Show" (p.16-20) ---------- */
-GDATA.PRESET_CREW = [
-  { name: "Calder Canetti", pilot: { score: 10, adv: 1 }, navigator: { score: 10, adv: 0 }, spotter: { score: 3, adv: 0 }, engineer: { score: 3, adv: 0 }, resistance: { score: 0, adv: 0 } },
-  { name: "Zera Nivak", pilot: { score: 9, adv: 1 }, navigator: { score: 8, adv: 0 }, spotter: { score: 5, adv: 0 }, engineer: { score: 8, adv: 0 }, resistance: { score: 3, adv: 1 } },
-  { name: "Raxen Vhal", pilot: { score: 12, adv: 1 }, navigator: { score: 9, adv: 0 }, spotter: { score: 5, adv: 0 }, engineer: { score: 7, adv: 0 }, resistance: { score: 7, adv: 1 } },
-  { name: "Loren Cade", pilot: { score: 5, adv: 0 }, navigator: { score: 6, adv: 0 }, spotter: { score: 10, adv: 1 }, engineer: { score: 9, adv: 1 }, resistance: { score: 7, adv: 0 } },
-  { name: "Nikhail \"Chief\" Kuznetsov", pilot: { score: 4, adv: 0 }, navigator: { score: 3, adv: 0 }, spotter: { score: 9, adv: 0 }, engineer: { score: 10, adv: 2 }, resistance: { score: 5, adv: 1 } }
-];
-
-/* ---------- Preset "house" ships (name + suggested class), purely flavor for quick-add ---------- */
+/* ---------- Preset "house" ships (name + suggested Division), purely flavor for quick-add ---------- */
 GDATA.PRESET_SHIPS = [
   { name: "Little Mercy", cls: "Comet" },
   { name: "Iron Sting", cls: "Comet" },
