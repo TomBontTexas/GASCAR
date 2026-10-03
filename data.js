@@ -1,15 +1,19 @@
 /* GASCAR — static game data.
    Circus Maximus conversion (see RULE_CHANGES.md 2026-10-03): every car is a
-   single entity (crew size is flavor, sized by Tier) built on a small
-   points-buy budget, resolved with a single d20+Advantage/Disadvantage roll
-   per Leg on top of a Circus-Maximus-style gear die for movement. */
+   single entity on the track, resolved with a single d20+Advantage/
+   Disadvantage roll per Leg on top of a Circus-Maximus-style gear die for
+   movement. A Ship is a Ship Class (the hull's mechanical build) plus one
+   assigned Crewman (the pilot, who alone has Skill) -- see the Ship Class /
+   Crewman sections below and Shipyard/Cantina/Hangar Bay in app.js. Crew
+   size beyond that one Crewman is flavor only, sized by Tier. */
 
 const GDATA = {};
 
 /* ---------- Tier table: the one progression axis ----------
    Division (below) is flavor only and just PICKS a Tier -- everything
-   mechanical (crew size, build points) comes from Tier alone. buildPoints
-   starts at Circus Maximus's own flat 6 (Tier 1) and gains +1 per Tier. */
+   mechanical (the Ship Class's build-point budget, flavor crew size) comes
+   from Tier alone. buildPoints starts at Circus Maximus's own flat 6 (Tier 1)
+   and gains +1 per Tier. */
 GDATA.TIERS = {
   1: { crew: 1, buildPoints: 6 },
   2: { crew: 2, buildPoints: 7 },
@@ -24,17 +28,32 @@ GDATA.DIVISIONS = ["Flash", "Spark", "Comet", "Meteor", "Nova"];
 GDATA.DIVISION_TIER = { Flash: 1, Spark: 1, Comet: 2, Meteor: 3, Nova: 4 };
 GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: false, Nova: false };
 
-/* ---------- Car build stats (Circus Maximus's own five, plus Skill) ----------
-   One shared Tier-scaled point pool buys all six (see buildPointsSpent() in
-   app.js) -- costs and base values are Circus Maximus's own numbers, with
-   Health's base swapped for GASCAR's existing Tier x3 formula and Skill's
-   base kept at the book's 7. A car that spends nothing is still a competent,
-   generic racer, not a zero. Damage is a flat number (not a die) -- this
-   conversion uses ONE dice system (d20 + Advantage/Disadvantage) everywhere,
-   no secondary damage dice. Costs are pulled into their own object so Skill
-   can be switched to a separate budget later without touching every caller. */
-GDATA.STAT_COSTS = { speed: 2, health: 1, armor: 3, attack: 1, damage: 2, skill: 1 };
-GDATA.STAT_BASE = { speed: 0, armor: 0, attack: 0, damage: 1, skill: 7 }; // health's base is tier*3, computed, not listed here
+/* ---------- Ship Class build stats (see RULE_CHANGES.md 2026-10-03: Ship
+   Class reintroduced) ----------
+   A Ship Class carries five mechanical numbers -- Thrust, Health, Armor,
+   Attack, Damage -- bought up from a 0 baseline on its Division's Tier-scaled
+   build-point pool (GDATA.TIERS). Every stat uses the SAME triangular cost
+   progression: raising a stat from level N to N+1 costs N+1 points (1, then
+   2 more, then 3 more...). A stat's current level IS its "Mk" number (e.g.
+   "Mk1 Thrust") -- see mkStepCost()/mkCumulativeCost() in app.js. Thrust is
+   measured in G's. Damage is a flat number (not a die) -- this conversion
+   uses ONE dice system (d20 + Advantage/Disadvantage) everywhere, no
+   secondary damage dice. */
+GDATA.SHIP_STATS = ["thrust", "health", "armor", "attack", "damage"];
+
+/* ---------- Crewman Skill (see RULE_CHANGES.md 2026-10-03: Skill split off
+   the ship onto a Crewman, Cantina tab) ----------
+   Every Crewman starts at Skill Mk5 for free. Raising it further uses the
+   SAME triangular progression as Ship Class stats (Mk5->Mk6 costs 6, Mk6->Mk7
+   costs 7, ...), but spent from the Crewman's own banked XP, not a Tier
+   budget -- XP is earned by racing, not bought at creation. See
+   GDATA.CREWMAN_XP for how much a race pays out. */
+GDATA.CREWMAN_SKILL_BASE = 5;
+// Judgment call (see RULE_CHANGES.md) -- easy to retune later. Every Hero
+// participant that FINISHES the race (completes the required laps, any
+// placement) banks `finish` XP for its assigned Crewman; whoever wins
+// (1st place) additionally banks `win` on top of that.
+GDATA.CREWMAN_XP = { finish: 1, win: 2 };
 
 /* ---------- Movement Category (Circus Maximus's gear system, p.3) ----------
    Shift by at most 1 level per Leg (clamped 0-5, starts at 0). The rolled
@@ -45,11 +64,15 @@ GDATA.MAX_GEAR = 5;
 GDATA.HIGH_GEAR_TRIGGER = 4; // gear 4 or 5 is "high gear" -- one of the Skill Check triggers
 
 /* ---------- Ship icon art (webapp/Divisions/Ship Icons/) ----------
-   Only the Spark set exists so far (15 numbered hull silhouettes). White is
-   reserved for Ship Classes (the "master" icon shown in the Shipyard); Red/
-   Green/Blue are for individual Ships built from a Class, so two ships never
-   look identical on the board. Each icon is unique app-wide once assigned --
-   see App.updateShipClassIcon()/App.updateShipIcon() in app.js. */
+   Every Division has its own full 15-number x 4-color set. A Ship Class
+   picks one of its Division's 15 White silhouettes (its hull shape); a Ship
+   built from that Class picks a Red/Green/Blue color for that SAME number,
+   so every Ship built from one Class shares its hull shape but never looks
+   identical to another Ship. Icons are unique PER DIVISION, not app-wide --
+   the same number/color in a different Division is a different, unrelated
+   piece of art. NPCs (no Class of their own) get a random Red/Green/Blue
+   number assigned at race start instead. See usedClassIconNumbers()/
+   usedShipIconKeys() in app.js. */
 GDATA.SHIP_ICON_DIR = "Divisions/Ship Icons/";
 GDATA.SHIP_ICON_NUMBERS = ["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15"];
 GDATA.SHIP_CLASS_ICON_COLOR = "White";

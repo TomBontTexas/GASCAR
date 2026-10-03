@@ -17,6 +17,58 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-03 — Ship Class and Crewman reintroduced; Speed renamed Thrust; one uniform Mk cost progression (refines the Circus Maximus conversion below)
+- **Earlier value (same day, see the Circus Maximus entry below):** a Hero's
+  car was six numbers (Speed/Health/Armor/Attack/Damage/Skill) living
+  directly on the Ship record, each with its own per-stat cost
+  (`GDATA.STAT_COSTS`) and its own baseline (`GDATA.STAT_BASE` — Health free
+  at Tier×3, Skill free at 7, Damage free at 1, everything else free at 0).
+- **Current value:**
+  - **Speed is renamed Thrust, measured in G's.** Same mechanical role
+    (adds to every Leg's gear-die movement, breaks Initiative/turn-order
+    ties) — flavor and label only.
+  - **Ship Class is back** (Shipyard tab): a reusable hull — a name, a
+    Division (picks its Tier, same as before), a White icon number, and the
+    five mechanical stats (Thrust/Health/Armor/Attack/Damage). Skill is NOT
+    on the Class. Multiple Ships can be assembled from one Class (e.g. two
+    different Flash-division Ships sharing one Class, different pilots/paint).
+  - **Crewman is back** (Cantina tab): holds Skill, and ONLY Skill. Every
+    Crewman starts at **Skill Mk5 for free** — not bought from a Tier
+    budget. Raising it further spends **banked XP**, earned by racing (see
+    below), using the same cost progression as everything else.
+  - **One uniform cost progression for every stat, ship or crewman alike:**
+    raising a stat from level N to N+1 costs N+1 points — 1 point for the
+    1st, 2 more (3 total) for the 2nd, 3 more (6 total) for the 3rd, and so
+    on (a triangular number). A stat's own level number IS now its "Mk"
+    number (e.g. "Mk1 Thrust", "Mk6 Skill"). This replaces every per-stat
+    cost multiplier and baseline — **Health also now starts at Mk0 (0 HP)**
+    like every other Ship Class stat, no more free Tier×3 baseline.
+  - **A Ship is just an assembly**, not a stat block of its own: a name, a
+    chosen Ship Class, an assigned Crewman (whose Skill is what rolls that
+    Ship's Skill Checks), and a Red/Green/Blue color for the Class's icon
+    number. A Ship needs a Crewman assigned to be race-legal.
+  - **Crewman XP from racing (judgment call — easy to retune):** a Hero that
+    finishes the race (completes the required laps, any placement) banks 1
+    XP for its assigned Crewman; the best-placed finisher banks 2 more (3
+    total). NPCs auto-build all five Ship Class stats from their Division's
+    budget (spent as evenly as the cost curve allows) and keep Skill at the
+    same free Mk5 baseline — they never earn or spend XP.
+  - **Ship icons are unique per Division again, not app-wide** (matching how
+    this worked before the Circus Maximus conversion): a Ship Class's White
+    icon number can't be reused by another Class in the same Division; a
+    Ship's Red/Green/Blue color for its Class's number can't be reused by
+    another Ship in that Division.
+- **Why:** the user wanted Ship Class back (so one hull design can produce
+  several distinct Flash-division Ships), wanted Skill split off onto a
+  dedicated Crewman entity in the Cantina (a hook deliberately left in
+  during the Circus Maximus conversion), and wanted every stat on one
+  consistent, simple cost curve instead of per-stat multipliers — with a
+  stat's level doubling as its displayed "Mk" rating.
+- **Where:** `GDATA.SHIP_STATS`, `GDATA.CREWMAN_SKILL_BASE`,
+  `GDATA.CREWMAN_XP` in `data.js`; `mkStepCost()`/`mkCumulativeCost()`,
+  `classBuildPointsSpent()`/`classBuildPointsRemaining()`, `freshNpcStats()`,
+  `carStats()`/`carDivision()`, and `awardCrewmanXp()` in `app.js`.
+
 ### 2026-10-03 — Crowded Field retired: ships can no longer share a hex at all (refines the Circus Maximus conversion below)
 - **Earlier value (same day, see the Circus Maximus entry below):** 2+ cars
   ending a Leg on the same hex ("Crowded Field") just cost each of them 1

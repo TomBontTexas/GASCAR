@@ -15,6 +15,47 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-03 — Ship Class / Crewman tabs rebuilt; Hero icon display bug fixed (see RULE_CHANGES.md for the rule-level changes)
+- **Scope:** reintroduces the Shipyard and Cantina tabs (`renderShipyard()`/
+  `renderCantina()`, new) alongside a rewritten Hangar Bay (`renderHangarBay()`/
+  `renderShipCard()`) that now assembles a Ship from an existing Ship Class +
+  Crewman instead of holding six stats directly.
+- **Data model:** `STATE.shipClasses`/`STATE.crewmen` are back (new arrays).
+  `STATE.ships` entries shrink to `{ id, name, classId, crewmanId, iconColor }`
+  — no more stats directly on a Ship. `carStats()`/`carDivision()` are the
+  single place that resolves a Hero's full stat block (5 from its Ship's
+  Class, Skill from its assigned Crewman) or an NPC's inline stats, so
+  nothing else in the engine needs to branch on where a stat actually lives.
+- **New breaking migration:** `_shipClassCrewmanSplit` (same clear-and-restart
+  precedent as `_circusMaximusConversion`) wipes `state.ships`/`state.race`
+  and initializes `state.shipClasses`/`state.crewmen` on first load after this
+  update — a Ship built under the previous shape has no `classId`/`crewmanId`
+  to migrate to. Racecourses are untouched (they never referenced the Ship
+  shape at all).
+- **Icon system rewritten**, not just renamed: `shipIconInfo()` resolves a
+  Ship's icon through its Class (White number + the Ship's own color);
+  `usedClassIconNumbers()`/`usedShipIconKeys()` scope uniqueness per Division
+  again (matching how this worked before the Circus Maximus conversion,
+  rather than the interim app-wide scoping). Added `participantIconInfo()`/
+  `participantIconPath()` as the one place a race participant's icon is
+  resolved.
+- **Bug fix (found while rewriting the above):** `renderStandings()` and
+  `renderCircularTrackSvg()` read `p.iconColor`/`p.iconNumber`/`p.iconDivision`
+  directly off a race participant — fields that only ever existed on NPC
+  participants. A Hero participant never carried its own icon fields (that
+  data lived on its Ship), so **Heroes never showed their ship icon on the
+  Standings board or the track SVG, only NPCs did** — silently broken since
+  the Circus Maximus conversion. Fixed by routing both through the new
+  `participantIconInfo()`, which correctly resolves a Hero's icon through its
+  Ship/Class.
+- **Testing:** 4 new headless-Chrome test files — Mk cost progression +
+  Shipyard/Cantina/Hangar Bay assembly (23 checks), 8 fully-randomized 2-Hero
+  + 1-NPC races to completion (no NaN, no hex overlap, correct Crewman XP
+  awards), migration from the previous Ship shape + every tab rendering
+  without throwing across Declare/Resolve phases, and Attack/Out-of-Control
+  resolution re-verified now that Attack/Damage/Armor/Skill are sourced from
+  a Ship Class and Crewman instead of the Ship itself. All passing.
+
 ### 2026-10-03 — Circus Maximus conversion: app.js rebuilt around single-entity cars (see RULE_CHANGES.md for the rule-level changes)
 - **Scope:** a ground-up rewrite of `app.js`'s game-logic and UI layers.
   `data.js` was also rebuilt (new `GDATA.TIERS`/`STAT_COSTS`/`STAT_BASE`/

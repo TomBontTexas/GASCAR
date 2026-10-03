@@ -3,18 +3,30 @@
    the in-world racing league depicted in the tabletop game Warp Space: GASCAR.
 
    Circus Maximus conversion (see RULE_CHANGES.md 2026-10-03): every racer is
-   a SINGLE entity -- one car, one Skill stat, one roll per Leg -- whether
-   its crew is 1 person or 4. Movement comes from a Circus-Maximus-style
-   gear die every Leg, unconditionally; a separate d20+Advantage/Disadvantage
-   Skill Check only fires when something risky happens that Leg (a Slip, a
-   Maneuver, high gear, crossing/landing on another car's hex), and only a
-   FAILED Skill Check has consequences (the Out-of-Control chart) -- success is binary, no Crit
-   bonus. NPCs are mechanically identical to Heroes. The old 4-position
-   (Pilot/Navigator/Spotter/Engineer) Task Check system, Resistance checks,
-   and the straight/Legs (non-hex) track type are gone entirely. The hex/
-   Circular Track engine itself (traceLaneRing, circTrackGeometry,
-   resolveSlipPath, etc.) is untouched -- it's the one piece of the old
-   system explicitly kept. */
+   a SINGLE car on the track, one roll per Leg. Movement comes from a
+   Circus-Maximus-style gear die every Leg, unconditionally; a separate
+   d20+Advantage/Disadvantage Skill Check only fires when something risky
+   happens that Leg (a Slip, a Maneuver, high gear, crossing/landing on
+   another car's hex), and only a FAILED Skill Check has consequences (the
+   Out-of-Control chart) -- success is binary, no Crit bonus. NPCs are
+   mechanically identical to Heroes (they just build their own stats
+   automatically, see freshNpcStats()). The old 4-position (Pilot/Navigator/
+   Spotter/Engineer) Task Check system, Resistance checks, and the straight/
+   Legs (non-hex) track type are gone entirely. The hex/Circular Track engine
+   itself (traceLaneRing, circTrackGeometry, resolveSlipPath, etc.) is
+   untouched -- it's the one piece of the old system explicitly kept.
+
+   Ship Class / Crewman reintroduced (see RULE_CHANGES.md 2026-10-03): a
+   Hero's car is no longer six numbers directly on the Ship record. A Ship
+   Class (Shipyard tab) holds the five build-point-bought mechanical stats
+   (Thrust/Health/Armor/Attack/Damage) plus the Division (-> Tier) and the
+   hull's White icon number. A Crewman (Cantina tab) holds just Skill,
+   starting at Mk5 for free and raised with XP banked by racing, not a build
+   budget. A Ship (Hangar Bay tab) is just a name + a chosen Ship Class +
+   an assigned Crewman + its own Red/Green/Blue color for the Class's icon
+   number -- multiple Ships can share one Class (same hull, different pilots/
+   paint). carStats()/carDivision() below are the single place that unifies
+   all of this (plus an NPC's own inline stats) into one flat interface. */
 
 // App version (see APP_CHANGES.md): bump the middle number for a new feature
 // or features, the last number for a bug fix. Shown at the top of the
@@ -86,7 +98,7 @@ var MAX_ADV = 5; // House rule: the effective Leg Skill caps at AAAAA. Disadvant
 const STORAGE_KEY = "gascar_state_v1";
 
 function defaultState() {
-  return { ships: [], courses: [], race: null };
+  return { ships: [], shipClasses: [], crewmen: [], courses: [], race: null };
 }
 let STATE = loadState();
 function loadState() {
@@ -107,6 +119,11 @@ function loadState() {
    correspond to anything meaningful under the new rules. Same precedent as
    the earlier breaking migrations (_builtinShipClassesRemoved,
    _circularTrackHexed): clear ships/courses/crew/race and start fresh. */
+/* Second breaking migration (see RULE_CHANGES.md 2026-10-03): Ship Class and
+   Crewman reintroduced. A Ship built under the first Circus Maximus
+   conversion carried its six stats directly; it now carries a classId/
+   crewmanId instead, which don't correspond to anything -- same clear-and-
+   restart precedent as _circusMaximusConversion above. */
 function migrateState(state) {
   if (!state._circusMaximusConversion) {
     state.ships = [];
@@ -116,6 +133,15 @@ function migrateState(state) {
     delete state.shipClasses;
     state._circusMaximusConversion = true;
   }
+  if (!state._shipClassCrewmanSplit) {
+    state.ships = [];
+    state.race = null;
+    state.shipClasses = [];
+    state.crewmen = [];
+    state._shipClassCrewmanSplit = true;
+  }
+  state.shipClasses = state.shipClasses || [];
+  state.crewmen = state.crewmen || [];
   // Self-heal a cached race: a car at 0 HP must be out of the race. Early
   // saves (or HP zeroed on a path that didn't flag it) can leave `out`
   // unset while hp is 0, so the wreck keeps racing. Mark it out here, with
@@ -132,55 +158,97 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
 }
 function getShip(id) { return STATE.ships.find(s => s.id === id); }
+function getShipClass(id) { return STATE.shipClasses.find(c => c.id === id); }
+function getCrewman(id) { return STATE.crewmen.find(c => c.id === id); }
 function getCourse(id) { return STATE.courses.find(c => c.id === id); }
 function shipName(shipId) { const s = getShip(shipId); return s ? s.name : "(deleted ship)"; }
+function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); return cls ? cls.division : null; }
 
 /* ============================== Cars: Tier, build points, stats ==============================
    See RULE_CHANGES.md 2026-10-03. Division (Flash/Spark/Comet/Meteor/Nova) is
    FLAVOR ONLY -- it just picks a Tier and which Leg Feature flavor pool to
    draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier alone drives
-   crew size and the build-point budget. A car (Hero ship or NPC alike) is
-   six numbers -- Speed, Health, Armor, Attack, Damage, Skill -- bought up
-   from a base line on one shared Tier-scaled point pool (Circus Maximus's
-   own flat 6 at Tier 1, +1 per Tier beyond that). */
-const CAR_STATS = ["speed", "health", "armor", "attack", "damage", "skill"];
+   flavor crew size and a Ship Class's build-point budget.
+
+   A car is five Ship Class stats (Thrust/Health/Armor/Attack/Damage) plus
+   one Crewman stat (Skill) -- see carStats() below, the one place that reads
+   both and (for NPCs, who have neither a Class nor a Crewman) its own inline
+   numbers instead. */
+const SHIP_STATS = ["thrust", "health", "armor", "attack", "damage"];
 function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
 function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
 function tierBuildPoints(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).buildPoints; }
-// A stat's value before any points are spent -- Health is Tier x3 (GASCAR's
-// own existing HP formula), everything else is Circus Maximus's own base
-// (Skill 7, the rest 0 except Damage's minimum of 1).
-function statBase(stat, tier) { return stat === "health" ? tier * 3 : GDATA.STAT_BASE[stat]; }
-// Build points spent so far on one car, across all six stats -- kept as a
-// single shared pool (see RULE_CHANGES.md) rather than Skill having its own
-// budget, but routed through this one function so that split could be made
-// later without touching every caller.
-function buildPointsSpent(ship) {
-  const tier = carTier(ship.division);
-  return CAR_STATS.reduce((sum, stat) => sum + Math.max(0, (ship[stat] || 0) - statBase(stat, tier)) * GDATA.STAT_COSTS[stat], 0);
+// The uniform Mk cost progression (see RULE_CHANGES.md 2026-10-03): raising
+// a stat from level N to N+1 costs N+1 points -- a stat's own level IS its
+// Mk number. mkCumulativeCost(N) is the total spent to reach N from 0 (a
+// triangular number); mkStepCost(N) is just the cost of the next single step.
+function mkStepCost(fromLevel) { return fromLevel + 1; }
+function mkCumulativeCost(level) { return level * (level + 1) / 2; }
+// ---------- Ship Class (Shipyard) ----------
+function classBuildPointsSpent(cls) {
+  return SHIP_STATS.reduce((sum, stat) => sum + mkCumulativeCost(cls[stat] || 0), 0);
 }
-function buildPointsRemaining(ship) { return tierBuildPoints(carTier(ship.division)) - buildPointsSpent(ship); }
-// A fresh car/NPC at its Division's baseline, nothing spent yet.
-function freshCarStats(division) {
-  const tier = carTier(division);
+function classBuildPointsRemaining(cls) { return tierBuildPoints(carTier(cls.division)) - classBuildPointsSpent(cls); }
+function freshClassStats() {
   const out = {};
-  CAR_STATS.forEach(stat => { out[stat] = statBase(stat, tier); });
+  SHIP_STATS.forEach(stat => { out[stat] = 0; });
+  return out;
+}
+// ---------- Crewman (Cantina) ----------
+// A Crewman's Skill starts at GDATA.CREWMAN_SKILL_BASE for free; raising it
+// further costs banked XP via the same mkStepCost() progression (so Mk5->Mk6
+// costs 6, same as any Ship Class stat's 5th->6th point would).
+function freshCrewman(name) { return { id: uid("crew"), name, skill: GDATA.CREWMAN_SKILL_BASE, xp: 0 }; }
+function crewmanNextStepCost(crewman) { return mkStepCost(crewman.skill); }
+// ---------- NPCs: auto-built, not hand-spent ----------
+// An NPC has no Ship Class/Crewman of its own -- its Division/Tier build-point
+// budget is spent automatically, as evenly as the triangular cost curve
+// allows (repeatedly bump whichever of the 5 Ship stats is currently
+// lowest), and its Skill is left at the same free baseline every Crewman
+// starts at (NPCs don't earn or spend XP).
+function freshNpcStats(division) {
+  const tier = carTier(division);
+  let budget = tierBuildPoints(tier);
+  const out = freshClassStats();
+  for (;;) {
+    const stat = SHIP_STATS.reduce((lowest, s) => out[s] < out[lowest] ? s : lowest, SHIP_STATS[0]);
+    const cost = mkStepCost(out[stat]);
+    if (cost > budget) break;
+    out[stat] += 1;
+    budget -= cost;
+  }
+  out.skill = GDATA.CREWMAN_SKILL_BASE;
   return out;
 }
 // Every stat a participant (Hero ship OR NPC) fights with this race --
-// unifies the two shapes (a Hero's stats live on its Ship; an NPC carries
-// its own inline, see startRace()) so the rest of the engine never has to
-// branch on p.type to read a stat.
+// unifies the two shapes (a Hero's 5 stats live on its Ship's Class, its
+// Skill on its assigned Crewman; an NPC carries all six inline, see
+// startRace()) so the rest of the engine never has to branch on p.type to
+// read a stat.
 function carStats(p) {
-  const src = p.type === "hero" ? getShip(p.shipId) : p;
   const out = {};
-  CAR_STATS.forEach(stat => { out[stat] = (src && src[stat]) || 0; });
+  if (p.type === "hero") {
+    const ship = getShip(p.shipId);
+    const cls = ship && getShipClass(ship.classId);
+    SHIP_STATS.forEach(stat => { out[stat] = (cls && cls[stat]) || 0; });
+    const crewman = ship && getCrewman(ship.crewmanId);
+    out.skill = crewman ? crewman.skill : 0;
+    return out;
+  }
+  SHIP_STATS.concat("skill").forEach(stat => { out[stat] = p[stat] || 0; });
   return out;
 }
-// A participant's Division -- lives on its Ship for a Hero, inline for an
-// NPC (see startRace()). Needed anywhere Tier has to be looked up for a
-// participant directly (e.g. a Maneuver's Tier-scaled self-cost).
-function carDivision(p) { return p.type === "hero" ? getShip(p.shipId).division : p.division; }
+// A participant's Division -- lives on its Ship's Class for a Hero, inline
+// for an NPC (see startRace()). Needed anywhere Tier has to be looked up for
+// a participant directly (e.g. a Maneuver's Tier-scaled self-cost).
+function carDivision(p) {
+  if (p.type === "hero") {
+    const ship = getShip(p.shipId);
+    const cls = ship && getShipClass(ship.classId);
+    return cls ? cls.division : "Comet";
+  }
+  return p.division;
+}
 
 /* ============================== Hex-grid Circular Track geometry ==============================
    Unchanged from before the Circus Maximus conversion (see RULE_CHANGES.md
@@ -429,7 +497,7 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
 // hex -- Circus Maximus's own "entering a space with another chariot"
 // obstacle rule, not a shared-hex Disadvantage penalty (Crowded Field,
 // retired). Resolves every active car's path in Circus Maximus's own turn
-// order (lowest Speed stat first -- a slower car commits to its line
+// order (lowest Thrust stat first -- a slower car commits to its line
 // before a faster one has to react to it), building up an occupied-hex set
 // as each car's new position is settled.
 // `paramsFor(p)` supplies { movement, slipHexes } for this pass -- the
@@ -445,7 +513,7 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
 // if it triggered, is handled separately).
 function resolveCarCollisions(race, geom, paramsFor, place) {
   const order = race.participants.filter(p => !p.out).sort((a, b) => {
-    const diff = carStats(a).speed - carStats(b).speed;
+    const diff = carStats(a).thrust - carStats(b).thrust;
     return diff !== 0 ? diff : Math.random() - 0.5;
   });
   // hexKey -> Set of participant ids currently claiming it. A Set (not a
@@ -537,7 +605,8 @@ function renderCircularTrackSvg(race, course) {
     const { laneIdx0, transform } = circRacerTransform(geom, p);
     const label = p.type === "hero" ? shipName(p.shipId) : p.name;
     const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}`;
-    const imgHref = p.iconColor && p.iconNumber && p.iconDivision ? esc(shipIconPath(p.iconDivision, p.iconNumber, p.iconColor)) : "";
+    const iconInfo = participantIconInfo(p);
+    const imgHref = iconInfo ? esc(shipIconPath(iconInfo.division, iconInfo.number, iconInfo.color)) : "";
     svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" transform="${transform}">
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
@@ -578,10 +647,39 @@ function legAggressionFor(p, positions) {
 
 /* ============================== Icons ============================== */
 function shipIconPath(division, number, color) { return `${GDATA.SHIP_ICON_DIR}${division} ${number} ${color}.png`; }
+// A Ship's icon is its Class's White number recolored -- resolves through
+// the Class, since the Ship record itself only stores the color. Returns
+// null (not a path) if the Class or color isn't picked yet.
+function shipIconInfo(ship) {
+  const cls = ship && getShipClass(ship.classId);
+  if (!cls || !cls.icon || !ship.iconColor) return null;
+  return { division: cls.division, number: cls.icon, color: ship.iconColor };
+}
+// A race participant's icon -- a Hero's resolves through its Ship/Class
+// (see shipIconInfo()); an NPC carries its own random pick inline (see
+// startRace()). Used by the Standings board and the Circular Track SVG so
+// Heroes and NPCs both render correctly, not just NPCs.
+function participantIconInfo(p) {
+  if (p.type === "hero") return shipIconInfo(getShip(p.shipId));
+  if (!p.iconColor || !p.iconNumber) return null;
+  return { division: p.iconDivision, number: p.iconNumber, color: p.iconColor };
+}
+function participantIconPath(p) {
+  const info = participantIconInfo(p);
+  return info ? shipIconPath(info.division, info.number, info.color) : "";
+}
+// Thumbnail <img> for a Ship Class (always its own White icon), a Ship (its
+// Class's number in the Ship's own color), or a race participant (Hero or
+// NPC, via participantIconInfo()) -- dispatches on shape, not on an explicit
+// kind flag, matching this file's existing obj.type-sniffing style.
 function iconThumbImg(obj) {
-  const div = obj && (obj.type === "hero" ? obj.division : obj.iconDivision || obj.division);
-  if (!obj || !obj.iconColor || !obj.iconNumber || !div) return "";
-  return `<img class="iconthumb" src="${esc(shipIconPath(div, obj.iconNumber, obj.iconColor))}" title="${esc(div)} ${esc(obj.iconColor)} ${esc(obj.iconNumber)}">`;
+  if (!obj) return "";
+  let info;
+  if (obj.classId !== undefined) info = shipIconInfo(obj); // a Ship
+  else if (obj.icon !== undefined && obj.division !== undefined) info = obj.icon ? { division: obj.division, number: obj.icon, color: GDATA.SHIP_CLASS_ICON_COLOR } : null; // a Ship Class
+  else info = participantIconInfo(obj); // a race participant (Hero or NPC)
+  if (!info) return "";
+  return `<img class="iconthumb" src="${esc(shipIconPath(info.division, info.number, info.color))}" title="${esc(info.division)} ${esc(info.color)} ${esc(info.number)}">`;
 }
 // Picks a uniformly random (color, number) not already in usedKeys (a Set of
 // "Color|Number" strings) -- used to give an NPC racer a random, distinct
@@ -595,9 +693,25 @@ function pickRandomUnusedIcon(usedKeys) {
   if (!options.length) return null;
   return options[Math.floor(Math.random() * options.length)];
 }
+// Which White icon numbers are already taken by another Ship Class in the
+// SAME Division (icons are unique per Division, not app-wide -- see
+// GDATA.SHIP_ICON_DIR's comment in data.js).
+function usedClassIconNumbers(excludeId, division) {
+  const used = new Set();
+  STATE.shipClasses.forEach(c => { if (c.id !== excludeId && c.division === division && c.icon) used.add(c.icon); });
+  return used;
+}
+// Which "Color|Number" pairs are already taken by another SHIP in the same
+// Division (NPCs get their own random pick at race start and never collide
+// with a Ship's saved icon, so they're excluded here).
 function usedShipIconKeys(excludeId) {
   const used = new Set();
-  STATE.ships.forEach(s => { if (s.id !== excludeId && s.iconColor && s.iconNumber) used.add(`${s.division}|${s.iconColor}|${s.iconNumber}`); });
+  STATE.ships.forEach(s => {
+    if (s.id === excludeId || !s.iconColor) return;
+    const cls = getShipClass(s.classId);
+    if (!cls || !cls.icon) return;
+    used.add(`${cls.division}|${s.iconColor}|${cls.icon}`);
+  });
   return used;
 }
 
@@ -683,9 +797,9 @@ function initLegState(race) {
   race.legState = { leg, declLocked: false, cars };
   STATE._openDeclFor = null;
 }
-// Initiative = d20 + the car's own Speed stat.
+// Initiative = d20 + the car's own Thrust stat.
 function resolveInitiativeOrder(participants) {
-  const rolled = participants.map(p => ({ p, val: rollD(20) + carStats(p).speed }));
+  const rolled = participants.map(p => ({ p, val: rollD(20) + carStats(p).thrust }));
   rolled.forEach(r => { r.p.initiative = r.val; });
   rolled.sort((a, b) => b.val - a.val);
   const result = [];
@@ -700,7 +814,7 @@ function resolveInitiativeOrder(participants) {
   return result;
 }
 function breakTieOrder(tied) {
-  const rolled = tied.map(p => ({ p, val: rollD(20) + carStats(p).speed }));
+  const rolled = tied.map(p => ({ p, val: rollD(20) + carStats(p).thrust }));
   rolled.sort((a, b) => b.val - a.val);
   const result = [];
   let i = 0;
@@ -716,23 +830,29 @@ function breakTieOrder(tied) {
 function startRace(courseId, shipIds, npcs) {
   const course = getCourse(courseId);
   const participants = [];
+  // "Color|Number" within this one race -- every Hero/NPC here shares the
+  // course's own Division already (Race Setup only offers same-Division
+  // ships), so the Division itself doesn't need to be part of the key.
   const usedIcons = new Set();
   shipIds.forEach(sid => {
     const ship = getShip(sid);
+    const cls = getShipClass(ship.classId);
+    const health = cls ? cls.health : 0;
     participants.push({
       id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [],
-      hp: ship.health, maxHp: ship.health, out: false, gear: 0
+      hp: health, maxHp: health, out: false, gear: 0
     });
-    if (ship.iconColor && ship.iconNumber) usedIcons.add(`${ship.division}|${ship.iconColor}|${ship.iconNumber}`);
+    const info = shipIconInfo(ship);
+    if (info) usedIcons.add(`${info.color}|${info.number}`);
   });
   // An NPC racer is a full car in its own right now (see RULE_CHANGES.md) --
-  // built the same way a Hero's ship is (freshCarStats() at the course's own
+  // built the same way a Hero's ship is (freshNpcStats() at the course's own
   // Division/Tier), not a stripped-down abstraction. It gets a random icon,
   // distinct from every Hero ship and every other NPC in this race.
   npcs.forEach(n => {
     const pick = pickRandomUnusedIcon(usedIcons);
-    if (pick) usedIcons.add(`${course.division}|${pick.color}|${pick.number}`);
-    const stats = n.stats || freshCarStats(course.division);
+    if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
+    const stats = n.stats || freshNpcStats(course.division);
     participants.push({
       id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
@@ -866,7 +986,7 @@ function lockDeclarations() {
     const stats = carStats(p);
     const dice = GDATA.GEAR_DICE[p.gear];
     const rolled = dice ? Array.from({ length: dice.n }, () => rollD(dice.d)).reduce((a, b) => a + b, 0) : 0;
-    car.gearMovement = p.gear === 0 ? 0 : Math.max(0, rolled + stats.speed);
+    car.gearMovement = p.gear === 0 ? 0 : Math.max(0, rolled + stats.thrust);
   });
   // Slip: curve-touch Advantage/Disadvantage, projected from this Leg's
   // just-rolled gear movement (the Slingshot/actual-path resolution happens
@@ -993,6 +1113,22 @@ function describeOutOfControlAffects(affects, tier) {
     return "";
   }).filter(Boolean).join("; ");
 }
+// Crewman XP (see RULE_CHANGES.md 2026-10-03 / GDATA.CREWMAN_XP): every Hero
+// that actually FINISHED the race (completed the required laps, not
+// destroyed) banks `finish` XP for its assigned Crewman; whoever finished in
+// the best real track position additionally banks `win` on top. NPCs have no
+// Crewman and are never credited.
+function awardCrewmanXp(race, course, ringParams) {
+  const finishers = race.participants.filter(p => p.type === "hero" && !p.out && (p.laps || 0) >= course.laps);
+  if (!finishers.length) return;
+  finishers.sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
+  finishers.forEach((p, i) => {
+    const ship = getShip(p.shipId);
+    const crewman = ship && getCrewman(ship.crewmanId);
+    if (!crewman) return;
+    crewman.xp += GDATA.CREWMAN_XP.finish + (i === 0 ? GDATA.CREWMAN_XP.win : 0);
+  });
+}
 function finishLeg() {
   const race = STATE.race, ls = race.legState;
   const course = getCourse(race.courseId);
@@ -1015,7 +1151,7 @@ function finishLeg() {
   });
   // Movement + Slip, resolved with the "no two cars share a hex" collision
   // rule (see RULE_CHANGES.md 2026-10-03, replacing Crowded Field) --
-  // Circus Maximus's own turn order (lowest Speed first), drifting to an
+  // Circus Maximus's own turn order (lowest Thrust first), drifting to an
   // open neighbor hex or auto-rolling Out-of-Control if fully boxed in.
   const results = resolveCarCollisions(race, geom, p => {
     const info = movementInfo[p.id];
@@ -1054,6 +1190,7 @@ function finishLeg() {
   const heroesLeft = race.participants.some(p => p.type === "hero" && !p.out);
   if (someoneFinished || !heroesLeft) {
     race.finished = true;
+    awardCrewmanXp(race, course, ringParams);
   } else {
     race.legIndex += 1;
     initLegState(race);
@@ -1062,12 +1199,14 @@ function finishLeg() {
 }
 
 /* ============================== UI ============================== */
-let CURRENT_TAB = "hangar";
+let CURRENT_TAB = "shipyard";
 function setTab(tab) { CURRENT_TAB = tab; render(); }
 function render() {
   document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === CURRENT_TAB));
   const root = document.getElementById("view");
   if (CURRENT_TAB === "introduction") root.innerHTML = renderIntroduction();
+  else if (CURRENT_TAB === "shipyard") root.innerHTML = renderShipyard();
+  else if (CURRENT_TAB === "cantina") root.innerHTML = renderCantina();
   else if (CURRENT_TAB === "hangar") root.innerHTML = renderHangarBay();
   else if (CURRENT_TAB === "course") root.innerHTML = renderCourse();
   else if (CURRENT_TAB === "race") root.innerHTML = renderRace();
@@ -1075,24 +1214,125 @@ function render() {
   else root.innerHTML = renderReference();
 }
 
-/* ---------- Hangar Bay: build cars directly (no separate Ship Class layer --
-   see RULE_CHANGES.md 2026-10-03: a car is just six numbers now, there's no
-   complex stat block worth templating separately from the Ship itself). ---------- */
+/* ---------- Shipyard: build Ship Classes (the reusable hull) ----------
+   See RULE_CHANGES.md 2026-10-03: a Ship Class holds the five mechanical
+   stats and the hull's White icon number; multiple Ships (Hangar Bay) can be
+   assembled from one Class. */
+function renderShipyard() {
+  let html = `<section class="card"><h2>Ship Classes</h2>
+    <div class="row"><button onclick="App.addShipClass()">+ Add Ship Class</button>
+    <label>Division <select onchange="App.setShipyardAddDivision(this.value)">
+      ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === (STATE._shipyardAddDivision || "Comet") ? "selected" : ""}>${d} (Tier ${GDATA.DIVISION_TIER[d]})</option>`).join("")}
+    </select></label></div>`;
+  if (!STATE.shipClasses.length) html += `<p class="muted">No Ship Classes yet. A Class is a reusable hull -- build one here, then assemble one or more actual Ships from it in the Hangar Bay.</p>`;
+  STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
+  GDATA.DIVISIONS.forEach(div => {
+    const classes = STATE.shipClasses.filter(c => c.division === div);
+    const collapsed = !!STATE._shipyardDivCollapse[div];
+    html += `<div class="divgroup"><div class="divhead" onclick="App.toggleShipyardDiv('${div}')">
+      <button class="ghost collapse-btn" tabindex="-1">${collapsed ? "▸" : "▾"}</button>
+      <b>${div}</b> <span class="muted">Tier ${GDATA.DIVISION_TIER[div]} · ${classes.length} ${classes.length === 1 ? "class" : "classes"}</span></div>`;
+    if (!collapsed) {
+      html += `<div class="divbody">`;
+      if (!classes.length) html += `<p class="muted">No ${div} Ship Classes yet.</p>`;
+      classes.forEach(cls => { html += renderShipClassCard(cls); });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  });
+  html += `</section>`;
+  return html;
+}
+const STAT_LABEL = { thrust: "Thrust (G)", health: "Health", armor: "Armor", attack: "Attack", damage: "Damage" };
+function renderShipClassCard(cls) {
+  const tier = carTier(cls.division);
+  const collapsed = !!cls._collapsed;
+  const remaining = classBuildPointsRemaining(cls);
+  const shipsBuilt = STATE.ships.filter(s => s.classId === cls.id).length;
+  let html = `<div class="subcard">
+    <div class="row">
+      <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipClassCollapse('${cls.id}')">${collapsed ? "▸" : "▾"}</button>
+      ${iconThumbImg(cls)}
+      <input class="name-input" value="${esc(cls.name)}" onchange="App.updateShipClass('${cls.id}','name',this.value)">
+      <label>Division
+        <select onchange="App.updateShipClassDivision('${cls.id}',this.value)">
+          ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === cls.division ? "selected" : ""}>${d}</option>`).join("")}
+        </select></label>
+      <span class="tag">Tier ${tier}</span>
+      <span class="tag ${remaining < 0 ? "danger" : ""}">${remaining} build pt${remaining === 1 ? "" : "s"} left</span>
+      <span class="tag" title="How many Ships in the Hangar Bay are built from this Class">${shipsBuilt} ship${shipsBuilt === 1 ? "" : "s"} built</span>
+      <button class="danger" style="margin-left:auto" onclick="App.deleteShipClass('${cls.id}')">Delete</button>
+    </div>`;
+  if (!collapsed) {
+    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
+      ${SHIP_STATS.map(s => `<td><b>Mk${cls[s]}</b> ${numStepper(`<input type="number" style="width:48px" min="0" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)} <span class="muted">(next +${mkStepCost(cls[s])}pt)</span></td>`).join("")}
+    </tr></table>`;
+    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs its own Crewman assigned as pilot (Hangar Bay) -- Skill lives on the Crewman, not here.</p>`;
+    html += renderClassIconPicker(cls);
+  }
+  html += `</div>`;
+  return html;
+}
+function renderClassIconPicker(cls) {
+  const used = usedClassIconNumbers(cls.id, cls.division);
+  const swatches = GDATA.SHIP_ICON_NUMBERS.map(num => {
+    const selected = cls.icon === num;
+    const takenByOther = used.has(num) && !selected;
+    const btnCls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
+    const title = takenByOther ? `Already used by another ${cls.division} Ship Class` : (selected ? `Icon ${num} (click to remove)` : `Icon ${num}`);
+    const action = takenByOther ? "disabled" : `onclick="App.updateShipClassIcon('${cls.id}','${selected ? "" : num}')"`;
+    return `<button type="button" class="${btnCls}" ${action} title="${title}"><img src="${esc(shipIconPath(cls.division, num, GDATA.SHIP_CLASS_ICON_COLOR))}" alt="Icon ${num}"></button>`;
+  }).join("");
+  return `<div class="row"><b>Icon</b></div><div class="iconpicker">${swatches}</div>`;
+}
+
+/* ---------- Cantina: build Crewmen (Skill lives here, not on the Ship) ----------
+   See RULE_CHANGES.md 2026-10-03. Every Crewman starts at Skill Mk5 for free;
+   raising it further spends XP banked by racing (GDATA.CREWMAN_XP), not a
+   build budget -- there's no up-front point spend here. */
+function renderCantina() {
+  let html = `<section class="card"><h2>Crewmen</h2>
+    <div class="row"><button onclick="App.addCrewman()">+ Add Crewman</button></div>`;
+  if (!STATE.crewmen.length) html += `<p class="muted">No Crewmen yet. Whichever Crewman is assigned to pilot a Ship (Hangar Bay) is whose Skill rolls that Ship's Skill Checks -- add one here first.</p>`;
+  STATE.crewmen.forEach(crewman => { html += renderCrewmanCard(crewman); });
+  html += `</section>`;
+  return html;
+}
+function renderCrewmanCard(crewman) {
+  const cost = crewmanNextStepCost(crewman);
+  const canAfford = crewman.xp >= cost;
+  const assignedTo = STATE.ships.filter(s => s.crewmanId === crewman.id).map(s => s.name);
+  return `<div class="subcard">
+    <div class="row">
+      <input class="name-input" value="${esc(crewman.name)}" onchange="App.updateCrewman('${crewman.id}','name',this.value)">
+      <button class="ghost" title="Random name" onclick="App.rerollCrewmanName('${crewman.id}')">🎲</button>
+      <span class="tag">Skill Mk${crewman.skill}</span>
+      <span class="tag" title="Earned by finishing/winning races">${crewman.xp} XP banked</span>
+      <button ${canAfford ? "" : "disabled"} title="${canAfford ? "" : `Needs ${cost} XP`}" onclick="App.spendCrewmanXp('${crewman.id}')">Spend ${cost} XP -> Mk${crewman.skill + 1}</button>
+      <span class="muted">${assignedTo.length ? `Piloting: ${assignedTo.map(n => esc(n)).join(", ")}` : "Unassigned"}</span>
+      <button class="danger" style="margin-left:auto" onclick="App.deleteCrewman('${crewman.id}')">Delete</button>
+    </div>
+  </div>`;
+}
+
+/* ---------- Hangar Bay: assemble Ships from a Ship Class + an assigned
+   Crewman ---------- */
 function renderHangarBay() {
+  if (!STATE.shipClasses.length) {
+    return `<section class="card"><h2>Ships</h2>
+      <p class="muted">No Ship Classes yet. Build one in the Shipyard tab first, then come back here to assemble a Ship from it.</p></section>`;
+  }
   let html = `<section class="card"><h2>Ships</h2>
     <div class="row"><button onclick="App.addShip()">+ Add Ship</button>
-    <label>Division <select onchange="App.setHangarAddDivision(this.value)">
-      ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === (STATE._hangarAddDivision || "Comet") ? "selected" : ""}>${d} (Tier ${GDATA.DIVISION_TIER[d]})</option>`).join("")}
-    </select></label>
     <button class="ghost" onclick="App.randomShipName()">🎲 Name Idea</button> <span id="nameIdea" class="muted"></span></div>`;
   if (!STATE.ships.length) html += `<p class="muted">No ships yet.</p>`;
   STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
   GDATA.DIVISIONS.forEach(div => {
-    const ships = STATE.ships.filter(s => s.division === div);
+    const ships = STATE.ships.filter(s => { const cls = getShipClass(s.classId); return cls && cls.division === div; });
     const collapsed = !!STATE._hangarDivCollapse[div];
     html += `<div class="divgroup"><div class="divhead" onclick="App.toggleHangarDiv('${div}')">
       <button class="ghost collapse-btn" tabindex="-1">${collapsed ? "▸" : "▾"}</button>
-      <b>${div}</b> <span class="muted">Tier ${GDATA.DIVISION_TIER[div]} · ${ships.length} ${ships.length === 1 ? "ship" : "ships"}</span></div>`;
+      <b>${div}</b> <span class="muted">${ships.length} ${ships.length === 1 ? "ship" : "ships"}</span></div>`;
     if (!collapsed) {
       html += `<div class="divbody">`;
       if (!ships.length) html += `<p class="muted">No ${div} ships yet.</p>`;
@@ -1101,56 +1341,75 @@ function renderHangarBay() {
     }
     html += `</div>`;
   });
+  // A brand-new Ship with no Class chosen yet doesn't belong to any
+  // Division group above -- give it its own section so it's never hidden.
+  const unassigned = STATE.ships.filter(s => !getShipClass(s.classId));
+  if (unassigned.length) {
+    html += `<div class="divgroup"><div class="divhead"><b>No Ship Class chosen yet</b></div><div class="divbody">${unassigned.map(s => renderShipCard(s)).join("")}</div></div>`;
+  }
   html += `</section>`;
   return html;
 }
-const STAT_LABEL = { speed: "Speed", health: "Health", armor: "Armor", attack: "Attack", damage: "Damage", skill: "Skill" };
 function renderShipCard(ship) {
-  const tier = carTier(ship.division);
+  const cls = getShipClass(ship.classId);
+  if (!cls) {
+    return `<div class="subcard"><div class="row">
+      <input class="name-input" value="${esc(ship.name)}" onchange="App.updateShip('${ship.id}','name',this.value)">
+      <label>Ship Class
+        <select onchange="App.updateShip('${ship.id}','classId',this.value)">
+          <option value="">-- choose a Ship Class --</option>
+          ${STATE.shipClasses.map(c => `<option value="${c.id}">${esc(c.name)} (${c.division})</option>`).join("")}
+        </select></label>
+      <button class="danger" onclick="App.deleteShip('${ship.id}')">Delete</button>
+    </div></div>`;
+  }
   const collapsed = !!ship._collapsed;
-  const remaining = buildPointsRemaining(ship);
+  const crewman = getCrewman(ship.crewmanId);
   let html = `<div class="subcard">
     <div class="row">
       <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipCollapse('${ship.id}')">${collapsed ? "▸" : "▾"}</button>
       ${iconThumbImg(ship)}
       <input class="name-input" value="${esc(ship.name)}" onchange="App.updateShip('${ship.id}','name',this.value)">
       ${collapsed ? "" : `<button class="ghost" title="Random ship name" onclick="App.rerollShipName('${ship.id}')">🎲</button>`}
-      <label>Division
-        <select onchange="App.updateShipDivision('${ship.id}',this.value)">
-          ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === ship.division ? "selected" : ""}>${d}</option>`).join("")}
+      <label>Ship Class
+        <select onchange="App.updateShip('${ship.id}','classId',this.value)">
+          ${STATE.shipClasses.map(c => `<option value="${c.id}" ${c.id === ship.classId ? "selected" : ""}>${esc(c.name)} (${c.division})</option>`).join("")}
         </select></label>
-      <span class="tag">Tier ${tier}</span>
-      <span class="tag">Crew ${ship.crew.length}/${tierCrewCount(tier)}</span>
-      <span class="tag ${remaining < 0 ? "danger" : ""}">${remaining} build pt${remaining === 1 ? "" : "s"} left</span>
+      <label>Crewman
+        <select onchange="App.updateShip('${ship.id}','crewmanId',this.value)">
+          <option value="">-- none --</option>
+          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (Skill Mk${c.skill})</option>`).join("")}
+        </select></label>
+      <span class="tag ${crewman ? "" : "danger"}" title="${crewman ? "All set -- race-legal" : "A Ship needs an assigned Crewman to race"}">${crewman ? "Ready to race" : "🔒 Needs a Crewman"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
-    html += `<table class="mktable shiptable"><tr>${CAR_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
-      ${CAR_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="${statBase(s, tier)}" value="${ship[s]}" onchange="App.updateShipStat('${ship.id}','${s}',this.value)">`)} <span class="muted">(${GDATA.STAT_COSTS[s]}pt)</span></td>`).join("")}
-    </tr></table>`;
-    html += `<div class="row" style="align-items:flex-start"><b>Crew</b><div style="flex:1;min-width:0">
-      <p class="muted" style="margin:0 0 6px">Flavor only -- crew has no stats of its own; the ship's Skill above is what rolls.</p>
-      ${ship.crew.map((name, i) => `<div class="row" style="margin:2px 0">
-        <input value="${esc(name)}" onchange="App.updateCrewName('${ship.id}',${i},this.value)">
-        <button class="ghost" title="Random name" onclick="App.rerollCrewName('${ship.id}',${i})">🎲</button>
-      </div>`).join("")}
-    </div></div>`;
+    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Skill</th></tr><tr>
+      ${SHIP_STATS.map(s => `<td>Mk${cls[s]}</td>`).join("")}<td>${crewman ? `Mk${crewman.skill}` : "—"}</td>
+    </tr></table>
+    <p class="muted" style="margin:4px 0">Stats come from the Ship Class above (edit in the Shipyard) and the assigned Crewman's Skill (edit in the Cantina).</p>`;
     html += renderShipIconPicker(ship);
   }
   html += `</div>`;
   return html;
 }
 function renderShipIconPicker(ship) {
+  const cls = getShipClass(ship.classId);
+  if (!cls || !cls.icon) {
+    return `<div class="row"><b>Icon</b></div>
+      <p class="muted">Give "${esc(cls ? cls.name : "")}" an Icon in the Shipyard tab first -- a Ship's icon number always matches its Class's.</p>`;
+  }
   const used = usedShipIconKeys(ship.id);
-  const swatches = GDATA.SHIP_ICON_COLORS.flatMap(color => GDATA.SHIP_ICON_NUMBERS.map(num => {
-    const selected = ship.iconColor === color && ship.iconNumber === num;
-    const takenByOther = used.has(`${ship.division}|${color}|${num}`) && !selected;
-    const cls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
-    const title = takenByOther ? "Already used by another ship" : (selected ? `${color} ${num} (click to remove)` : `${color} ${num}`);
-    const action = takenByOther ? "disabled" : `onclick="App.updateShipIcon('${ship.id}','${selected ? "" : color}','${selected ? "" : num}')"`;
-    return `<button type="button" class="${cls}" ${action} title="${title}"><img src="${esc(shipIconPath(ship.division, num, color))}" alt="${color} ${num}"></button>`;
-  })).join("");
-  return `<div class="row"><b>Icon</b></div><div class="iconpicker">${swatches}</div>`;
+  const swatches = GDATA.SHIP_ICON_COLORS.map(color => {
+    const selected = ship.iconColor === color;
+    const takenByOther = used.has(`${cls.division}|${color}|${cls.icon}`) && !selected;
+    const btnCls = ["iconbtn"].concat(selected ? ["selected"] : []).concat(takenByOther ? ["used"] : []).join(" ");
+    const title = takenByOther ? "Already used by another ship" : (selected ? `${color} ${cls.icon} (click to remove)` : `${color} ${cls.icon}`);
+    const action = takenByOther ? "disabled" : `onclick="App.updateShipIcon('${ship.id}','${selected ? "" : color}')"`;
+    return `<button type="button" class="${btnCls}" ${action} title="${title}"><img src="${esc(shipIconPath(cls.division, cls.icon, color))}" alt="${color} ${cls.icon}"></button>`;
+  }).join("");
+  return `<div class="row"><b>Icon</b> <span class="muted">number ${cls.icon} (matches the Ship Class) -- pick a color</span></div>
+    <div class="iconpicker">${swatches}</div>`;
 }
 
 /* ---------- Racecourse: Circular Track only -- see RULE_CHANGES.md 2026-10-03.
@@ -1201,10 +1460,10 @@ function renderRaceSetup() {
     ${STATE.courses.map(c => `<option value="${c.id}" ${c.id === courseId ? "selected" : ""}>${esc(c.name)} (${c.division}, ${c.laps} laps)</option>`).join("")}
   </select></div>`;
   html += `<p class="muted">${course.lanes} lanes, inner lane ~${course.innerHexes} hexes around, ${course.laps} laps to finish. Ships are assigned a starting lane automatically; may Slip a lane during the race.</p>`;
-  const eligible = STATE.ships.filter(s => s.division === division);
-  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division only)</span></label><div>
+  const eligible = STATE.ships.filter(s => { const cls = getShipClass(s.classId); return cls && cls.division === division && getCrewman(s.crewmanId); });
+  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division, race-legal only)</span></label><div>
     ${eligible.length ? eligible.map(s => `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)}</label>`).join("")
-      : `<span class="muted">No ${division} Division ships built yet — build one in the Hangar Bay and set its Division to ${division}.</span>`}
+      : `<span class="muted">No ${division} Division ships ready yet — build a ${division} Ship Class in the Shipyard, then assemble a Ship with an assigned Crewman in the Hangar Bay.</span>`}
   </div></div>`;
   html += `<div class="formrow" style="align-items:flex-start"><label>NPC Racers</label><div>
     <div class="row">
@@ -1240,9 +1499,9 @@ function renderStandings(race) {
   ordered.forEach(p => {
     const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
     const pct = Math.min(100, Math.round((trackProgress(p, ringParams) / (course.laps * 6)) * 100));
-    const div = p.type === "hero" ? getShip(p.shipId).division : p.iconDivision;
-    const iconImg = p.iconColor && p.iconNumber && div
-      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(div, p.iconNumber, p.iconColor))}" style="left:${pct}%" title="${esc(div)} ${esc(p.iconColor)} ${esc(p.iconNumber)}">`
+    const info = participantIconInfo(p);
+    const iconImg = info
+      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(info.division, info.number, info.color))}" style="left:${pct}%" title="${esc(info.division)} ${esc(info.color)} ${esc(info.number)}">`
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
@@ -1354,7 +1613,7 @@ function renderDeclModal(race, pid) {
           <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
           <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
         </select>
-        <span class="muted">-> Gear ${newGear} this Leg (${newGear === 0 ? "no movement" : `${GDATA.GEAR_DICE[newGear].n}D${GDATA.GEAR_DICE[newGear].d} + Speed`})</span></div>
+        <span class="muted">-> Gear ${newGear} this Leg (${newGear === 0 ? "no movement" : `${GDATA.GEAR_DICE[newGear].n}D${GDATA.GEAR_DICE[newGear].d} + Thrust`})</span></div>
       <div class="formrow"><label>Slip (currently Lane ${p.lane})</label>
         <select onchange="App.setDecl('${pid}','slip',this.value)">
           <option value="" ${!car.slip ? "selected" : ""}>No change</option>
@@ -1520,19 +1779,23 @@ function renderInstructions() {
     <p class="muted" style="margin-top:-6px">v${APP_VERSION}</p>
     <p class="muted">Build things in this order, then run the race.</p>
 
-    <h3>1. Hangar Bay — build ships</h3>
-    <p>Each ship is one entity: a Division (which just picks a Tier and a flavor pool, nothing mechanical beyond that), a crew size fixed by Tier (flavor names only, no stats of their own), and six numbers -- Speed, Health, Armor, Attack, Damage, Skill -- bought up from a baseline on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Skill is what rolls the Skill Check; Speed adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver.</p>
+    <h3>1. Shipyard — build Ship Classes</h3>
+    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and five numbers -- Thrust (measured in G's), Health, Armor, Attack, Damage -- bought up from 0 on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Every stat uses the same cost progression: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. Thrust adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
 
-    <h3>2. Racecourse — design a race</h3>
-    <p>Every course is a Circular Track: a real hex-grid, 6 lanes, each exactly 6 hexes longer per lap than the one inside it. Set the Division (flavor + Tier), inner lane hex count, and laps to finish -- the race has no fixed Leg count, it ends the moment any racer completes the required laps.</p>
+    <h3>2. Cantina — build Crewmen</h3>
+    <p>Skill lives on a Crewman, not the Ship. Every Crewman starts at Skill Mk5 for free; raising it further costs banked XP (same cost progression as above: Mk5-&gt;Mk6 costs 6, Mk6-&gt;Mk7 costs 7...), earned by racing -- see Step 4. Whichever Crewman is assigned to pilot a Ship is whose Skill rolls that Ship's Skill Checks.</p>
 
-    <h3>3. Race — run it</h3>
-    <p>Race Setup filters selectable ships to the course's Division, and you can add NPC racers -- full cars in their own right, built the same way, each with an Aggression score (1-10) that drives its behavior. Each Leg:</p>
+    <h3>3. Hangar Bay — assemble ships</h3>
+    <p>A Ship is just a name, a chosen Ship Class, an assigned Crewman, and (once the Class has an icon) a Red/Green/Blue color for that same icon number. A Ship needs a Crewman assigned to be race-legal.</p>
+
+    <h3>4. Racecourse &amp; Race — run it</h3>
+    <p>Every course is a Circular Track: a real hex-grid, 6 lanes, each exactly 6 hexes longer per lap than the one inside it. Set the Division (flavor + Tier), inner lane hex count, and laps to finish -- the race has no fixed Leg count, it ends the moment any racer completes the required laps. Race Setup filters selectable ships to the course's Division (race-legal ones only), and you can add NPC racers -- full cars in their own right, built automatically from the same budget, each with an Aggression score (1-10) that drives its behavior. Each Leg:</p>
     <ol>
       <li><b>Declare</b> — shift your gear by at most 1 (0-5), optionally Slip a lane (Circular Track), and optionally run one Maneuver against a car within 2 hexes. NPCs declare automatically, driven by their Leg Aggression (Aggression + current standings position - 1 -- a car further back gambles more).</li>
-      <li><b>Resolve</b> — movement is unconditional: your current gear's die (1D4 up to 2D6, scaling with gear 1-5; gear 0 is no movement) plus your Speed stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Speed stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in. A Skill Check (d20 + Skill + Advantage/Disadvantage vs the Leg's TN) only fires if something risky happened this Leg -- more than 1 hex of Slip, high gear (4-5), your path crossing or landing on another car's hex, or running/receiving a Maneuver. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
+      <li><b>Resolve</b> — movement is unconditional: your current gear's die (1D4 up to 2D6, scaling with gear 1-5; gear 0 is no movement) plus your Thrust stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Thrust stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in. A Skill Check (d20 + Skill + Advantage/Disadvantage vs the Leg's TN) only fires if something risky happened this Leg -- more than 1 hex of Slip, high gear (4-5), your path crossing or landing on another car's hex, or running/receiving a Maneuver. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
       <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP; a miss does nothing further. It still costs the instigator Tier Disadvantage on their own Skill Check either way.</li>
       <li>A ship reduced to 0 HP (by Attack or an Out-of-Control hit) is marked out of the race and frozen at its crash position for the rest of the race.</li>
+      <li>Every Hero who finishes the race (completes the required laps) banks XP for its assigned Crewman -- more for finishing in the best real track position -- spendable in the Cantina.</li>
     </ol>
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 
@@ -1554,9 +1817,10 @@ function renderReference() {
   </section>`;
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
-    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Build Points</th></tr>
+    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Ship Class Build Points</th></tr>
     ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
-  </table></section>`;
+  </table>
+  <p class="muted">Every Ship Class stat (Thrust/Health/Armor/Attack/Damage) costs the same: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a Tier budget.</p></section>`;
 
   html += `<section class="card"><h2>Racing Maneuvers</h2>
     <p class="muted">One Maneuver per car per Leg, against a car within 2 hexes.</p>
@@ -1619,23 +1883,83 @@ const App = {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   },
 
-  /* Ships */
-  setHangarAddDivision(val) {
+  /* Ship Classes (Shipyard) */
+  setShipyardAddDivision(val) {
     if (!GDATA.DIVISIONS.includes(val)) return;
-    STATE._hangarAddDivision = val;
+    STATE._shipyardAddDivision = val;
     saveState(); render();
   },
+  addShipClass() {
+    const division = STATE._shipyardAddDivision || "Comet";
+    STATE.shipClasses.push({ id: uid("class"), name: "New Ship Class", division, icon: "", ...freshClassStats() });
+    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
+    STATE._shipyardDivCollapse[division] = false;
+    saveState(); render();
+  },
+  deleteShipClass(id) {
+    const inUse = STATE.ships.some(s => s.classId === id);
+    if (!confirm(inUse ? "Ships are built from this Class -- delete it anyway? They'll need a new Class chosen." : "Delete this Ship Class?")) return;
+    STATE.shipClasses = STATE.shipClasses.filter(c => c.id !== id);
+    saveState(); render();
+  },
+  updateShipClass(id, field, val) { getShipClass(id)[field] = val; saveState(); },
+  updateShipClassDivision(id, val) {
+    if (!GDATA.DIVISIONS.includes(val)) return;
+    const cls = getShipClass(id);
+    cls.division = val;
+    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
+    STATE._shipyardDivCollapse[val] = false;
+    saveState(); render();
+  },
+  updateShipClassStat(id, stat, val) {
+    const cls = getShipClass(id);
+    cls[stat] = clampInt(val, 0, 999, cls[stat]);
+    saveState(); render();
+  },
+  toggleShipClassCollapse(id) { const c = getShipClass(id); c._collapsed = !c._collapsed; saveState(); render(); },
+  toggleShipyardDiv(div) {
+    STATE._shipyardDivCollapse = STATE._shipyardDivCollapse || {};
+    STATE._shipyardDivCollapse[div] = !STATE._shipyardDivCollapse[div];
+    saveState(); render();
+  },
+  updateShipClassIcon(id, num) {
+    const cls = getShipClass(id);
+    if (!cls) return;
+    if (!num) { cls.icon = ""; saveState(); render(); return; }
+    if (STATE.shipClasses.some(c => c.id !== id && c.division === cls.division && c.icon === num)) {
+      alert(`That icon is already used by another ${cls.division} Ship Class.`);
+      return;
+    }
+    cls.icon = num;
+    saveState(); render();
+  },
+
+  /* Crewmen (Cantina) */
+  addCrewman() {
+    STATE.crewmen.push(freshCrewman(rollHeroName()));
+    saveState(); render();
+  },
+  deleteCrewman(id) {
+    const inUse = STATE.ships.some(s => s.crewmanId === id);
+    if (!confirm(inUse ? "A Ship has this Crewman assigned as pilot -- delete anyway? That Ship will need a new Crewman." : "Delete this Crewman?")) return;
+    STATE.crewmen = STATE.crewmen.filter(c => c.id !== id);
+    STATE.ships.forEach(s => { if (s.crewmanId === id) s.crewmanId = ""; });
+    saveState(); render();
+  },
+  updateCrewman(id, field, val) { getCrewman(id)[field] = val; saveState(); },
+  rerollCrewmanName(id) { getCrewman(id).name = rollHeroName(); saveState(); render(); },
+  spendCrewmanXp(id) {
+    const crewman = getCrewman(id);
+    const cost = crewmanNextStepCost(crewman);
+    if (crewman.xp < cost) return;
+    crewman.xp -= cost;
+    crewman.skill += 1;
+    saveState(); render();
+  },
+
+  /* Ships (Hangar Bay) */
   addShip() {
-    const division = STATE._hangarAddDivision || "Comet";
-    const tier = carTier(division);
-    STATE.ships.push({
-      id: uid("ship"), name: "New Ship", division,
-      crew: Array.from({ length: tierCrewCount(tier) }, () => rollHeroName()),
-      ...freshCarStats(division),
-      iconColor: "", iconNumber: ""
-    });
-    STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-    STATE._hangarDivCollapse[division] = false;
+    STATE.ships.push({ id: uid("ship"), name: "New Ship", classId: "", crewmanId: "", iconColor: "" });
     saveState(); render();
   },
   deleteShip(id) {
@@ -1643,33 +1967,15 @@ const App = {
     STATE.ships = STATE.ships.filter(s => s.id !== id);
     saveState(); render();
   },
-  updateShip(id, field, val) { getShip(id)[field] = val; saveState(); },
-  updateShipDivision(id, val) {
-    if (!GDATA.DIVISIONS.includes(val)) return;
+  updateShip(id, field, val) {
     const ship = getShip(id);
-    const newTier = carTier(val), oldTier = carTier(ship.division);
-    ship.division = val;
-    // Crew count follows Tier -- grow with blank-filled names, or shrink
-    // (trimming from the end) if the new Division's Tier is lower.
-    const want = tierCrewCount(newTier);
-    while (ship.crew.length < want) ship.crew.push(rollHeroName());
-    if (ship.crew.length > want) ship.crew = ship.crew.slice(0, want);
-    // Stat bases shift with Tier (Health especially) -- never drop a stat
-    // the player already raised above the new base.
-    CAR_STATS.forEach(stat => { ship[stat] = Math.max(ship[stat], statBase(stat, newTier)); });
-    if (ship.iconColor && ship.iconNumber && newTier !== oldTier) { /* icon stays -- division-scoped uniqueness is re-checked on next pick */ }
-    STATE._hangarDivCollapse = STATE._hangarDivCollapse || {};
-    STATE._hangarDivCollapse[val] = false;
+    ship[field] = val;
+    // Changing Class invalidates a previously-picked color (a different
+    // Class's icon number means the old color pick may now collide, or the
+    // new Class has no icon at all yet) -- cleared, re-pick in the picker.
+    if (field === "classId") ship.iconColor = "";
     saveState(); render();
   },
-  updateShipStat(id, stat, val) {
-    const ship = getShip(id);
-    const tier = carTier(ship.division);
-    ship[stat] = clampInt(val, statBase(stat, tier), 999, ship[stat]);
-    saveState(); render();
-  },
-  updateCrewName(id, idx, val) { getShip(id).crew[idx] = val; saveState(); },
-  rerollCrewName(id, idx) { getShip(id).crew[idx] = rollHeroName(); saveState(); render(); },
   randomShipName() { document.getElementById("nameIdea").textContent = rollShipName(); },
   rerollShipName(id) { getShip(id).name = rollShipName(); saveState(); render(); },
   toggleShipCollapse(id) { const s = getShip(id); s._collapsed = !s._collapsed; saveState(); render(); },
@@ -1678,15 +1984,16 @@ const App = {
     STATE._hangarDivCollapse[div] = !STATE._hangarDivCollapse[div];
     saveState(); render();
   },
-  updateShipIcon(id, color, num) {
+  updateShipIcon(id, color) {
     const ship = getShip(id);
-    if (!ship) return;
-    if (!color || !num) { ship.iconColor = ""; ship.iconNumber = ""; saveState(); render(); return; }
-    if (STATE.ships.some(s => s.id !== id && s.iconColor === color && s.iconNumber === num && s.division === ship.division)) {
-      alert(`That icon is already used by another ${ship.division} ship.`);
+    const cls = ship && getShipClass(ship.classId);
+    if (!ship || !cls || !cls.icon) return;
+    if (!color) { ship.iconColor = ""; saveState(); render(); return; }
+    if (STATE.ships.some(s => s.id !== id && s.iconColor === color && getShipClass(s.classId) === cls)) {
+      alert("That icon is already used by another ship.");
       return;
     }
-    ship.iconColor = color; ship.iconNumber = num;
+    ship.iconColor = color;
     saveState(); render();
   },
   togglePhaseCollapse(key) {
@@ -1739,7 +2046,7 @@ const App = {
     STATE._raceSetupCourse = id;
     const course = getCourse(id);
     const div = course ? course.division : null;
-    STATE._raceSetupShips = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && s.division === div; });
+    STATE._raceSetupShips = (STATE._raceSetupShips || []).filter(sid => shipDivision(getShip(sid)) === div);
     saveState(); render();
   },
   toggleRaceShip(id, checked) {
@@ -1752,8 +2059,8 @@ const App = {
     if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses.length ? STATE.courses[0].id : null;
     if (!courseId) { alert("Create a racecourse first."); return; }
     const division = getCourse(courseId).division;
-    const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && s.division === division; });
-    if (!shipIds.length) { alert(`Select at least one ${division} Division ship.`); return; }
+    const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
+    if (!shipIds.length) { alert(`Select at least one ${division} Division ship with a Crewman assigned.`); return; }
     startRace(courseId, shipIds, STATE._draftNpcs || []);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
