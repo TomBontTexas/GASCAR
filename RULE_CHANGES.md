@@ -17,6 +17,12 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-03 — Health renamed Points
+- **Earlier value:** the Ship Class stat was called Health.
+- **Current value:** same stat, same role (the car's max HP) -- renamed Points.
+- **Why:** user-directed rename.
+- **Where:** `GDATA.SHIP_STATS` in `data.js`; `SHIP_STATS`/`STAT_LABEL` in `app.js`.
+
 ### 2026-10-03 — Gear dice table revised
 - **Earlier value:** Gear 0 = no movement; 1 = 1D4; 2 = 1D6; 3 = 1D8; 4 = 1D10; 5 = 2D6.
 - **Current value:** Gear 0 = no movement; 1 = 1D10; 2 = 2D10; 3 = 1D20; 4 = 2D20; 5 = 3D20.

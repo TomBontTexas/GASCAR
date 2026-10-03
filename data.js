@@ -30,16 +30,17 @@ GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: 
 
 /* ---------- Ship Class build stats (see RULE_CHANGES.md 2026-10-03: Ship
    Class reintroduced) ----------
-   A Ship Class carries five mechanical numbers -- Thrust, Health, Armor,
+   A Ship Class carries five mechanical numbers -- Thrust, Points, Armor,
    Attack, Damage -- bought up from a 0 baseline on its Division's Tier-scaled
    build-point pool (GDATA.TIERS). Every stat uses the SAME triangular cost
    progression: raising a stat from level N to N+1 costs N+1 points (1, then
    2 more, then 3 more...). A stat's current level IS its "Mk" number (e.g.
    "Mk1 Thrust") -- see mkStepCost()/mkCumulativeCost() in app.js. Thrust is
-   measured in G's. Damage is a flat number (not a die) -- this conversion
-   uses ONE dice system (d20 + Advantage/Disadvantage) everywhere, no
-   secondary damage dice. */
-GDATA.SHIP_STATS = ["thrust", "health", "armor", "attack", "damage"];
+   measured in G's. Points is the car's max HP (renamed from Health, same
+   role). Damage is a flat number (not a die) -- this conversion uses ONE
+   dice system (d20 + Advantage/Disadvantage) everywhere, no secondary
+   damage dice. */
+GDATA.SHIP_STATS = ["thrust", "points", "armor", "attack", "damage"];
 
 /* ---------- Crewman Skill (see RULE_CHANGES.md 2026-10-03: Skill split off
    the ship onto a Crewman, Cantina tab) ----------

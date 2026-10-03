@@ -19,7 +19,7 @@
    Ship Class / Crewman reintroduced (see RULE_CHANGES.md 2026-10-03): a
    Hero's car is no longer six numbers directly on the Ship record. A Ship
    Class (Shipyard tab) holds the five build-point-bought mechanical stats
-   (Thrust/Health/Armor/Attack/Damage) plus the Division (-> Tier) and the
+   (Thrust/Points/Armor/Attack/Damage) plus the Division (-> Tier) and the
    hull's White icon number. A Crewman (Cantina tab) holds just Skill,
    starting at Mk5 for free and raised with XP banked by racing, not a build
    budget. A Ship (Hangar Bay tab) is just a name + a chosen Ship Class +
@@ -170,11 +170,11 @@ function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); re
    draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier alone drives
    flavor crew size and a Ship Class's build-point budget.
 
-   A car is five Ship Class stats (Thrust/Health/Armor/Attack/Damage) plus
+   A car is five Ship Class stats (Thrust/Points/Armor/Attack/Damage) plus
    one Crewman stat (Skill) -- see carStats() below, the one place that reads
    both and (for NPCs, who have neither a Class nor a Crewman) its own inline
    numbers instead. */
-const SHIP_STATS = ["thrust", "health", "armor", "attack", "damage"];
+const SHIP_STATS = ["thrust", "points", "armor", "attack", "damage"];
 function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
 function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
 function tierBuildPoints(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).buildPoints; }
@@ -837,10 +837,10 @@ function startRace(courseId, shipIds, npcs) {
   shipIds.forEach(sid => {
     const ship = getShip(sid);
     const cls = getShipClass(ship.classId);
-    const health = cls ? cls.health : 0;
+    const points = cls ? cls.points : 0;
     participants.push({
       id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [],
-      hp: health, maxHp: health, out: false, gear: 0
+      hp: points, maxHp: points, out: false, gear: 0
     });
     const info = shipIconInfo(ship);
     if (info) usedIcons.add(`${info.color}|${info.number}`);
@@ -857,7 +857,7 @@ function startRace(courseId, shipIds, npcs) {
       id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
       cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "",
-      hp: stats.health, maxHp: stats.health, out: false, gear: 0
+      hp: stats.points, maxHp: stats.points, out: false, gear: 0
     });
   });
   // Every racer starts in a lane, round-robin by Initiative, tracking laps
@@ -1243,7 +1243,7 @@ function renderShipyard() {
   html += `</section>`;
   return html;
 }
-const STAT_LABEL = { thrust: "Thrust (G)", health: "Health", armor: "Armor", attack: "Attack", damage: "Damage" };
+const STAT_LABEL = { thrust: "Thrust (G)", points: "Points", armor: "Armor", attack: "Attack", damage: "Damage" };
 function renderShipClassCard(cls) {
   const tier = carTier(cls.division);
   const collapsed = !!cls._collapsed;
@@ -1254,6 +1254,7 @@ function renderShipClassCard(cls) {
       <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipClassCollapse('${cls.id}')">${collapsed ? "▸" : "▾"}</button>
       ${iconThumbImg(cls)}
       <input class="name-input" value="${esc(cls.name)}" onchange="App.updateShipClass('${cls.id}','name',this.value)">
+      ${collapsed ? "" : `<button class="ghost" title="Random Class name" onclick="App.rerollShipClassName('${cls.id}')">🎲</button>`}
       <label>Division
         <select onchange="App.updateShipClassDivision('${cls.id}',this.value)">
           ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === cls.division ? "selected" : ""}>${d}</option>`).join("")}
@@ -1780,7 +1781,7 @@ function renderInstructions() {
     <p class="muted">Build things in this order, then run the race.</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and five numbers -- Thrust (measured in G's), Health, Armor, Attack, Damage -- bought up from 0 on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Every stat uses the same cost progression: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. Thrust adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
+    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and five numbers -- Thrust (measured in G's), Points, Armor, Attack, Damage -- bought up from 0 on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Every stat uses the same cost progression: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. Thrust adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
 
     <h3>2. Cantina — build Crewmen</h3>
     <p>Skill lives on a Crewman, not the Ship. Every Crewman starts at Skill Mk5 for free; raising it further costs banked XP (same cost progression as above: Mk5-&gt;Mk6 costs 6, Mk6-&gt;Mk7 costs 7...), earned by racing -- see Step 4. Whichever Crewman is assigned to pilot a Ship is whose Skill rolls that Ship's Skill Checks.</p>
@@ -1820,7 +1821,7 @@ function renderReference() {
     <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Ship Class Build Points</th></tr>
     ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
   </table>
-  <p class="muted">Every Ship Class stat (Thrust/Health/Armor/Attack/Damage) costs the same: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a Tier budget.</p></section>`;
+  <p class="muted">Every Ship Class stat (Thrust/Points/Armor/Attack/Damage) costs the same: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a Tier budget.</p></section>`;
 
   html += `<section class="card"><h2>Racing Maneuvers</h2>
     <p class="muted">One Maneuver per car per Leg, against a car within 2 hexes.</p>
@@ -1903,6 +1904,7 @@ const App = {
     saveState(); render();
   },
   updateShipClass(id, field, val) { getShipClass(id)[field] = val; saveState(); },
+  rerollShipClassName(id) { getShipClass(id).name = rollShipName(); saveState(); render(); },
   updateShipClassDivision(id, val) {
     if (!GDATA.DIVISIONS.includes(val)) return;
     const cls = getShipClass(id);

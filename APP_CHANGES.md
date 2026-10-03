@@ -15,6 +15,11 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-03 — Random Class name button
+- Added a 🎲 button next to a Ship Class's name field in the Shipyard
+  (`App.rerollShipClassName()`), matching the one already next to a Ship's
+  own name in the Hangar Bay. Reuses the same name generator (`rollShipName()`).
+
 ### 2026-10-03 — Ship Class / Crewman tabs rebuilt; Hero icon display bug fixed (see RULE_CHANGES.md for the rule-level changes)
 - **Scope:** reintroduces the Shipyard and Cantina tabs (`renderShipyard()`/
   `renderCantina()`, new) alongside a rewritten Hangar Bay (`renderHangarBay()`/
