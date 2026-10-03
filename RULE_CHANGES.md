@@ -17,6 +17,12 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-03 — Gear dice table revised
+- **Earlier value:** Gear 0 = no movement; 1 = 1D4; 2 = 1D6; 3 = 1D8; 4 = 1D10; 5 = 2D6.
+- **Current value:** Gear 0 = no movement; 1 = 1D10; 2 = 2D10; 3 = 1D20; 4 = 2D20; 5 = 3D20.
+- **Why:** user-directed revision to GASCAR's own gear table.
+- **Where:** `GDATA.GEAR_DICE` in `data.js`.
+
 ### 2026-10-03 — Ship Class and Crewman reintroduced; Speed renamed Thrust; one uniform Mk cost progression (refines the Circus Maximus conversion below)
 - **Earlier value (same day, see the Circus Maximus entry below):** a Hero's
   car was six numbers (Speed/Health/Armor/Attack/Damage/Skill) living

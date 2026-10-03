@@ -55,11 +55,11 @@ GDATA.CREWMAN_SKILL_BASE = 5;
 // (1st place) additionally banks `win` on top of that.
 GDATA.CREWMAN_XP = { finish: 1, win: 2 };
 
-/* ---------- Movement Category (Circus Maximus's gear system, p.3) ----------
+/* ---------- Movement Category (GASCAR's own gear table, revised 2026-10-03) ----------
    Shift by at most 1 level per Leg (clamped 0-5, starts at 0). The rolled
-   die (plus the car's own Speed stat) is that Leg's hex movement -- rolled
-   unconditionally every Leg, independent of the Skill Check below. */
-GDATA.GEAR_DICE = { 0: null, 1: { n: 1, d: 4 }, 2: { n: 1, d: 6 }, 3: { n: 1, d: 8 }, 4: { n: 1, d: 10 }, 5: { n: 2, d: 6 } };
+   dice (plus the car's own Thrust stat) are that Leg's hex movement --
+   rolled unconditionally every Leg, independent of the Skill Check below. */
+GDATA.GEAR_DICE = { 0: null, 1: { n: 1, d: 10 }, 2: { n: 2, d: 10 }, 3: { n: 1, d: 20 }, 4: { n: 2, d: 20 }, 5: { n: 3, d: 20 } };
 GDATA.MAX_GEAR = 5;
 GDATA.HIGH_GEAR_TRIGGER = 4; // gear 4 or 5 is "high gear" -- one of the Skill Check triggers
 
