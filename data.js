@@ -11,14 +11,15 @@ const GDATA = {};
 
 /* ---------- Tier table: the one progression axis ----------
    Division (below) is flavor only and just PICKS a Tier -- everything
-   mechanical (the Ship Class's build-point budget, flavor crew size) comes
-   from Tier alone. buildPoints starts at Circus Maximus's own flat 6 (Tier 1)
-   and gains +1 per Tier. */
+   mechanical (the Ship Class's construction-point budget, flavor crew size)
+   comes from Tier alone. A Ship Class's construction-point budget is simply
+   Tier x 10 (see tierBuildPoints() in app.js) -- crew size (flavor only) is
+   the one thing still kept in a per-Tier table. */
 GDATA.TIERS = {
-  1: { crew: 1, buildPoints: 6 },
-  2: { crew: 2, buildPoints: 7 },
-  3: { crew: 3, buildPoints: 8 },
-  4: { crew: 4, buildPoints: 9 }
+  1: { crew: 1 },
+  2: { crew: 2 },
+  3: { crew: 3 },
+  4: { crew: 4 }
 };
 
 /* ---------- Divisions: flavor name -> Tier + which Leg Feature flavor pool
@@ -28,19 +29,28 @@ GDATA.DIVISIONS = ["Flash", "Spark", "Comet", "Meteor", "Nova"];
 GDATA.DIVISION_TIER = { Flash: 1, Spark: 1, Comet: 2, Meteor: 3, Nova: 4 };
 GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: false, Nova: false };
 
-/* ---------- Ship Class build stats (see RULE_CHANGES.md 2026-10-03: Ship
-   Class reintroduced) ----------
-   A Ship Class carries five mechanical numbers -- Thrust, Points, Armor,
-   Attack, Damage -- bought up from a 0 baseline on its Division's Tier-scaled
-   build-point pool (GDATA.TIERS). Every stat uses the SAME triangular cost
-   progression: raising a stat from level N to N+1 costs N+1 points (1, then
-   2 more, then 3 more...). A stat's current level IS its "Mk" number (e.g.
-   "Mk1 Thrust") -- see mkStepCost()/mkCumulativeCost() in app.js. Thrust is
-   measured in G's. Points is the car's max HP (renamed from Health, same
-   role). Damage is a flat number (not a die) -- this conversion uses ONE
-   dice system (d20 + Advantage/Disadvantage) everywhere, no secondary
-   damage dice. */
-GDATA.SHIP_STATS = ["thrust", "points", "armor", "attack", "damage"];
+/* ---------- Ship Class build stats (see RULE_CHANGES.md 2026-10-04) ----------
+   A Ship Class carries six mechanical numbers -- Thrust, Hit Points,
+   Control, Gunner, Damage, Armor -- bought up on its Division's
+   construction-point budget (Tier x 10, see tierBuildPoints() in app.js).
+   Every stat (except Damage, see below) starts at its own free baseline
+   (GDATA.STAT_BASE) rather than 0 -- a Ship Class that spends nothing is
+   still a competent, generic hull. Raising a stat by one point ABOVE its
+   baseline costs 1 construction point, the next point costs 2 more (3
+   total), the next costs 3 more (6 total), and so on -- see
+   mkStepCost()/mkCumulativeCost() in app.js. Thrust is measured in G's.
+   Control has no mechanical effect wired in yet -- it exists to be built
+   against once a rule hooks into it.
+
+   Damage is special: its baseline is a flat 1D6, not a number. cls.damage
+   stores only the BONUS above that die (starting at 0, same cost
+   progression as everything else -- +1 costs 1pt, +2 costs 3pt total, +3
+   costs 6pt total...), and the actual roll (1D6 + bonus) happens when an
+   Attack is resolved (see applyAttack() in app.js), not baked into a single
+   number the way every other stat is. */
+GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damage", "armor"];
+GDATA.STAT_BASE = { thrust: 3, points: 10, control: 5, gunner: 5, armor: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
+GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
 
 /* ---------- Crewman Skill (see RULE_CHANGES.md 2026-10-03: Skill split off
    the ship onto a Crewman, Cantina tab) ----------
@@ -248,20 +258,20 @@ GDATA.SPACE_LEG_FEATURES = [
    AND trigger that Leg's Skill Check for both cars; the instigator pays its
    own `selfD` in Disadvantage on its own Skill Check regardless of outcome.
    Attack is the odd one out and the only one with its OWN d20+Advantage/
-   Disadvantage roll (the car's Attack score vs the Leg's TN, resolved via
+   Disadvantage roll (the car's Gunner score vs the Leg's TN, resolved via
    the same rollCheck() as everything else) -- a miss does nothing at all to
    the target (no trigger, no Disadvantage) and costs the instigator only its
-   own flat selfD; a hit deals the instigator's own Damage stat, reduced by
-   the target's Armor, to the target's HP, AND 1 Disadvantage to the target's
-   own Skill Check (see applyAttack()/lockDeclarations() in app.js). This
-   gives the Attack build stat an actual purpose instead of being a dead
-   number on an auto-hit. Uniform for a Hero or NPC target -- everyone has HP
-   now, no "NPCs have no HP" special case. */
+   own flat selfD; a hit deals 1D6 + the instigator's own Damage bonus,
+   reduced by the target's Armor, to the target's HP, AND 1 Disadvantage to
+   the target's own Skill Check (see applyAttack()/lockDeclarations() in
+   app.js). This gives the Gunner/Damage build stats an actual purpose
+   instead of being dead numbers on an auto-hit. Uniform for a Hero or NPC
+   target -- everyone has HP now, no "NPCs have no HP" special case. */
 GDATA.MANEUVERS = [
   { name: "Nudge", desc: "A light tap to unsettle the target's line.", selfD: 1, targetD: 1 },
   { name: "Block", desc: "Cut across the target's line, forcing them wide.", selfD: 1, targetD: 2 },
   { name: "Ram", desc: "A hard, deliberate hit to shove the target off its mark.", selfD: 2, targetD: 3 },
-  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. Still costs the instigator 1 Disadvantage either way. Usually illegal.", selfD: 1, targetD: null }
+  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Gunner score vs the Leg's TN. A hit deals 1D6 + the instigator's Damage bonus (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. Still costs the instigator 1 Disadvantage either way. Usually illegal.", selfD: 1, targetD: null }
 ];
 
 /* ---------- Out-of-Control Chart (Circus Maximus's stumble chart, converted to

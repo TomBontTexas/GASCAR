@@ -17,6 +17,38 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-04 — Ship Class stats rebuilt: construction points, baselines, Control, Gunner, dice Damage
+- **Earlier value:** a Ship Class's construction-point budget was Tier-looked-
+  up (6/7/8/9), spent on five stats (Thrust/Points/Armor/Attack/Damage), every
+  one of which started at 0 with no free baseline. Damage was a flat number.
+- **Current value:**
+  - **Budget is now a flat formula: Tier x 10** (10/20/30/40), not a
+    per-Tier lookup table.
+  - **Every stat now has its own free baseline** -- a Ship Class that spends
+    nothing is still a competent, generic hull, not a zero:
+    Thrust 3, Hit Points 10, Control 5, Gunner 5, Armor 1, Damage 1D6 (see
+    below). The construction-point cost itself is unchanged: raising a stat
+    one point ABOVE its own baseline costs 1 point, the next costs 2 more (3
+    total), the next 3 more (6 total), and so on.
+  - **Attack is renamed Gunner** (same role -- the Attack Maneuver's to-hit
+    roll is the instigator's Gunner score vs the Leg's TN). Points is now
+    labeled Hit Points in the UI (same stat, same role).
+  - **New stat: Control.** Has no mechanical effect yet -- it's purchasable
+    now (base 5, same cost progression as everything else) so a future rule
+    has something to build against.
+  - **Damage is now dice-based: 1D6, plus a purchasable bonus.** A Ship
+    Class's `damage` number is ONLY the bonus above that die (starts at 0 --
+    +1 costs 1 point, +2 costs 3 total, +3 costs 6 total, same progression as
+    always). An Attack hit now rolls 1D6 + that bonus (instead of using a
+    single flat number) before subtracting the target's Armor.
+  - The Shipyard now shows a Ship Class's **Construction Points used / its
+    Tier x 10 budget**, explicitly labeled under/over/exactly-on budget,
+    instead of just a "points remaining" tag.
+- **Why:** user-directed revision to the construction-point economy.
+- **Where:** `GDATA.SHIP_STATS`/`STAT_BASE`/`DAMAGE_BASE_DIE` in `data.js`;
+  `shipStatBase()`/`shipStatLevel()`/`tierBuildPoints()`/`formatStatValue()`/
+  `applyAttack()` in `app.js`.
+
 ### 2026-10-03 — Skill Check trigger table replaced with the book's own specific list
 - **Earlier value:** a Skill Check triggered on an approximation invented
   during the Circus Maximus conversion -- more than 1 hex of Slip, being in

@@ -18,9 +18,10 @@
 
    Ship Class / Crewman reintroduced (see RULE_CHANGES.md 2026-10-03): a
    Hero's car is no longer six numbers directly on the Ship record. A Ship
-   Class (Shipyard tab) holds the five build-point-bought mechanical stats
-   (Thrust/Points/Armor/Attack/Damage) plus the Division (-> Tier) and the
-   hull's White icon number. A Crewman (Cantina tab) holds just Skill,
+   Class (Shipyard tab) holds the six construction-point-bought mechanical
+   stats (Thrust/Hit Points/Control/Gunner/Damage/Armor, see RULE_CHANGES.md
+   2026-10-04) plus the Division (-> Tier) and the hull's White icon number.
+   A Crewman (Cantina tab) holds just Skill,
    starting at Mk5 for free and raised with XP banked by racing, not a build
    budget. A Ship (Hangar Bay tab) is just a name + a chosen Ship Class +
    an assigned Crewman + its own Red/Green/Blue color for the Class's icon
@@ -140,6 +141,19 @@ function migrateState(state) {
     state.crewmen = [];
     state._shipClassCrewmanSplit = true;
   }
+  // Third breaking migration (see RULE_CHANGES.md 2026-10-04): Ship Class
+  // stats rebuilt -- Attack renamed Gunner, Damage changed from a flat
+  // number to a 1D6 bonus, Control added, and every stat now has a nonzero
+  // baseline instead of starting at 0. An old-shape Ship Class's numbers
+  // don't correspond to anything under the new baselines/costs, and Ships
+  // built from one are invalid along with it -- Crewmen are untouched
+  // (Skill-only, unaffected by this change).
+  if (!state._shipClassStatsRebuilt) {
+    state.ships = [];
+    state.shipClasses = [];
+    state.race = null;
+    state._shipClassStatsRebuilt = true;
+  }
   state.shipClasses = state.shipClasses || [];
   state.crewmen = state.crewmen || [];
   // Self-heal a cached race: a car at 0 HP must be out of the race. Early
@@ -165,55 +179,76 @@ function shipName(shipId) { const s = getShip(shipId); return s ? s.name : "(del
 function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); return cls ? cls.division : null; }
 
 /* ============================== Cars: Tier, build points, stats ==============================
-   See RULE_CHANGES.md 2026-10-03. Division (Flash/Spark/Comet/Meteor/Nova) is
+   See RULE_CHANGES.md 2026-10-04. Division (Flash/Spark/Comet/Meteor/Nova) is
    FLAVOR ONLY -- it just picks a Tier and which Leg Feature flavor pool to
    draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier alone drives
-   flavor crew size and a Ship Class's build-point budget.
+   flavor crew size and a Ship Class's construction-point budget (Tier x 10).
 
-   A car is five Ship Class stats (Thrust/Points/Armor/Attack/Damage) plus
-   one Crewman stat (Skill) -- see carStats() below, the one place that reads
-   both and (for NPCs, who have neither a Class nor a Crewman) its own inline
-   numbers instead. */
-const SHIP_STATS = ["thrust", "points", "armor", "attack", "damage"];
+   A car is six Ship Class stats (Thrust/Points/Control/Gunner/Damage/Armor)
+   plus one Crewman stat (Skill) -- see carStats() below, the one place that
+   reads both and (for NPCs, who have neither a Class nor a Crewman) its own
+   inline numbers instead. */
+const SHIP_STATS = GDATA.SHIP_STATS;
 function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
 function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
-function tierBuildPoints(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).buildPoints; }
-// The uniform Mk cost progression (see RULE_CHANGES.md 2026-10-03): raising
-// a stat from level N to N+1 costs N+1 points -- a stat's own level IS its
-// Mk number. mkCumulativeCost(N) is the total spent to reach N from 0 (a
-// triangular number); mkStepCost(N) is just the cost of the next single step.
+// Construction points: Tier x 10, flat -- see RULE_CHANGES.md 2026-10-04.
+function tierBuildPoints(tier) { return tier * 10; }
+// The uniform construction-point cost progression (see RULE_CHANGES.md
+// 2026-10-04): raising a stat one point ABOVE ITS OWN BASELINE costs 1
+// construction point, the next point costs 2 more (3 total), the next costs
+// 3 more (6 total), and so on. mkCumulativeCost(N) is the total spent to
+// reach N levels above baseline (a triangular number); mkStepCost(N) is just
+// the cost of the next single step from N levels already spent.
 function mkStepCost(fromLevel) { return fromLevel + 1; }
 function mkCumulativeCost(level) { return level * (level + 1) / 2; }
 // ---------- Ship Class (Shipyard) ----------
+// A stat's free baseline -- every Ship Class stat has one (GDATA.STAT_BASE)
+// except Damage, whose baseline is the flat die 1D6, not a number; cls.damage
+// itself is just the bonus above that die, so its own "baseline" for cost
+// purposes is 0.
+function shipStatBase(stat) { return stat === "damage" ? 0 : GDATA.STAT_BASE[stat]; }
+// How many points above baseline a stat currently sits at -- this (not the
+// stat's raw value) is what mkStepCost()/mkCumulativeCost() take as input.
+function shipStatLevel(cls, stat) { return Math.max(0, (cls[stat] || 0) - shipStatBase(stat)); }
 function classBuildPointsSpent(cls) {
-  return SHIP_STATS.reduce((sum, stat) => sum + mkCumulativeCost(cls[stat] || 0), 0);
+  return SHIP_STATS.reduce((sum, stat) => sum + mkCumulativeCost(shipStatLevel(cls, stat)), 0);
 }
 function classBuildPointsRemaining(cls) { return tierBuildPoints(carTier(cls.division)) - classBuildPointsSpent(cls); }
 function freshClassStats() {
   const out = {};
-  SHIP_STATS.forEach(stat => { out[stat] = 0; });
+  SHIP_STATS.forEach(stat => { out[stat] = shipStatBase(stat); });
   return out;
+}
+// Damage displays as "1D6" (plus its bonus, if any) rather than a bare
+// number -- every other stat just shows its raw value.
+function formatStatValue(cls, stat) {
+  if (stat !== "damage") return String(cls[stat]);
+  const bonus = cls.damage || 0;
+  return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? "+" + bonus : ""}`;
 }
 // ---------- Crewman (Cantina) ----------
 // A Crewman's Skill starts at GDATA.CREWMAN_SKILL_BASE for free; raising it
 // further costs banked XP via the same mkStepCost() progression (so Mk5->Mk6
 // costs 6, same as any Ship Class stat's 5th->6th point would).
 function freshCrewman(name) { return { id: uid("crew"), name, skill: GDATA.CREWMAN_SKILL_BASE, xp: 0 }; }
-function crewmanNextStepCost(crewman) { return mkStepCost(crewman.skill); }
+function crewmanNextStepCost(crewman) { return mkStepCost(crewman.skill - GDATA.CREWMAN_SKILL_BASE); }
 // ---------- NPCs: auto-built, not hand-spent ----------
-// An NPC has no Ship Class/Crewman of its own -- its Division/Tier build-point
-// budget is spent automatically, as evenly as the triangular cost curve
-// allows (repeatedly bump whichever of the 5 Ship stats is currently
-// lowest), and its Skill is left at the same free baseline every Crewman
-// starts at (NPCs don't earn or spend XP).
+// An NPC has no Ship Class/Crewman of its own -- its Division/Tier
+// construction-point budget is spent automatically, as evenly as the
+// triangular cost curve allows (repeatedly bump whichever of the 6 Ship
+// stats has the fewest points spent ABOVE ITS OWN baseline so far), and its
+// Skill is left at the same free baseline every Crewman starts at (NPCs
+// don't earn or spend XP).
 function freshNpcStats(division) {
   const tier = carTier(division);
   let budget = tierBuildPoints(tier);
   const out = freshClassStats();
+  const levels = {}; SHIP_STATS.forEach(s => { levels[s] = 0; });
   for (;;) {
-    const stat = SHIP_STATS.reduce((lowest, s) => out[s] < out[lowest] ? s : lowest, SHIP_STATS[0]);
-    const cost = mkStepCost(out[stat]);
+    const stat = SHIP_STATS.reduce((lowest, s) => levels[s] < levels[lowest] ? s : lowest, SHIP_STATS[0]);
+    const cost = mkStepCost(levels[stat]);
     if (cost > budget) break;
+    levels[stat] += 1;
     out[stat] += 1;
     budget -= cost;
   }
@@ -221,8 +256,8 @@ function freshNpcStats(division) {
   return out;
 }
 // Every stat a participant (Hero ship OR NPC) fights with this race --
-// unifies the two shapes (a Hero's 5 stats live on its Ship's Class, its
-// Skill on its assigned Crewman; an NPC carries all six inline, see
+// unifies the two shapes (a Hero's 6 stats live on its Ship's Class, its
+// Skill on its assigned Crewman; an NPC carries all seven inline, see
 // startRace()) so the rest of the engine never has to branch on p.type to
 // read a stat.
 function carStats(p) {
@@ -887,18 +922,21 @@ function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (
    number (Attack's used to scale with Tier; the book's own trigger table
    gives it a flat 1 instead, same as everything else). */
 function maneuverDAmount(m) { return m.selfD; }
-// Attack: the instigator's own Attack score vs the Leg's TN (same
+// Attack: the instigator's own Gunner score vs the Leg's TN (same
 // rollCheck() as everything else, net=0 -- no situational Advantage/
-// Disadvantage on the to-hit roll itself). A hit deals the instigator's
-// Damage stat, reduced by the target's Armor (min 0), to the target's HP;
-// 0 HP marks it out of the race, same as an Out-of-Control hit. A miss does
-// nothing beyond the instigator's own selfD, already applied by the caller.
+// Disadvantage on the to-hit roll itself). A hit deals 1D6 + the
+// instigator's Damage bonus, reduced by the target's Armor (min 0), to the
+// target's HP; 0 HP marks it out of the race, same as an Out-of-Control hit.
+// A miss does nothing beyond the instigator's own selfD, already applied by
+// the caller.
 function applyAttack(race, instigator, target, tn) {
   const atkStats = carStats(instigator);
-  const rc = rollCheck(atkStats.attack, 0, tn);
+  const rc = rollCheck(atkStats.gunner, 0, tn);
   if (!rc.success) return { hit: false, rc };
   const tgtStats = carStats(target);
-  const dmg = Math.max(0, atkStats.damage - tgtStats.armor);
+  const die = GDATA.DAMAGE_BASE_DIE;
+  const rolled = Array.from({ length: die.n }, () => rollD(die.d)).reduce((a, b) => a + b, 0);
+  const dmg = Math.max(0, rolled + atkStats.damage - tgtStats.armor);
   target.hp = Math.max(0, target.hp - dmg);
   if (target.hp === 0 && !target.out) { target.out = true; target.outLeg = race.legIndex; }
   return { hit: true, rc, dmg };
@@ -1261,11 +1299,15 @@ function renderShipyard() {
   html += `</section>`;
   return html;
 }
-const STAT_LABEL = { thrust: "Thrust (G)", points: "Points", armor: "Armor", attack: "Attack", damage: "Damage" };
+const STAT_LABEL = { thrust: "Thrust (G)", points: "Hit Points", control: "Control", gunner: "Gunner", damage: "Damage", armor: "Armor" };
 function renderShipClassCard(cls) {
   const tier = carTier(cls.division);
   const collapsed = !!cls._collapsed;
-  const remaining = classBuildPointsRemaining(cls);
+  const spent = classBuildPointsSpent(cls);
+  const budget = tierBuildPoints(tier);
+  const diff = budget - spent;
+  const overBudget = diff < 0;
+  const budgetStatus = overBudget ? `${-diff} OVER budget` : diff > 0 ? `${diff} under budget` : "exactly on budget";
   const shipsBuilt = STATE.ships.filter(s => s.classId === cls.id).length;
   let html = `<div class="subcard">
     <div class="row">
@@ -1278,15 +1320,15 @@ function renderShipClassCard(cls) {
           ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === cls.division ? "selected" : ""}>${d}</option>`).join("")}
         </select></label>
       <span class="tag">Tier ${tier}</span>
-      <span class="tag ${remaining < 0 ? "danger" : ""}">${remaining} build pt${remaining === 1 ? "" : "s"} left</span>
+      <span class="tag ${overBudget ? "danger" : ""}" title="Construction Points used vs this Class's Tier x 10 budget">Construction Points ${spent} / ${budget} (${budgetStatus})</span>
       <span class="tag" title="How many Ships in the Hangar Bay are built from this Class">${shipsBuilt} ship${shipsBuilt === 1 ? "" : "s"} built</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShipClass('${cls.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
     html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
-      ${SHIP_STATS.map(s => `<td><b>Mk${cls[s]}</b> ${numStepper(`<input type="number" style="width:48px" min="0" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)} <span class="muted">(next +${mkStepCost(cls[s])}pt)</span></td>`).join("")}
+      ${SHIP_STATS.map(s => `<td><b>${formatStatValue(cls, s)}</b> ${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)} <span class="muted">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</span></td>`).join("")}
     </tr></table>`;
-    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs its own Crewman assigned as pilot (Hangar Bay) -- Skill lives on the Crewman, not here.</p>`;
+    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs its own Crewman assigned as pilot (Hangar Bay) -- Skill lives on the Crewman, not here. Control has no effect yet -- it's purchasable now so future rules have something to build against.</p>`;
     html += renderClassIconPicker(cls);
   }
   html += `</div>`;
@@ -1404,7 +1446,7 @@ function renderShipCard(ship) {
     </div>`;
   if (!collapsed) {
     html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Skill</th></tr><tr>
-      ${SHIP_STATS.map(s => `<td>Mk${cls[s]}</td>`).join("")}<td>${crewman ? `Mk${crewman.skill}` : "—"}</td>
+      ${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}<td>${crewman ? `Mk${crewman.skill}` : "—"}</td>
     </tr></table>
     <p class="muted" style="margin:4px 0">Stats come from the Ship Class above (edit in the Shipyard) and the assigned Crewman's Skill (edit in the Cantina).</p>`;
     html += renderShipIconPicker(ship);
@@ -1804,7 +1846,7 @@ function renderInstructions() {
     <p class="muted">Build things in this order, then run the race.</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and five numbers -- Thrust (measured in G's), Points, Armor, Attack, Damage -- bought up from 0 on a shared Tier-scaled build-point budget (6 points at Tier 1, +1 per Tier). Every stat uses the same cost progression: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. Thrust adds to every Leg's gear-die movement; Attack/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
+    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and six numbers -- Thrust (G's, base 3), Hit Points (base 10), Control (base 5, no effect yet), Gunner (base 5), Damage (base 1D6), Armor (base 1) -- bought up from those baselines on a construction-point budget of Tier x 10. Raising a stat one point above its baseline costs 1 construction point, the next costs 2 more (3 total), the next costs 3 more (6 total), and so on; Damage works the same way but adds to the 1D6 instead of a bare number. Thrust adds to every Leg's gear-die movement; Gunner/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
 
     <h3>2. Cantina — build Crewmen</h3>
     <p>Skill lives on a Crewman, not the Ship. Every Crewman starts at Skill Mk5 for free; raising it further costs banked XP (same cost progression as above: Mk5-&gt;Mk6 costs 6, Mk6-&gt;Mk7 costs 7...), earned by racing -- see Step 4. Whichever Crewman is assigned to pilot a Ship is whose Skill rolls that Ship's Skill Checks.</p>
@@ -1817,7 +1859,7 @@ function renderInstructions() {
     <ol>
       <li><b>Declare</b> — shift your gear by at most 1 (0-5), optionally Slip a lane (Circular Track), and optionally run one Maneuver against a car within 2 hexes. NPCs declare automatically, driven by their Leg Aggression (Aggression + current standings position - 1 -- a car further back gambles more).</li>
       <li><b>Resolve</b> — movement is unconditional: your current gear's dice (1D10 up to 3D20, scaling with gear 1-5; gear 0 is no movement) plus your Thrust stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Thrust stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in (this also triggers a Skill Check, with no Disadvantage of its own). A Skill Check (d20 + Skill + Disadvantage vs the Leg's TN) is also triggered by, and gets +1 Disadvantage per hex of Slip beyond the first, +1 Disadvantage if this Leg's movement exceeds the TN, nothing extra for Gear 4 beyond triggering the check, +1 Disadvantage for Gear 5, +1 Disadvantage for making an Attack (plus +1 more to the target if it hits), or running/receiving Nudge/Block/Ram (their own Disadvantage either way) -- all of these stack into one combined check. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
-      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Attack score vs the Leg's TN. A hit deals the instigator's Damage stat (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. It still costs the instigator 1 Disadvantage on their own Skill Check either way.</li>
+      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Gunner score vs the Leg's TN. A hit deals 1D6 + the instigator's Damage bonus (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. It still costs the instigator 1 Disadvantage on their own Skill Check either way.</li>
       <li>A ship reduced to 0 HP (by Attack or an Out-of-Control hit) is marked out of the race and frozen at its crash position for the rest of the race.</li>
       <li>Every Hero who finishes the race (completes the required laps) banks XP for its assigned Crewman -- more for finishing in the best real track position -- spendable in the Cantina.</li>
     </ol>
@@ -1841,10 +1883,10 @@ function renderReference() {
   </section>`;
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
-    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Ship Class Build Points</th></tr>
+    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Construction Points</th></tr>
     ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
   </table>
-  <p class="muted">Every Ship Class stat (Thrust/Points/Armor/Attack/Damage) costs the same: raising it from Mk<i>N</i> to Mk<i>N</i>+1 costs <i>N</i>+1 points. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a Tier budget.</p></section>`;
+  <p class="muted">Every Ship Class stat (Thrust/Hit Points/Control/Gunner/Damage/Armor) starts at its own baseline and costs the same to raise: 1 point above baseline costs 1 construction point, the next costs 2 more, the next 3 more, and so on (Damage adds to its 1D6 the same way). A Ship Class's construction-point budget is Tier x 10. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a construction-point budget.</p></section>`;
 
   html += `<section class="card"><h2>Skill Check Triggers</h2>
     <p class="muted">Any one of these triggers this Leg's Skill Check; if more than one applies, their Disadvantage stacks into that one combined roll.</p>
@@ -1953,7 +1995,7 @@ const App = {
   },
   updateShipClassStat(id, stat, val) {
     const cls = getShipClass(id);
-    cls[stat] = clampInt(val, 0, 999, cls[stat]);
+    cls[stat] = clampInt(val, shipStatBase(stat), 999, cls[stat]);
     saveState(); render();
   },
   toggleShipClassCollapse(id) { const c = getShipClass(id); c._collapsed = !c._collapsed; saveState(); render(); },
