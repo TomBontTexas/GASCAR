@@ -1731,7 +1731,7 @@ function renderHeroTurnForm(race, p) {
   const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
   const dice = (GDATA.GEAR_TABLE[newGear] || {}).dice || 0;
   const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod;
-  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b>${shipStatusTags(p)} <span class="muted">Pending Disadvantage: ${car.pendingD}</span></div>
+  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b>${shipStatusTags(p, car.pendingD)} <span class="muted">Pending Disadvantage: ${car.pendingD}</span></div>
     <div class="formrow"><label>Gear (now ${p.gear})</label>
       <select onchange="App.setTurn('${p.id}','gearChange',this.value)">
         <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down (-1)</option>
@@ -1750,12 +1750,13 @@ function renderMovePrompt(race, p, t) {
     ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
-function shipStatusTags(p) {
+function shipStatusTags(p, pendingD = 0) {
   const maxHp = p.maxHp != null ? p.maxHp : 0;
   const hp = p.hp != null ? p.hp : maxHp;
   let tags = "";
   const hpDanger = p.out || hp < maxHp / 2;
   tags += ` <span class="tag${hpDanger ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
+  if (pendingD > 0) tags += ` <span class="tag" title="Disadvantage on its next Control check">Hit</span>`;
   if (p.out) tags += ` <span class="tag danger">${p.type === "hero" ? "Destroyed" : "Wreck"}</span>`;
   return tags;
 }

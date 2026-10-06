@@ -22,6 +22,9 @@ Newest entries at the top.
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
+### 2026-10-06 — Hit tag shows pending Disadvantage
+- A ship with a pending Disadvantage from a hit or fumble shows a "Hit" tag with its HP in the turn panel. The tag clears when the Disadvantage is used.
+
 ### 2026-10-06 — Attack choice is clickable on the track
 - When a racer is in attack range, the track highlights it red and the keep-moving hexes yellow. Clicking the red racer attacks; clicking a yellow hex keeps moving and declines the attack. The Attack and Keep moving buttons remain.
 
