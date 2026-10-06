@@ -17,6 +17,10 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-06 — Failing to pass an occupied hex drops gear
+- **Current value:** when a ship fails the Control check to fly straight through an occupied hex, it drops one gear, to no lower than Gear 0, as well as stopping short.
+- **Where:** `applyEncounter()` in `app.js`.
+
 ### 2026-10-06 — One attack per Leg, not per turn
 - **Earlier value:** Circus Astralis allows one attack per turn (`Circus_Astralis_v2_extracted.txt`, "A player may make only one attack per turn").
 - **Current value:** a racer may make one attack per Leg. Once it has attacked, it is not offered another attack for the rest of that Leg. While it can still attack, every racer within 2 hexes is highlighted red, and that stays true as it keeps moving, as long as the racer is in range. Moving past a racer doesn't cancel the offer.

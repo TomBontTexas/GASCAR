@@ -584,7 +584,8 @@ function circRacerTransform(geom, p, prevRotDeg) {
 function renderCircularTrackSvg(race, course) {
   const geom = circTrackGeometry(course);
   const { vbW, vbH, iconSize } = geom;
-  let svg = `<svg viewBox="0 0 ${vbW} ${vbH}" class="circtrack" role="img" aria-label="Circular track standings">`;
+  const rotatedBox = `${((vbW - vbH) / 2).toFixed(1)} ${((vbH - vbW) / 2).toFixed(1)} ${vbH.toFixed(1)} ${vbW.toFixed(1)}`;
+  let svg = `<svg viewBox="${rotatedBox}" class="circtrack" role="img" aria-label="Circular track standings"><g class="trackrot" transform="rotate(90 ${(vbW / 2).toFixed(1)} ${(vbH / 2).toFixed(1)})">`;
   geom.laneHexLists.forEach((ring, lane) => {
     ring.forEach((hex, hexPos) => {
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
@@ -600,11 +601,6 @@ function renderCircularTrackSvg(race, course) {
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
   const turnOf = p => race.legState && race.legState.cars[p.id] ? race.legState.cars[p.id].turn : null;
-  const racerTitle = (p, laneIdx0) => {
-    const label = p.type === "hero" ? shipName(p.shipId) : p.name;
-    const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}, Gear ${p.gear || 0}, HP ${p.hp != null ? p.hp : 0}/${p.maxHp != null ? p.maxHp : 0}`;
-    return `${label} — Lane ${laneIdx0 + 1}, ${lapTag}`;
-  };
   race.participants.forEach(p => {
     const t = turnOf(p);
     if (!t) return;
@@ -620,11 +616,10 @@ function renderCircularTrackSvg(race, course) {
     const { laneIdx0, transform } = circRacerTransform(geom, at);
     const iconInfo = participantIconInfo(p);
     const imgHref = iconInfo ? esc(shipIconPath(iconInfo.division, iconInfo.number, iconInfo.color)) : "";
-    svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" transform="${transform}">
+    svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" data-racer="${p.id}" transform="${transform}">
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
         : `<circle r="${(iconSize / 2).toFixed(1)}" class="circdot"/>`}
-      <title>${esc(racerTitle(p, laneIdx0))}</title>
     </g>`;
   });
   race.participants.forEach(p => {
@@ -635,8 +630,7 @@ function renderCircularTrackSvg(race, course) {
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
       const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
       const occ = occupantAt(race, o.dest.laneIdx0 + 1, o.dest.hexPos, p.id);
-      const tip = occ ? racerTitle(occ, circRacerTransform(geom, occ).laneIdx0) : o.label;
-      svg += `<polygon class="circstep" points="${pts}" onclick="App.encounterChoice('${p.id}','${o.id}')"><title>${esc(tip)}</title></polygon>`;
+      svg += `<polygon class="circstep" points="${pts}"${occ ? ` data-racer="${occ.id}"` : ""} onclick="App.encounterChoice('${p.id}','${o.id}')">${occ ? "" : `<title>${esc(o.label)}</title>`}</polygon>`;
     });
   });
   race.participants.forEach(p => {
@@ -648,12 +642,72 @@ function renderCircularTrackSvg(race, course) {
       const hex = geom.laneHexLists[target.lane - 1][target.hexPos];
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
       const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
-      svg += `<polygon class="circattack" points="${pts}" onclick="App.decideAttack('${p.id}','${target.id}')"><title>${esc(racerTitle(target, circRacerTransform(geom, target).laneIdx0))}</title></polygon>`;
+      svg += `<polygon class="circattack" points="${pts}" data-racer="${target.id}" onclick="App.decideAttack('${p.id}','${target.id}')"></polygon>`;
     });
   });
-  svg += `</svg>`;
+  svg += `</g></svg>`;
   return svg;
 }
+// The hover card for a racer on the track: a broadcast-style lower third.
+function racerTipHtml(race, p) {
+  const course = getCourse(race.courseId);
+  const ringParams = hexRingParamsForCourse(course);
+  const ordered = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
+  const pos = ordered.indexOf(p) + 1;
+  const info = participantIconInfo(p);
+  const img = info ? esc(shipIconPath(info.division, info.number, info.color)) : "";
+  const label = p.type === "hero" ? shipName(p.shipId) : p.name;
+  const maxHp = p.maxHp != null ? p.maxHp : 0, hp = p.hp != null ? p.hp : maxHp;
+  const pct = maxHp ? Math.max(0, Math.min(100, Math.round(hp / maxHp * 100))) : 0;
+  const car = race.legState && race.legState.cars[p.id];
+  const pending = car ? car.pendingD : 0;
+  const sub = p.type === "npc" ? `NPC · Aggression ${p.aggression || 5}` : "Your ship";
+  const cs = carStats(p);
+  const hero = p.type === "hero" ? getShip(p.shipId) : null;
+  const crewman = hero ? STATE.crewmen.find(c => c.id === hero.crewmanId) : null;
+  const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
+  const tipStats = [["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage", cs.damage], ["Armor", cs.armor]];
+  return `<div class="tvtip">
+    <div class="tvtip-stripe"><span class="tvtip-pos">P${pos}</span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
+    <div class="tvtip-body">
+      ${img ? `<img class="tvtip-img" src="${img}" alt="">` : ""}
+      <div class="tvtip-name">${esc(label)}</div>
+      <div class="tvtip-sub">${esc(sub)}${p.out ? " · OUT" : ""}</div>
+      <div class="tvtip-crew">Crew: ${esc(crewName)}</div>
+      <div class="tvtip-lap"><div><small>Lap</small>${Math.min(p.laps || 0, course.laps)}/${course.laps}</div><div><small>Lane</small>${p.lane}</div><div><small>Gear</small>${p.gear || 0}</div></div>
+      <div class="tvtip-hp"><div class="tvtip-hpbar"><div style="width:${pct}%"></div></div><span>HP ${hp}/${maxHp}</span></div>
+      <div class="tvtip-stats">${tipStats.map(([k, v]) => `<div><small>${k}</small>${v}</div>`).join("")}</div>
+      ${pending > 0 ? `<div class="tvtip-hit">HIT · ${pending} Disadvantage</div>` : ""}
+    </div>
+  </div>`;
+}
+function initTrackTip() {
+  const tip = document.createElement("div");
+  tip.id = "trackTip";
+  document.body.appendChild(tip);
+  const place = e => {
+    const pad = 18, w = tip.offsetWidth, h = tip.offsetHeight;
+    const x = Math.min(e.clientX + pad, window.innerWidth - w - 8);
+    const y = Math.min(e.clientY + pad, window.innerHeight - h - 8);
+    tip.style.left = Math.max(8, x) + "px";
+    tip.style.top = Math.max(8, y) + "px";
+  };
+  document.addEventListener("mouseover", e => {
+    const el = e.target.closest && e.target.closest("[data-racer]");
+    const race = STATE.race;
+    const p = el && race ? race.participants.find(x => x.id === el.dataset.racer) : null;
+    if (!p) { tip.style.display = "none"; return; }
+    tip.innerHTML = racerTipHtml(race, p);
+    tip.style.display = "block";
+    place(e);
+  });
+  document.addEventListener("mousemove", e => { if (tip.style.display === "block") place(e); });
+  document.addEventListener("mouseout", e => {
+    const el = e.target.closest && e.target.closest("[data-racer]");
+    if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) tip.style.display = "none";
+  });
+}
+document.addEventListener("DOMContentLoaded", initTrackTip);
 // Real track position: laps completed plus a lane-length-normalized
 // fraction through the current lap -- NOT raw cumulative Movement, which
 // can diverge from where a car actually sits once lane length, free Slip
@@ -1163,7 +1217,12 @@ function applyEncounter(race, p, id, opts) {
     if (occ) {
       const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
       t.log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
-      if (!ob.success) { t.log.push("Stops short of the obstacle."); t.halt = true; return; }
+      if (!ob.success) {
+        p.gear = Math.max(0, p.gear - 1);
+        t.log.push(`Stops short of the obstacle; drops to Gear ${p.gear}.`);
+        t.halt = true;
+        return;
+      }
     }
     t.R -= 1;
     moveWalkTo(t, opt.dest, geom, course);
@@ -1648,7 +1707,20 @@ function renderRaceSetup() {
 }
 
 /* ---------- Standings ---------- */
-function renderStandings(race) {
+// The empty hole inside the innermost lane, as a square in % of the track's width and height.
+function holeSizePct(course) {
+  const geom = circTrackGeometry(course);
+  const ring = geom.laneHexLists[0];
+  let d = Infinity;
+  ring.forEach(h => {
+    const { x, y } = hexToPixel(geom, h.q, h.r);
+    d = Math.min(d, Math.hypot(x - geom.cx, y - geom.cy));
+  });
+  const side = Math.max(0, (d - geom.hexSize) * Math.SQRT2);
+  const rotatedW = geom.vbH, rotatedH = geom.vbW;
+  return { w: side / rotatedW * 100, h: side / rotatedH * 100 };
+}
+function renderStandings(race, center = "", below = "") {
   const course = getCourse(race.courseId);
   const ringParams = hexRingParamsForCourse(course);
   const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
@@ -1658,7 +1730,8 @@ function renderStandings(race) {
       <button id="raceReplayBtn" class="ghost" ${legsCompleted ? "" : "disabled"} onclick="App.playRaceReplay(false)">▶ Show Entire Race</button>
     </div>
   </div>`;
-  html += `<div class="circtrack-wrap" id="circtrackWrap">${renderCircularTrackSvg(race, course)}</div>`;
+  const holeBox = holeSizePct(course);
+  html += `<div class="racegrid"><div class="racetrack"><div class="circtrack-wrap" id="circtrackWrap">${renderCircularTrackSvg(race, course)}<div class="track-center" style="width:${holeBox.w.toFixed(2)}%;height:${holeBox.h.toFixed(2)}%">${center}</div></div></div><div class="racestandings">`;
   html += `<div class="board" id="standingsBoard">`;
   // Racers are listed 1st to last by real track position, and each bar is
   // sized by that same real position -- not cumulative Movement, which can
@@ -1674,7 +1747,7 @@ function renderStandings(race) {
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated Maneuvers and Slip">Aggr ${p.aggression || 5}</span>` : "";
-    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p, label)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
+    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
           <div class="boardbar"><div class="boardfill${p.out ? " dead" : ""}" id="boardfill-${p.id}" style="width:${pct}%"></div></div>
@@ -1683,8 +1756,46 @@ function renderStandings(race) {
       </div>
       <span class="boardpts" id="boardpts-${p.id}"></span></div>`;
   });
-  html += `</div></section>`;
+  html += `</div>${below}</div></div></section>`;
   return html;
+}
+
+// A winner's accolades, read from the race history and log.
+function racerAccolades(race, p) {
+  const course = getCourse(race.courseId);
+  const name = participantLabel(p);
+  let hits = 0, damage = 0;
+  race.log.forEach(entry => {
+    if (entry.name !== name) return;
+    entry.lines.forEach(l => {
+      if (l.indexOf("-- hit.") !== -1) hits++;
+      const dmg = l.match(/^Damage .* = (\d+)\.$/);
+      if (dmg) damage += Number(dmg[1]);
+    });
+  });
+  const slips = (p.history || []).reduce((n, h) => n + (h.slipHexes || 0), 0);
+  return [
+    ["Laps", `${Math.min(p.laps || 0, course.laps)}/${course.laps}`],
+    ["Hexes", p.cumulative || 0],
+    ["Turns", (p.history || []).length],
+    ["Slips", slips],
+    ["Hits landed", hits],
+    ["Damage dealt", damage],
+  ];
+}
+function renderWinnerTile(race) {
+  const w = race.winnerId ? race.participants.find(p => p.id === race.winnerId) : null;
+  if (!w) return "";
+  const info = participantIconInfo(w);
+  const img = info ? esc(shipIconPath(info.division, info.number, info.color)) : "";
+  return `<div class="winner-tile">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="greenkey" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0.01 -0.01 0 0 1"/></filter></svg>
+    <div class="flagwrap"><div class="flagpole"></div><video class="checkflag" src="Flags/Waving%20Checked%20Flag.mp4" autoplay loop muted playsinline></video></div>
+    <div class="winner-name">${esc(participantLabel(w))}</div>
+    <div class="winner-label">Winner</div>
+    ${img ? `<img class="winner-img" src="${img}" alt="">` : ""}
+    <ul class="accolades">${racerAccolades(race, w).map(([k, v]) => `<li><small>${k}</small><b>${v}</b></li>`).join("")}</ul>
+  </div>`;
 }
 
 /* ---------- Race ---------- */
@@ -1696,7 +1807,23 @@ function renderRace() {
   let html = "";
   html += `<div class="row spread"><h2><span style="color:var(--muted)">${esc(course.division)}-Division</span> ${esc(course.name)}</h2>
     <button class="danger" onclick="App.abandonRace()">Abandon Race</button></div>`;
-  html += renderStandings(race);
+  if (!race.finished) {
+    const leg = race.legState.leg;
+    const naturalTN = legNaturalTN(leg);
+    const tnTag = naturalTN > leg.finalTN ? ` <span class="tag">capped from ${naturalTN}</span>` : "";
+    html += `<section class="card"><h2>Leg ${race.legIndex + 1}</h2>
+      <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
+    </section>`;
+  }
+  let center = "";
+  if (!race.finished) {
+    center = race.started === false
+      ? `<div class="hub"><div class="hub-line"><b>Ready</b></div><button onclick="App.startRaceNow()">Start Race</button></div>`
+      : renderTurnPanel(race);
+  }
+  if (race.finished) center = renderWinnerTile(race);
+  const below = race.finished || race.started === false ? "" : renderTurnOrder(race);
+  html += renderStandings(race, center, below);
   if (race.finished) {
     const winner = race.winnerId ? race.participants.find(p => p.id === race.winnerId) : null;
     html += `<section class="card winner"><h2>🏁 Race Complete</h2>${winner ? `<p><b>${esc(participantLabel(winner))}</b> wins!</p>` : `<p>Every Hero ship was destroyed.</p>`}${renderFinalStandings(race)}
@@ -1704,25 +1831,12 @@ function renderRace() {
     html += renderLog(race);
     return html;
   }
-  const leg = race.legState.leg;
-  const naturalTN = legNaturalTN(leg);
-  const tnTag = naturalTN > leg.finalTN ? ` <span class="tag">capped from ${naturalTN}</span>` : "";
-  html += `<section class="card"><h2>Leg ${race.legIndex + 1}</h2>
-    <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
-  </section>`;
-  if (race.started === false) {
-    html += `<section class="card"><h2>Ready to start</h2>
-      <p class="muted">Ships are on the starting grid. Press Start Race to let any NPC ships that move first take their turns.</p>
-      <button onclick="App.startRaceNow()">Start Race</button></section>`;
-  } else {
-    html += renderTurnPanel(race);
-  }
   html += renderLog(race);
   return html;
 }
 
 /* ---------- Turn order and the active turn ---------- */
-function renderTurnPanel(race) {
+function renderTurnOrder(race) {
   const ls = race.legState;
   const next = nextTurnParticipant(race);
   let html = `<section class="card"><h3>Turn order (lowest Thrust first)</h3>
@@ -1733,24 +1847,37 @@ function renderTurnPanel(race) {
     const status = p.out ? "Wreck" : ls.cars[id].turnDone ? "Done" : (next && next.id === id ? "Up next" : "Waiting");
     html += `<tr><td>${i + 1}</td><td>${esc(participantLabel(p))}${p.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${carStats(p).thrust}</td><td>${status}</td></tr>`;
   });
-  html += `</table>`;
+  return html + `</table><p class="muted">Click a hex the ship moves into on the track: straight ahead, or a forward Slip left or right. Each hex you leave gets a dot until the turn ends. A red racer within 2 hexes can be attacked, once per Leg.</p></section>`;
+}
+function renderTurnPanel(race) {
+  const ls = race.legState;
+  const next = nextTurnParticipant(race);
   if (ls.complete) {
-    html += `<div class="row"><b>Leg ${race.legIndex + 1} is complete.</b> <button onclick="App.startNextLeg()">Start Leg ${race.legIndex + 2}</button></div>`;
-  } else if (next && next.type === "hero") {
-    const t = next.id && race.legState.cars[next.id].turn;
-    html += t && t.awaiting ? renderAttackPrompt(race, next, t) : t && t.choice ? renderMovePrompt(race, next, t) : renderHeroTurnForm(race, next);
+    const n = race.legIndex + 1;
+    return `<div class="hub"><div class="hub-line"><b>Leg ${n} complete</b></div><button onclick="App.startNextLeg()">Start Leg ${n + 1}</button></div>`;
   }
-  return html + `</section>`;
+  if (next && next.type === "hero") {
+    const t = race.legState.cars[next.id].turn;
+    return t && t.awaiting ? renderAttackPrompt(race, next, t) : t && t.choice ? renderMovePrompt(race, next, t) : renderHeroTurnForm(race, next);
+  }
+  return "";
+}
+function shortRacerName(x) {
+  const n = x.type === "npc" ? x.name : shipName(x.shipId);
+  return n.length > 12 ? n.slice(0, 11) + "…" : n;
 }
 function renderAttackPrompt(race, p, t) {
   const targets = t.awaiting.map(id => race.participants.find(x => x.id === id)).filter(Boolean);
   const pick = targets.length > 1 ? `document.getElementById('atkTarget-${p.id}').value` : `'${targets[0].id}'`;
-  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> is within 2 hexes of another racer. Attack?</div>
-    <p>Click a red racer to attack, or a yellow hex to keep moving. Movement left: <b>${t.R}</b></p>
-    ${targets.length > 1 ? `<div class="formrow"><label>Target</label><select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(participantLabel(x))}</option>`).join("")}</select></div>` : `<p>Target: <b>${esc(participantLabel(targets[0]))}</b></p>`}
-    <div class="row"><button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
-      ${t.R > 0 ? moveAllButton(race, p, t) : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish turn</button>`}</div>
-    ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
+  return `<div class="hub">
+    <div class="hub-line"><b>Attack?</b> <span class="muted">${t.R} left</span></div>
+    ${targets.length > 1
+      ? `<select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(shortRacerName(x))}</option>`).join("")}</select>`
+      : `<div class="hub-line">${esc(participantLabel(targets[0]))}</div>`}
+    <div class="hub-row">
+      <button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
+      ${t.R > 0 ? moveAllCell(race, p, t) : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish</button>`}
+    </div>
   </div>`;
 }
 function renderHeroTurnForm(race, p) {
@@ -1758,28 +1885,26 @@ function renderHeroTurnForm(race, p) {
   const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
   const dice = (GDATA.GEAR_TABLE[newGear] || {}).dice || 0;
   const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod;
-  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b>${shipStatusTags(p, car.pendingD)} <span class="muted">Pending Disadvantage: ${car.pendingD}</span></div>
-    <div class="formrow"><label>Gear (now ${p.gear})</label>
-      <select onchange="App.setTurn('${p.id}','gearChange',this.value)">
-        <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down (-1)</option>
+  return `<div class="hub">
+    <div class="hub-line"><b>${esc(shipName(p.shipId))}</b>${car.pendingD > 0 ? ` <span class="tag" title="Disadvantage on its next Control check">Hit</span>` : ""}</div>
+    <div class="hub-row">
+      <select onchange="App.setTurn('${p.id}','gearChange',this.value)" title="Gear ${p.gear}">
+        <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Down</option>
         <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
-        <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
+        <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Up</option>
       </select>
-      <span class="muted">-> Gear ${newGear}: ${dice ? `${dice}D6 + Thrust` : "no movement"}${mod ? `, Control check ${mod}` : ""}</span></div>
-    <p class="muted">Take turn rolls your movement and the Control check if one is needed. Then click the hex your ship moves into on the track: straight ahead, or Slip left or right. Each hex you leave gets a dot until the turn ends. If another racer comes within 2 hexes, the turn also asks whether to attack. Ships act one at a time in Thrust order.</p>
-    <button onclick="App.takeTurn('${p.id}')">Take turn</button>
+      <button onclick="App.takeTurn('${p.id}')">Take turn</button>
+    </div>
+    <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + Thrust` : "no movement"}${mod ? `, ${mod}` : ""}</div>
   </div>`;
 }
-function moveAllButton(race, p, t) {
-  if (!straightRunClear(race, p, t)) return "";
-  return `<button onclick="App.moveAll('${p.id}')">Move All (${t.R} straight ahead)</button>`;
+function moveAllCell(race, p, t) {
+  return straightRunClear(race, p, t) ? `<button class="ghost" onclick="App.moveAll('${p.id}')">Move All</button>` : `<span></span>`;
 }
 function renderMovePrompt(race, p, t) {
-  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> Movement left: <b>${t.R}</b></div>
-    <p>Click a highlighted hex on the track to move into it.</p>
-    <ul>${t.choice.options.map(o => `<li>${esc(o.label)}</li>`).join("")}</ul>
-    <div class="row">${moveAllButton(race, p, t)}</div>
-    ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
+  return `<div class="hub">
+    <div class="hub-line"><b>${t.R}</b> movement left</div>
+    ${straightRunClear(race, p, t) ? `<button onclick="App.moveAll('${p.id}')">Move All</button>` : `<div class="hub-line muted">Click a hex</div>`}
   </div>`;
 }
 function shipStatusTags(p, pendingD = 0) {
@@ -1933,6 +2058,7 @@ let REPLAY_TRAIL_DOTS = [];
 function paintReplayTrailDot(geom, laneIdx0, hexPos, color) {
   const svg = document.querySelector(".circtrack");
   if (!svg) return;
+  const host = svg.querySelector(".trackrot") || svg;
   const hex = geom.laneHexLists[laneIdx0][hexPos];
   const { x, y } = hexToPixel(geom, hex.q, hex.r);
   const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -1941,7 +2067,7 @@ function paintReplayTrailDot(geom, laneIdx0, hexPos, color) {
   dot.setAttribute("r", (geom.hexSize * 0.16).toFixed(1));
   dot.setAttribute("class", "replaytraildot");
   dot.style.fill = color;
-  svg.appendChild(dot);
+  host.appendChild(dot);
   REPLAY_TRAIL_DOTS.push(dot);
 }
 function clearReplayTrail() {

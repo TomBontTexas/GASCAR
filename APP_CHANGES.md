@@ -19,6 +19,19 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Track centre rebuilt to fit the hole
+- Everything in the track's centre is one short stack of lines and full-width controls (`.hub`), sized from the hole's width, so it can't spill onto the hexes. The explanation text moved under the turn order. The finished-race winner tile is sized the same way.
+- The attack dropdown shows shortened names, so long names aren't cut off.
+- A flag video (`Flags/Waving Checked Flag.mp4`, keyed to transparent in the browser) replaces the winner tile's drawn flag.
+
+### 2026-10-06 — Race tab layout: track rotated, turn panel in the centre, standings at the right
+- The Circular Track is rotated 90° clockwise. The leg card (Tier, feature, Target Number) sits above the track. The turn panel (turn order and the hero's controls, or the Start Race card) sits in the track's centre. Standings are in a column on the right, with the turn order table under them. On narrow screens the column stacks under the track and the centre panel is no longer overlaid.
+- `renderRace()`, `renderStandings()`, `renderCircularTrackSvg()` (rotated `g.trackrot`), `paintReplayTrailDot()`, and the `.racegrid` / `.track-center` styles in `style.css`.
+
+### 2026-10-06 — Broadcast-style hover card for racers on the track
+- Hovering a racer on the track (its icon, or a red or yellow overlay on its hex) shows a TV-style lower third: a larger icon, running position (P#), car number, name, lap, lane, gear, HP bar, and a HIT band while a Disadvantage is pending. It is built from current race data on each hover. The native tooltips on racers are gone; empty yellow hexes keep their plain label.
+- `racerTipHtml()`, `initTrackTip()`, and the `.tvtip` styles in `style.css`.
+
 ### 2026-10-06 — Racer tooltips stay under red and yellow overlays
 - A red target or a yellow hex on a racer shows that racer's normal tooltip (name, lane, lap, gear, HP) instead of the overlay's own text.
 
