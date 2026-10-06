@@ -868,7 +868,7 @@ function initLegState(race) {
   const cars = {};
   race.participants.forEach(p => {
     cars[p.id] = {
-      gearChange: 0, slipsThisLeg: 0, turn: null,
+      gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, turn: null,
       // Disadvantage carried in from hits and fumbles; consumed by this car's next check.
       pendingD: prev[p.id] ? prev[p.id].pendingD || 0 : 0,
       turnDone: !!p.out
@@ -1109,7 +1109,7 @@ function resolveTurn(race, p, choices) {
   car.turn = {
     log, T, net, checkSources, tn, R: T.stopped ? 0 : T.movement, slips: 0,
     cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
-    walked: [], left: [], attackUsed: false, declined: [], halt: false, finished: false, awaiting: null, choice: null
+    walked: [], left: [], declined: [], halt: false, finished: false, awaiting: null, choice: null
   };
   walkTurn(race, p);
 }
@@ -1190,7 +1190,7 @@ function walkTurn(race, p) {
   while (!t.finished && !t.halt) {
     // One attack per turn. A racer that was offered and declined isn't offered
     // again, but a different racer coming into range is.
-    const targets = !t.attackUsed ? attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id)) : [];
+    const targets = !car.attackedThisLeg ? attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id)) : [];
     if (p.type === "hero") {
       if (!targets.length && t.R <= 0) break;
       t.awaiting = targets.length ? targets.map(x => x.id) : null;
@@ -1208,7 +1208,7 @@ function walkTurn(race, p) {
     if (targets.length) {
       if (rollD(20) <= (p.aggression || 5)) {
         resolveAttack(race, p, targets[0], t.log);
-        t.attackUsed = true;
+        car.attackedThisLeg = true;
       } else {
         t.declined.push(...targets.map(x => x.id));
       }
@@ -1261,7 +1261,7 @@ function decideAttack(race, p, targetId) {
     const target = race.participants.find(x => x.id === targetId);
     if (target && !target.out) resolveAttack(race, p, target, t.log);
     else t.log.push("Attack: no valid target.");
-    t.attackUsed = true;
+    car.attackedThisLeg = true;
   } else {
     t.declined.push(...offered);
     t.log.push("Keeps moving -- no attack.");
