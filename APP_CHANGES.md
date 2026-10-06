@@ -22,6 +22,9 @@ Newest entries at the top.
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
+### 2026-10-06 — NPCs prefer inner lanes and avoid racers ahead
+- An NPC slips inward on an open hex when the Slip costs fewer hexes than the lap distance it saves over the laps left. When a racer is ahead, it slips around it, inward first. Aggression no longer decides these slips; it still drives NPC attacks. `npcStepPick()` in `app.js`.
+
 ### 2026-10-06 — Attack limit tracked per Leg
 - `car.attackedThisLeg` replaces the per-turn `attackUsed` flag. It is reset when a Leg starts. See RULE_CHANGES.md 2026-10-06.
 

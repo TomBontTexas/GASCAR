@@ -1179,6 +1179,19 @@ function applySlip(race, p, opt) {
   moveWalkTo(t, opt.dest, geom, course);
 }
 
+// An NPC's step: slip around a racer ahead when it can (inward first). On an open
+// hex it slips inward only when the Slip costs fewer hexes than the lap distance
+// it saves over the laps left, so inner lanes are preferred at no cost to
+// the Leg's economy. Aggression doesn't change lane choice.
+function npcStepPick(geom, course, t, opts, blocked) {
+  const inward = opts.find(o => o.id === "left");
+  const outward = opts.find(o => o.id === "right");
+  if (blocked) return (inward || outward || opts[0]).id;
+  if (!inward) return "straight";
+  const ringLen = lane => geom.laneHexLists[lane].length;
+  const saved = (ringLen(t.cur.laneIdx0) - ringLen(t.cur.laneIdx0 - 1)) * (course.laps - t.laps);
+  return inward.cost < saved ? "left" : "straight";
+}
 // Walks the path one hex at a time. A hero's walk pauses before each hex
 // (returns "paused") for an attack offer or a click on the next hex; NPCs decide
 // on their own.
@@ -1217,10 +1230,8 @@ function walkTurn(race, p) {
     const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
     const circ = geom.laneHexLists[t.cur.laneIdx0].length;
     const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
-    const slips = opts.filter(o => o.id !== "straight");
-    const blocked = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-    const pick = blocked && slips.length && rollD(20) <= (p.aggression || 5) ? slips[Math.floor(Math.random() * slips.length)].id : "straight";
-    applyEncounter(race, p, pick, opts);
+    const blocked = !!occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+    applyEncounter(race, p, npcStepPick(geom, course, t, opts, blocked), opts);
   }
   // A walk that ends on another ship's hex drifts to an open hex beside it
   // (free), or rolls the Fumble Chart if every hex beside it is blocked.
