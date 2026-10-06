@@ -600,6 +600,11 @@ function renderCircularTrackSvg(race, course) {
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
   const turnOf = p => race.legState && race.legState.cars[p.id] ? race.legState.cars[p.id].turn : null;
+  const racerTitle = (p, laneIdx0) => {
+    const label = p.type === "hero" ? shipName(p.shipId) : p.name;
+    const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}, Gear ${p.gear || 0}, HP ${p.hp != null ? p.hp : 0}/${p.maxHp != null ? p.maxHp : 0}`;
+    return `${label} — Lane ${laneIdx0 + 1}, ${lapTag}`;
+  };
   race.participants.forEach(p => {
     const t = turnOf(p);
     if (!t) return;
@@ -613,15 +618,13 @@ function renderCircularTrackSvg(race, course) {
     const t = turnOf(p);
     const at = t ? { lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos } : p;
     const { laneIdx0, transform } = circRacerTransform(geom, at);
-    const label = p.type === "hero" ? shipName(p.shipId) : p.name;
-    const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}, Gear ${p.gear || 0}, HP ${p.hp != null ? p.hp : 0}/${p.maxHp != null ? p.maxHp : 0}`;
     const iconInfo = participantIconInfo(p);
     const imgHref = iconInfo ? esc(shipIconPath(iconInfo.division, iconInfo.number, iconInfo.color)) : "";
     svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" transform="${transform}">
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
         : `<circle r="${(iconSize / 2).toFixed(1)}" class="circdot"/>`}
-      <title>${esc(label)} — Lane ${laneIdx0 + 1}, ${esc(lapTag)}</title>
+      <title>${esc(racerTitle(p, laneIdx0))}</title>
     </g>`;
   });
   race.participants.forEach(p => {
@@ -631,7 +634,9 @@ function renderCircularTrackSvg(race, course) {
       const hex = geom.laneHexLists[o.dest.laneIdx0][o.dest.hexPos];
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
       const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
-      svg += `<polygon class="circstep" points="${pts}" onclick="App.encounterChoice('${p.id}','${o.id}')"><title>${esc(o.label)}</title></polygon>`;
+      const occ = occupantAt(race, o.dest.laneIdx0 + 1, o.dest.hexPos, p.id);
+      const tip = occ ? racerTitle(occ, circRacerTransform(geom, occ).laneIdx0) : o.label;
+      svg += `<polygon class="circstep" points="${pts}" onclick="App.encounterChoice('${p.id}','${o.id}')"><title>${esc(tip)}</title></polygon>`;
     });
   });
   race.participants.forEach(p => {
@@ -643,7 +648,7 @@ function renderCircularTrackSvg(race, course) {
       const hex = geom.laneHexLists[target.lane - 1][target.hexPos];
       const { x, y } = hexToPixel(geom, hex.q, hex.r);
       const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
-      svg += `<polygon class="circattack" points="${pts}" onclick="App.decideAttack('${p.id}','${target.id}')"><title>Attack ${esc(participantLabel(target))}</title></polygon>`;
+      svg += `<polygon class="circattack" points="${pts}" onclick="App.decideAttack('${p.id}','${target.id}')"><title>${esc(racerTitle(target, circRacerTransform(geom, target).laneIdx0))}</title></polygon>`;
     });
   });
   svg += `</svg>`;
@@ -1192,6 +1197,24 @@ function npcStepPick(geom, course, t, opts, blocked) {
   const saved = (ringLen(t.cur.laneIdx0) - ringLen(t.cur.laneIdx0 - 1)) * (course.laps - t.laps);
   return inward.cost < saved ? "left" : "straight";
 }
+// Whether the hero's remaining movement straight ahead passes no racer.
+function straightRunClear(race, p, t) {
+  if (!t || t.R <= 0 || t.finished) return false;
+  const circ = circTrackGeometry(getCourse(race.courseId)).laneHexLists[t.cur.laneIdx0].length;
+  for (let k = 1; k <= t.R; k++) {
+    if (occupantAt(race, t.cur.laneIdx0 + 1, (t.cur.hexPos + k) % circ, p.id)) return false;
+  }
+  return true;
+}
+// Moves a hero straight ahead for all of its remaining movement, then resumes the walk.
+function moveAllStraight(race, p) {
+  const car = race.legState.cars[p.id], t = car.turn;
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  while (!t.finished && !t.halt && t.R > 0) {
+    applyEncounter(race, p, "straight", encounterOptions(race, p, car, t.cur, t.R, geom, course));
+  }
+  walkTurn(race, p);
+}
 // Walks the path one hex at a time. A hero's walk pauses before each hex
 // (returns "paused") for an attack offer or a click on the next hex; NPCs decide
 // on their own.
@@ -1726,7 +1749,7 @@ function renderAttackPrompt(race, p, t) {
     <p>Click a red racer to attack, or a yellow hex to keep moving. Movement left: <b>${t.R}</b></p>
     ${targets.length > 1 ? `<div class="formrow"><label>Target</label><select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(participantLabel(x))}</option>`).join("")}</select></div>` : `<p>Target: <b>${esc(participantLabel(targets[0]))}</b></p>`}
     <div class="row"><button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
-      ${t.R > 0 && t.choice ? t.choice.options.map(o => `<button class="ghost" onclick="App.encounterChoice('${p.id}','${o.id}')">${esc(o.label)}</button>`).join(" ") : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish turn</button>`}</div>
+      ${t.R > 0 ? moveAllButton(race, p, t) : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish turn</button>`}</div>
     ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
@@ -1747,10 +1770,15 @@ function renderHeroTurnForm(race, p) {
     <button onclick="App.takeTurn('${p.id}')">Take turn</button>
   </div>`;
 }
+function moveAllButton(race, p, t) {
+  if (!straightRunClear(race, p, t)) return "";
+  return `<button onclick="App.moveAll('${p.id}')">Move All (${t.R} straight ahead)</button>`;
+}
 function renderMovePrompt(race, p, t) {
   return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> Movement left: <b>${t.R}</b></div>
     <p>Click a highlighted hex on the track to move into it.</p>
     <ul>${t.choice.options.map(o => `<li>${esc(o.label)}</li>`).join("")}</ul>
+    <div class="row">${moveAllButton(race, p, t)}</div>
     ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
@@ -2141,6 +2169,15 @@ const App = {
   },
 
   /* Race play */
+  moveAll(pid) {
+    const race = STATE.race;
+    if (!race || race.finished || race.started === false) return;
+    const p = race.participants.find(x => x.id === pid);
+    if (!p || !race.legState.cars[pid].turn || !straightRunClear(race, p, race.legState.cars[pid].turn)) return;
+    moveAllStraight(race, p);
+    afterHeroStep(race, p);
+    saveState(); render();
+  },
   setTurn(pid, field, val) {
     const race = STATE.race, car = race.legState.cars[pid];
     const p = race.participants.find(x => x.id === pid);

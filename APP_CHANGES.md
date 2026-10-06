@@ -19,6 +19,12 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Racer tooltips stay under red and yellow overlays
+- A red target or a yellow hex on a racer shows that racer's normal tooltip (name, lane, lap, gear, HP) instead of the overlay's own text.
+
+### 2026-10-06 — Move All button; Slip and Straight buttons removed
+- The Slip and Straight buttons in the attack prompt are gone; hexes on the track do that job. When the hero's straight run (its remaining movement) passes no racer, a Move All button appears. It moves the ship straight ahead for the full remaining movement, then resumes the walk. The walk doesn't stop for attack offers along the way, so an attack can only be offered at the end of the move.
+
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
