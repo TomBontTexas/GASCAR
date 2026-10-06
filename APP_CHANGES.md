@@ -15,6 +15,20 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Start Race button; NPCs keep up with the pack
+- Starting a race from Race Setup no longer runs any turns. The race starts unstarted, and the Race tab shows a Start Race button. Pressing it runs the NPC turns that come before the first Hero.
+- NPC gear: an NPC in Gear-0 always shifts up. Otherwise it moves toward the median gear of the racers still running, and a more aggressive NPC sometimes pushes a gear higher on its own. The old rule dropped NPCs to Gear-0 about half the time.
+- Race tests press Start (`startRaceNow()`) before playing, and cover the start button and NPC movement.
+
+### 2026-10-05 — Turns pause for the attack decision
+- A hero's turn is resumable. `resolveTurn()` stores the walk in `car.turn`. `walkTurn()` pauses with `car.turn.awaiting` when a hero is in attack range, and the Race tab shows Attack / Keep moving. `decideAttack()` (App action) resumes it.
+- NPCs decide on their own during the walk and never pause.
+- `afterHeroStep()` moves the race on once a turn finishes. `takeTurn()` does nothing while a turn is paused.
+- Race tests answer attack prompts through `decideAttack()`.
+
+### 2026-10-05 — Racer hover shows the ship name
+- Hovering a racer's icon on the standings board now shows the ship name (it showed the color and number). The racer's icon on the track shows the same name, with its lane and lap.
+
 ### 2026-10-05 — Control check log shows the full breakdown
 - Each Control check line lists the modifier as A/AA/D/DD with its sources (for example "AA from Gear 1"), the dice, the chosen die, Control plus Pilot skill separately, the total against the TN, and the result. Criticals show as bonus hexes.
 - Obstacle checks use the same line.

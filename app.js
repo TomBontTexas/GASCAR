@@ -669,14 +669,14 @@ function participantIconPath(p) {
 // Class's number in the Ship's own color), or a race participant (Hero or
 // NPC, via participantIconInfo()) -- dispatches on shape, not on an explicit
 // kind flag, matching this file's existing obj.type-sniffing style.
-function iconThumbImg(obj) {
+function iconThumbImg(obj, title) {
   if (!obj) return "";
   let info;
   if (obj.classId !== undefined) info = shipIconInfo(obj); // a Ship
   else if (obj.icon !== undefined && obj.division !== undefined) info = obj.icon ? { division: obj.division, number: obj.icon, color: GDATA.SHIP_CLASS_ICON_COLOR } : null; // a Ship Class
   else info = participantIconInfo(obj); // a race participant (Hero or NPC)
   if (!info) return "";
-  return `<img class="iconthumb" src="${esc(shipIconPath(info.division, info.number, info.color))}" title="${esc(info.division)} ${esc(info.color)} ${esc(info.number)}">`;
+  return `<img class="iconthumb" src="${esc(shipIconPath(info.division, info.number, info.color))}" title="${esc(title || `${info.division} ${info.color} ${info.number}`)}">`;
 }
 // Picks a uniformly random (color, number) not already in usedKeys (a Set of
 // "Color|Number" strings) -- used to give an NPC racer a random, distinct
@@ -810,7 +810,7 @@ function initLegState(race) {
   const cars = {};
   race.participants.forEach(p => {
     cars[p.id] = {
-      gearChange: 0, slip: "", slipCount: 0, attackTargetId: "",
+      gearChange: 0, slip: "", slipCount: 0, turn: null,
       // Disadvantage carried in from hits and fumbles; consumed by this car's next check.
       pendingD: prev[p.id] ? prev[p.id].pendingD || 0 : 0,
       turnDone: !!p.out
@@ -858,35 +858,44 @@ function startRace(courseId, shipIds, npcs) {
   });
   // Starting lanes: round-robin in initiative order, outer lanes staggered ahead.
   initiativeOrder(participants).forEach((p, i) => {
-    const laneIdx0 = i % course.lanes;
+    const laneIdx0 = course.lanes - 1 - (i % course.lanes); // first in Thrust order starts in the outermost lane
     p.lane = laneIdx0 + 1;
     p.hexPos = laneStartHexPos(laneIdx0);
     p.laps = 0;
     p.startLane = p.lane;
     p.startHexPos = p.hexPos;
   });
-  const race = { courseId, legIndex: 0, participants, finished: false, winnerId: "", log: [] };
+  const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [] };
   initLegState(race);
   STATE.race = race;
   saveState();
 }
 
 /* ---------- Automatic choices for NPCs (aggression-driven) ---------- */
+// NPCs keep up with the pack: from Gear-0 they always shift up, otherwise
+// they move toward the median gear of the racers still running, and a
+// more aggressive NPC sometimes pushes a gear higher on its own.
+function npcGearChange(race, p, agg) {
+  if (p.gear === 0) return 1;
+  const gears = race.participants.filter(x => !x.out).map(x => x.gear || 0).sort((a, b) => a - b);
+  const median = gears.length ? gears[Math.floor(gears.length / 2)] : p.gear;
+  if (p.gear < median) return 1;
+  if (p.gear > median && rollD(20) > agg) return -1;
+  if (p.gear < GDATA.MAX_GEAR && rollD(20) <= agg) return 1;
+  return 0;
+}
 function npcChoices(race, p) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
   const positions = standingsPositions(race, course);
   const agg = legAggressionFor(p, positions);
-  const roll = rollD(20);
-  const gearChange = roll <= agg ? 1 : roll > agg + 5 ? -1 : 0;
+  const gearChange = npcGearChange(race, p, agg);
   let slip = "", slipCount = 0;
   if (rollD(20) <= agg) {
     slip = Math.random() < 0.5 ? "left" : "right";
     slipCount = rollD(20) <= agg ? 2 : 1;
   }
-  const inRange = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
-  const attackTargetId = inRange.length && rollD(20) <= agg ? inRange[0].id : "";
-  return { gearChange, slip, slipCount, attackTargetId };
+  return { gearChange, slip, slipCount };
 }
 
 /* ---------- Resolving one turn ---------- */
@@ -959,6 +968,32 @@ function openHexBeside(race, geom, laneIdx0, hexPos, exceptId) {
   return null;
 }
 
+// A Gunner attack from `p` against `target`: one Gunner check vs the Leg TN;
+// a hit deals 1D6 (or flat 4) plus the attacker's Damage bonus, less Armor.
+function resolveAttack(race, p, target, log) {
+  const course = getCourse(race.courseId);
+  const stats = carStats(p);
+  const tn = race.legState.leg.finalTN;
+  const gc = rollCheck(stats.gunner + stats.crewGunner, 0, tn);
+  log.push(`Gunner check vs ${participantLabel(target)}: ${gc.total} vs TN ${tn} -- ${gc.success ? "hit" : "miss"}.`);
+  if (!gc.success) return;
+  const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
+  const armor = carStats(target).armor;
+  const dmg = Math.max(0, rolledDmg + stats.damage - armor);
+  log.push(`Damage ${course.flatDamage ? "4 (flat)" : rolledDmg} + ${stats.damage} - Armor ${armor} = ${dmg}.`);
+  applyDamage(race, target, dmg, log);
+  race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
+}
+// Enemy racers within attack range (2 hexes) of a position along the path.
+function attackTargetsFrom(race, p, geom, pos) {
+  const here = { lane: pos.laneIdx0 + 1, hexPos: pos.hexPos };
+  return race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, here, x));
+}
+
+// A turn starts here: gear, movement, Slips, the Control check, and any
+// fumbles. Then the walk begins. A hero's walk pauses at the first point it
+// has someone in attack range to choose from (car.turn.awaiting); decideAttack()
+// resumes it. NPCs decide on their own and never pause.
 function resolveTurn(race, p, choices) {
   const ls = race.legState, car = ls.cars[p.id];
   const course = getCourse(race.courseId);
@@ -966,7 +1001,6 @@ function resolveTurn(race, p, choices) {
   const tn = ls.leg.finalTN;
   const stats = carStats(p);
   const log = [];
-  car.turnDone = true;
 
   // 1. Gear shift (at most one level) and movement roll.
   p.gear = clampInt(p.gear + clampInt(choices.gearChange, -1, 1, 0), 0, GDATA.MAX_GEAR, p.gear);
@@ -1006,72 +1040,114 @@ function resolveTurn(race, p, choices) {
     }
     for (let i = 0; i < rc.fumbleLevels; i++) rollFumble(race, p, T, log);
   }
+  if (p.out) T.stopped = true;
 
-  // 5. Walk the path. Entering a hex with another ship (active or wreck) forces
-  // an obstacle Control check; a failure stops the car before it, and landing
-  // on the obstacle sends it into an open neighboring hex instead.
-  const walked = [];
-  let cur = { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 };
-  let laps = p.laps || 0;
-  if (!T.stopped && T.movement > 0) {
-    const steps = resolveSlipPath(geom, cur.laneIdx0, cur.hexPos, T.movement, slipCount, dir || 1).steps;
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i];
-      const isLast = i === steps.length - 1;
-      const occ = occupantAt(race, s.laneIdx0 + 1, s.hexPos, p.id);
-      if (occ) {
-        const ob = rollCheck(stats.control + stats.crewPilot, net, tn);
-        log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, checkSources));
-        if (!ob.success) { log.push("Stops short of the obstacle."); break; }
-        if (isLast) {
-          const open = openHexBeside(race, geom, s.laneIdx0, s.hexPos, p.id);
-          if (open) {
-            log.push("Slips into an open hex beside the obstacle (free).");
-            cur = open;
-          } else {
-            log.push("Every hex beside the obstacle is blocked -- automatic Fumble, turn ends.");
-            rollFumble(race, p, T, log);
-          }
-          break;
+  // 5. Path for the walk (computed after any fumble lane shifts or movement losses).
+  const steps = (!T.stopped && T.movement > 0)
+    ? resolveSlipPath(geom, p.lane - 1, p.hexPos || 0, T.movement, slipCount, dir || 1).steps
+    : [];
+  car.turn = {
+    log, T, net, checkSources, tn, steps, slipCount,
+    idx: 0, cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
+    walked: [], attackDecided: false, halt: false, finished: false, awaiting: null
+  };
+  walkTurn(race, p);
+}
+
+// Walks the path one hex at a time. Returns "paused" when a hero must decide
+// whether to attack, otherwise finishes the turn.
+function walkTurn(race, p) {
+  const ls = race.legState, car = ls.cars[p.id], t = car.turn;
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const stats = carStats(p);
+  while (!t.finished && !t.halt) {
+    if (!t.attackDecided) {
+      const targets = attackTargetsFrom(race, p, geom, t.cur);
+      if (targets.length) {
+        if (p.type === "hero") {
+          t.awaiting = targets.map(x => x.id);
+          return "paused";
         }
+        t.attackDecided = true;
+        if (rollD(20) <= (p.aggression || 5)) resolveAttack(race, p, targets[0], t.log);
       }
-      if (cur.hexPos + 1 >= geom.laneHexLists[cur.laneIdx0].length) laps += 1;
-      cur = { laneIdx0: s.laneIdx0, hexPos: s.hexPos };
-      walked.push({ lane: cur.laneIdx0 + 1, hexPos: cur.hexPos });
-      if (laps >= course.laps) break; // crossed the finish line
     }
+    if (t.idx >= t.steps.length) break;
+    const s = t.steps[t.idx++];
+    const isLast = t.idx === t.steps.length;
+    const occ = occupantAt(race, s.laneIdx0 + 1, s.hexPos, p.id);
+    if (occ) {
+      const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
+      t.log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
+      if (!ob.success) { t.log.push("Stops short of the obstacle."); t.halt = true; continue; }
+      if (isLast) {
+        const open = openHexBeside(race, geom, s.laneIdx0, s.hexPos, p.id);
+        if (open) {
+          t.log.push("Slips into an open hex beside the obstacle (free).");
+          t.cur = open;
+        } else {
+          t.log.push("Every hex beside the obstacle is blocked -- automatic Fumble, turn ends.");
+          rollFumble(race, p, t.T, t.log);
+        }
+        t.halt = true;
+        continue;
+      }
+    }
+    if (t.cur.hexPos + 1 >= geom.laneHexLists[t.cur.laneIdx0].length) t.laps += 1;
+    t.cur = { laneIdx0: s.laneIdx0, hexPos: s.hexPos };
+    t.walked.push({ lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos });
+    if (t.laps >= course.laps) t.finished = true; // crossed the finish line
   }
-  const moved = walked.length;
-  p.lane = cur.laneIdx0 + 1;
-  p.hexPos = cur.hexPos;
-  p.laps = laps;
-  p.cumulative += moved;
-  log.push(`Moved ${moved} hex${moved === 1 ? "" : "es"}; now lane ${p.lane}, lap ${Math.min(laps, course.laps)}/${course.laps}.`);
-  race.turnSeq = (race.turnSeq || 0) + 1;
-  p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: moved, path: walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: slipCount, gear: p.gear });
+  finishTurn(race, p);
+  return "done";
+}
 
-  // 6. One Gunner attack per turn, against a ship within 2 hexes of where it ended up.
-  if (laps >= course.laps) {
+// The hero (or NPC) chose whether to attack at the point where the walk paused.
+function decideAttack(race, p, targetId) {
+  const car = race.legState.cars[p.id], t = car.turn;
+  if (!t || !t.awaiting) return;
+  t.awaiting = null;
+  t.attackDecided = true;
+  if (targetId) {
+    const target = race.participants.find(x => x.id === targetId);
+    if (target && !target.out) resolveAttack(race, p, target, t.log);
+    else t.log.push("Attack: no valid target.");
+  } else {
+    t.log.push("Keeps moving -- no attack.");
+  }
+  walkTurn(race, p);
+}
+
+// Ends a turn: moves the car to where its walk stopped, records history,
+// and writes the turn log. Also checks the finish line.
+function finishTurn(race, p) {
+  const ls = race.legState, car = ls.cars[p.id], t = car.turn;
+  const course = getCourse(race.courseId);
+  p.lane = t.cur.laneIdx0 + 1;
+  p.hexPos = t.cur.hexPos;
+  p.laps = t.laps;
+  const moved = t.walked.length;
+  p.cumulative += moved;
+  t.log.push(`Moved ${moved} hex${moved === 1 ? "" : "es"}; now lane ${p.lane}, lap ${Math.min(p.laps, course.laps)}/${course.laps}.`);
+  race.turnSeq = (race.turnSeq || 0) + 1;
+  p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: moved, path: t.walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: t.slipCount, gear: p.gear });
+  if (p.laps >= course.laps && !p.out) {
     race.finished = true;
     race.winnerId = p.id;
-    log.push(`${participantLabel(p)} crosses the finish line and wins the race!`);
-  } else if (choices.attackTargetId && !p.out) {
-    const target = race.participants.find(x => x.id === choices.attackTargetId);
-    if (!target || target.out) log.push("Attack: no valid target.");
-    else if (!hexesWithinManeuverRange(geom, p, target)) log.push(`Attack: ${participantLabel(target)} is out of range (2 hexes).`);
-    else {
-      const gc = rollCheck(stats.gunner + stats.crewGunner, 0, tn);
-      log.push(`Gunner check vs ${participantLabel(target)}: ${gc.total} vs TN ${tn} -- ${gc.success ? "hit" : "miss"}.`);
-      if (gc.success) {
-        const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
-        const dmg = Math.max(0, rolledDmg + stats.damage - carStats(target).armor);
-        log.push(`Damage ${course.flatDamage ? "4 (flat)" : rolledDmg} + ${stats.damage} - Armor ${carStats(target).armor} = ${dmg}.`);
-        applyDamage(race, target, dmg, log);
-        race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
-      }
-    }
+    t.log.push(`${participantLabel(p)} crosses the finish line and wins the race!`);
   }
-  race.log.push({ legIndex: race.legIndex, name: participantLabel(p), lines: log });
+  race.log.push({ legIndex: race.legIndex, name: participantLabel(p), lines: t.log });
+  car.turnDone = true;
+  car.turn = null;
+}
+
+// After a hero's turn step: if the turn is finished, move on to the next
+// ship or the next Leg, and let any NPC turns run.
+function afterHeroStep(race, p) {
+  if (race.legState.cars[p.id].turn) return;
+  advanceRace(race);
+  runAutomaticTurns(race);
 }
 
 // After a turn: finish the race if it's over, or roll over to the next Leg
@@ -1419,12 +1495,12 @@ function renderStandings(race) {
     const pct = Math.min(100, Math.round((trackProgress(p, ringParams) / (course.laps * 6)) * 100));
     const info = participantIconInfo(p);
     const iconImg = info
-      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(info.division, info.number, info.color))}" style="left:${pct}%" title="${esc(info.division)} ${esc(info.color)} ${esc(info.number)}">`
+      ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(info.division, info.number, info.color))}" style="left:${pct}%" title="${esc(label)}">`
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated Maneuvers and Slip">Aggr ${p.aggression || 5}</span>` : "";
-    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
+    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="thumbslot">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p, label)}</span><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
           <div class="boardbar"><div class="boardfill${p.out ? " dead" : ""}" id="boardfill-${p.id}" style="width:${pct}%"></div></div>
@@ -1460,7 +1536,13 @@ function renderRace() {
   html += `<section class="card"><h2>Leg ${race.legIndex + 1}</h2>
     <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
   </section>`;
-  html += renderTurnPanel(race);
+  if (race.started === false) {
+    html += `<section class="card"><h2>Ready to start</h2>
+      <p class="muted">Ships are on the starting grid. Press Start Race to let any NPC ships that move first take their turns.</p>
+      <button onclick="App.startRaceNow()">Start Race</button></section>`;
+  } else {
+    html += renderTurnPanel(race);
+  }
   html += renderLog(race);
   return html;
 }
@@ -1478,8 +1560,21 @@ function renderTurnPanel(race) {
     html += `<tr><td>${i + 1}</td><td>${esc(participantLabel(p))}${p.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${carStats(p).thrust}</td><td>${status}</td></tr>`;
   });
   html += `</table>`;
-  if (next && next.type === "hero") html += renderHeroTurnForm(race, next);
+  if (next && next.type === "hero") {
+    const t = next.id && race.legState.cars[next.id].turn;
+    html += t && t.awaiting ? renderAttackPrompt(race, next, t) : renderHeroTurnForm(race, next);
+  }
   return html + `</section>`;
+}
+function renderAttackPrompt(race, p, t) {
+  const targets = t.awaiting.map(id => race.participants.find(x => x.id === id)).filter(Boolean);
+  const pick = targets.length > 1 ? `document.getElementById('atkTarget-${p.id}').value` : `'${targets[0].id}'`;
+  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> is within 2 hexes of another racer. Attack?</div>
+    ${targets.length > 1 ? `<div class="formrow"><label>Target</label><select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(participantLabel(x))}</option>`).join("")}</select></div>` : `<p>Target: <b>${esc(participantLabel(targets[0]))}</b></p>`}
+    <div class="row"><button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
+      <button class="ghost" onclick="App.decideAttack('${p.id}', '')">Keep moving</button></div>
+    ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
+  </div>`;
 }
 function renderHeroTurnForm(race, p) {
   const car = race.legState.cars[p.id];
@@ -1507,14 +1602,7 @@ function renderHeroTurnForm(race, p) {
       </select>
       ${car.slip ? numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipCount || 1), Math.max(1, slipMax))}" onchange="App.setTurn('${p.id}','slipCount',this.value)" style="width:56px">`) + ` lateral hex(es), max ${slipMax}` : ""}
     </div>
-    <div class="formrow"><label>Attack</label>
-      <select onchange="App.setTurn('${p.id}','attackTargetId',this.value)">
-        <option value="">No attack</option>
-        ${targets.map(t => `<option value="${t.id}" ${car.attackTargetId === t.id ? "selected" : ""}>${esc(participantLabel(t))}</option>`).join("")}
-      </select>
-      <span class="muted">${targets.length ? "one attack per turn, within 2 hexes" : "no racer within 2 hexes"}</span>
-    </div>
-    <p class="muted">Movement, Slips, the Control check, obstacles, and any attack all resolve when you take the turn. Ships act one at a time in Thrust order.</p>
+    <p class="muted">Movement, Slips, the Control check, and obstacles resolve when you take the turn. If another racer comes within 2 hexes along the way, the turn pauses and asks whether to attack. Ships act one at a time in Thrust order.</p>
     <button onclick="App.takeTurn('${p.id}')">Take turn</button>
   </div>`;
 }
@@ -1599,13 +1687,13 @@ function renderInstructions() {
 
     <h3>4. Racecourse &amp; Race — run it</h3>
     <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
-    <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). On a ship's turn:</p>
+    <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). The lowest Thrust starts in the outermost lane. On a ship's turn:</p>
     <ol>
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Slip</b> — optionally shift sideways one hex per Slip, as part of your movement. The first Slip is free; two or more trigger a Control check at Disadvantage.</li>
       <li><b>Control check</b> — if the ship moves 5 or more hexes, or Slips more than once, roll 1D20 + Control + Pilot against the Leg's TN. Gear and Leg modifiers apply here: Gear 1 = AA, Gear 2 = A, Gear 4 = D, Gear 5 = DD, two or more Slips = D, moving more hexes than the Leg TN = D, and any Disadvantage carried in from earlier hits or fumbles. Success moves full distance (plus one bonus hex per Critical). Failure moves half the intended distance and cancels Slips. Every Fumble (a Disadvantage roll where both dice fail) rolls the Fumble Chart once.</li>
       <li><b>Walk</b> — the ship moves hex by hex. Entering a hex with another ship (active or wreck) forces a Control check against the TN: on success the ship passes through, on failure it stops short of the obstacle. If it lands on an obstacle, it slips free into an open hex beside it instead; if every adjacent hex is blocked, it rolls the Fumble Chart and its turn ends.</li>
-      <li><b>Attack</b> — optionally, one Gunner attack against a racer within 2 hexes. Roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
+      <li><b>Attack</b> — if you pass within 2 hexes of another racer, the turn pauses and asks whether to attack. You may attack once per turn: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
 
@@ -1895,7 +1983,6 @@ const App = {
     const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
     if (!shipIds.length) { alert(`Select at least one ${division} Division ship with a Crewman assigned.`); return; }
     startRace(courseId, shipIds, STATE._draftNpcs || []);
-    runAutomaticTurns(STATE.race);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
     saveState(); render();
@@ -1920,20 +2007,33 @@ const App = {
       const course = getCourse(race.courseId);
       const maxLateral = car.slip === "left" ? p.lane - 1 : course.lanes - p.lane;
       car.slipCount = clampInt(val, 1, Math.max(1, maxLateral), car.slipCount || 1);
-    } else if (field === "attackTargetId") {
-      car.attackTargetId = val;
     }
+    saveState(); render();
+  },
+  startRaceNow() {
+    const race = STATE.race;
+    if (!race || race.started !== false) return;
+    race.started = true;
+    runAutomaticTurns(race);
     saveState(); render();
   },
   takeTurn(pid) {
     const race = STATE.race;
-    if (!race || race.finished) return;
+    if (!race || race.finished || race.started === false) return;
     const p = race.participants.find(x => x.id === pid);
-    if (!p || nextTurnParticipant(race) !== p) return;
+    if (!p || nextTurnParticipant(race) !== p || race.legState.cars[pid].turn) return;
     const car = race.legState.cars[pid];
-    resolveTurn(race, p, { gearChange: car.gearChange, slip: car.slip, slipCount: car.slipCount, attackTargetId: car.attackTargetId });
-    advanceRace(race);
-    runAutomaticTurns(race);
+    resolveTurn(race, p, { gearChange: car.gearChange, slip: car.slip, slipCount: car.slipCount });
+    afterHeroStep(race, p);
+    saveState(); render();
+  },
+  decideAttack(pid, targetId) {
+    const race = STATE.race;
+    if (!race || race.finished || race.started === false) return;
+    const p = race.participants.find(x => x.id === pid);
+    if (!p) return;
+    decideAttack(race, p, targetId);
+    afterHeroStep(race, p);
     saveState(); render();
   },
   playRaceReplay(lastLegOnly) {

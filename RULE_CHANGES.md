@@ -21,6 +21,11 @@ applicable), the current value in use, and where it lives in the code.
 - A stat can carry either a sponsor bonus or a sponsor penalty, never both. Choosing one clears the other on that stat. The other row is disabled for that stat.
 - **Where:** `setSponsor()` and `renderSponsorRow()` in `app.js`.
 
+### 2026-10-05 — Attacks are chosen mid-move; lowest Thrust starts in the outer lane
+- **Earlier value:** the lowest-Thrust ship started in lane 1 (innermost). A hero picked its attack target before moving.
+- **Current value:** the lowest-Thrust ship starts in the outermost lane (6), and each faster ship starts one lane further in. When a hero passes within 2 hexes of another racer, the turn pauses and asks whether to attack. Attack or keep moving; movement continues after the answer. A hero may attack once per turn, and a decline ends the attack option for that turn.
+- **Where:** `startRace()` (lane order), `resolveTurn()`, `walkTurn()`, `decideAttack()` in `app.js`.
+
 ### 2026-10-05 — Starting line stagger reduced to 1 hex per lane
 - **Earlier value:** each lane out started 4 hexes further along the track than the lane inside it (`STAGGER_PER_LANE = 4`).
 - **Current value:** each lane out starts 1 hex further along than the lane inside it. Ships and the drawn starting line for each lane use the same position.
