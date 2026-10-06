@@ -1109,7 +1109,7 @@ function resolveTurn(race, p, choices) {
   car.turn = {
     log, T, net, checkSources, tn, R: T.stopped ? 0 : T.movement, slips: 0,
     cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
-    walked: [], left: [], declined: [], halt: false, finished: false, awaiting: null, choice: null
+    walked: [], left: [], passedAttack: false, halt: false, finished: false, awaiting: null, choice: null
   };
   walkTurn(race, p);
 }
@@ -1201,30 +1201,26 @@ function walkTurn(race, p) {
   const geom = circTrackGeometry(course);
   const stats = carStats(p);
   while (!t.finished && !t.halt) {
-    // One attack per turn. A racer that was offered and declined isn't offered
-    // again, but a different racer coming into range is.
-    const targets = !car.attackedThisLeg ? attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id)) : [];
+    // One attack per Leg. While the shooter can still attack, every racer in range is offered.
+    const targets = !car.attackedThisLeg ? attackTargetsFrom(race, p, geom, t.cur) : [];
     if (p.type === "hero") {
-      if (!targets.length && t.R <= 0) break;
-      t.awaiting = targets.length ? targets.map(x => x.id) : null;
-      if (t.R > 0) {
-        const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
-        const circ = geom.laneHexLists[t.cur.laneIdx0].length;
-        const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
-        const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-        t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null };
-      } else {
+      if (t.R <= 0) {
+        if (!targets.length || t.passedAttack) break;
+        t.awaiting = targets.map(x => x.id);
         t.choice = null;
+        return "paused";
       }
+      t.awaiting = targets.length ? targets.map(x => x.id) : null;
+      const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
+      const circ = geom.laneHexLists[t.cur.laneIdx0].length;
+      const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
+      const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+      t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null };
       return "paused";
     }
-    if (targets.length) {
-      if (rollD(20) <= (p.aggression || 5)) {
-        resolveAttack(race, p, targets[0], t.log);
-        car.attackedThisLeg = true;
-      } else {
-        t.declined.push(...targets.map(x => x.id));
-      }
+    if (targets.length && rollD(20) <= (p.aggression || 5)) {
+      resolveAttack(race, p, targets[0], t.log);
+      car.attackedThisLeg = true;
     }
     if (t.R <= 0) break;
     const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
@@ -1250,33 +1246,30 @@ function walkTurn(race, p) {
 }
 
 // The hero's answer to an occupied hex ahead, or to an attack offer.
-// The hero's click on a yellow hex: moves there, and declines any attack offered at this hex.
+// The hero's click on a yellow hex: moves there. Racers still in range stay offered.
 function decideEncounter(race, p, id) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.choice) return;
-  if (t.awaiting) {
-    t.declined.push(...t.awaiting);
-    t.awaiting = null;
-    t.log.push("Keeps moving -- no attack.");
-  }
   applyEncounter(race, p, id, t.choice.options);
   walkTurn(race, p);
 }
-// The hero's click on a red racer (or a declined offer): attack, or keep moving.
+// The hero's click on a red racer attacks it (once per Leg). With no movement
+// points left, an empty target ends the turn without an attack.
 function decideAttack(race, p, targetId) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.awaiting) return;
-  const offered = t.awaiting;
-  t.awaiting = null;
-  if (targetId && offered.includes(targetId)) {
-    const target = race.participants.find(x => x.id === targetId);
-    if (target && !target.out) resolveAttack(race, p, target, t.log);
-    else t.log.push("Attack: no valid target.");
-    car.attackedThisLeg = true;
-  } else {
-    t.declined.push(...offered);
-    t.log.push("Keeps moving -- no attack.");
+  if (!targetId) {
+    if (t.R > 0) return;
+    t.passedAttack = true;
+    t.awaiting = null;
+    walkTurn(race, p);
+    return;
   }
+  if (!t.awaiting.includes(targetId)) return;
+  const target = race.participants.find(x => x.id === targetId);
+  t.awaiting = null;
+  if (target && !target.out) resolveAttack(race, p, target, t.log);
+  car.attackedThisLeg = true;
   walkTurn(race, p);
 }
 
@@ -1733,7 +1726,7 @@ function renderAttackPrompt(race, p, t) {
     <p>Click a red racer to attack, or a yellow hex to keep moving. Movement left: <b>${t.R}</b></p>
     ${targets.length > 1 ? `<div class="formrow"><label>Target</label><select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(participantLabel(x))}</option>`).join("")}</select></div>` : `<p>Target: <b>${esc(participantLabel(targets[0]))}</b></p>`}
     <div class="row"><button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
-      <button class="ghost" onclick="App.decideAttack('${p.id}', '')">Keep moving</button></div>
+      ${t.R > 0 && t.choice ? t.choice.options.map(o => `<button class="ghost" onclick="App.encounterChoice('${p.id}','${o.id}')">${esc(o.label)}</button>`).join(" ") : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish turn</button>`}</div>
     ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
@@ -1849,7 +1842,7 @@ function renderInstructions() {
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
       <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
-      <li><b>Attack</b> — if you pass within 2 hexes of another racer, the turn pauses and asks whether to attack. You may attack once per turn: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
+      <li><b>Attack</b> — if you pass within 2 hexes of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
 

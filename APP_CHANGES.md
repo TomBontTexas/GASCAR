@@ -35,7 +35,7 @@ Newest entries at the top.
 - A ship with a pending Disadvantage from a hit or fumble shows a "Hit" tag with its HP in the turn panel. The tag clears when the Disadvantage is used.
 
 ### 2026-10-06 — Attack choice is clickable on the track
-- When a racer is in attack range, the track highlights it red and the keep-moving hexes yellow. Clicking the red racer attacks; clicking a yellow hex keeps moving and declines the attack. The Attack and Keep moving buttons remain.
+- While the shooter can still attack this Leg, every racer in range is highlighted red and the keep-moving hexes yellow. Clicking a red racer attacks it; clicking a yellow hex moves and keeps every racer still in range red. Declines are gone. Once the movement points are spent, a Finish turn button ends the turn without attacking.
 
 ### 2026-10-06 — Fix: Slip choices are forward diagonals only
 - The Slip options offered the adjacent-lane hexes beside the ship, which could be level with or behind it. `encounterOptions()` now offers only the adjacent-lane hex that touches the hex straight ahead.

@@ -19,7 +19,7 @@ applicable), the current value in use, and where it lives in the code.
 
 ### 2026-10-06 — One attack per Leg, not per turn
 - **Earlier value:** Circus Astralis allows one attack per turn (`Circus_Astralis_v2_extracted.txt`, "A player may make only one attack per turn").
-- **Current value:** a racer may make one attack per Leg. Once it has attacked, it is not offered another attack for the rest of that Leg. While it can still attack, every racer within 2 hexes is highlighted red. A declined offer still doesn't repeat during that turn.
+- **Current value:** a racer may make one attack per Leg. Once it has attacked, it is not offered another attack for the rest of that Leg. While it can still attack, every racer within 2 hexes is highlighted red, and that stays true as it keeps moving, as long as the racer is in range. Moving past a racer doesn't cancel the offer.
 - **Where:** `car.attackedThisLeg` set in `walkTurn()` and `decideAttack()`, reset by `initLegState()`.
 
 ### 2026-10-05 — NPC racers are copies of the Division's ships
