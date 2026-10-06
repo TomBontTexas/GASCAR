@@ -19,6 +19,9 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Fix: starting lanes and the first Leg's turn order use the same tie-break
+- With tied Thrust (for example NPC copies of your ship), the starting lanes and the first Leg's turn order each broke the tie with their own random roll, so a ship could start in lane 1 yet move first. The first Leg now uses the same order the lanes were set from. Later Legs still roll ties afresh. A race that was already started keeps its old order, so start a new race to see the fix.
+
 ### 2026-10-05 — Fix: declining an attack no longer hides later targets
 - A hero who declined to attack one racer stopped being offered attacks for the rest of the turn, so a second racer coming into range was never offered. Declines now apply only to the racers already offered. A new racer in range still prompts. One attack per turn still applies.
 

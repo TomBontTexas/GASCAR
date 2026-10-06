@@ -825,7 +825,7 @@ function breakInitiativeTie(group) {
   }
   return out;
 }
-function initLegState(race) {
+function initLegState(race, presetOrder) {
   const course = getCourse(race.courseId);
   const leg = rollCircularLeg(course);
   leg.finalTN = Math.min(leg.finalTN, legTNCap(race));
@@ -839,7 +839,8 @@ function initLegState(race) {
       turnDone: !!p.out
     };
   });
-  race.legState = { leg, cars, complete: false, order: initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id) };
+  const order = presetOrder || initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id);
+  race.legState = { leg, cars, complete: false, order };
   STATE._openDeclFor = null;
 }
 function nextTurnParticipant(race) {
@@ -881,7 +882,8 @@ function startRace(courseId, shipIds, npcs) {
   });
   // Starting lanes: round-robin in initiative order, outer lanes staggered ahead.
   // Highest Thrust starts in lane 1; each slower ship starts one lane further out.
-  const byHighest = initiativeOrder(participants).reverse();
+  const startOrder = initiativeOrder(participants);
+  const byHighest = [...startOrder].reverse();
   byHighest.forEach((p, i) => {
     const laneIdx0 = i % course.lanes;
     p.lane = laneIdx0 + 1;
@@ -891,7 +893,9 @@ function startRace(courseId, shipIds, npcs) {
     p.startHexPos = p.hexPos;
   });
   const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [] };
-  initLegState(race);
+  // The first Leg uses the same initiative order the lanes were set from, so
+  // ties broken for the starting grid also decide who moves first.
+  initLegState(race, startOrder.map(p => p.id));
   STATE.race = race;
   saveState();
 }
