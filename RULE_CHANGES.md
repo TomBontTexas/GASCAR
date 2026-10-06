@@ -17,6 +17,10 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-05 — Sponsor: each stat takes a bonus or a penalty, not both
+- A stat can carry either a sponsor bonus or a sponsor penalty, never both. Choosing one clears the other on that stat. The other row is disabled for that stat.
+- **Where:** `setSponsor()` and `renderSponsorRow()` in `app.js`.
+
 ### 2026-10-05 — Starting line stagger reduced to 1 hex per lane
 - **Earlier value:** each lane out started 4 hexes further along the track than the lane inside it (`STAGGER_PER_LANE = 4`).
 - **Current value:** each lane out starts 1 hex further along than the lane inside it. Ships and the drawn starting line for each lane use the same position.

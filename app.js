@@ -895,6 +895,17 @@ function gearNet(gear) {
   const mod = (GDATA.GEAR_TABLE[gear] || {}).mod;
   return mod === "AA" ? 2 : mod === "A" ? 1 : mod === "D" ? -1 : mod === "DD" ? -2 : 0;
 }
+// One line for a Control check: the modifier as A/AA/D/DD (and where it came
+// from), the score broken into Control + Pilot skill, and the result.
+function controlCheckLine(label, rc, stats, sources) {
+  const mod = rc.net ? netLabel(rc.net) : "no modifier";
+  const why = sources.length ? ` from ${sources.join(", ")}` : "";
+  const parts = [];
+  if (rc.success) parts.push(rc.critLevels ? `${rc.critLevels} Critical${rc.critLevels === 1 ? "" : "s"} (+${rc.critLevels} bonus hex${rc.critLevels === 1 ? "" : "es"})` : "Success");
+  else parts.push("Failure");
+  if (rc.fumbleLevels) parts.push(`${rc.fumbleLevels} Fumble${rc.fumbleLevels === 1 ? "" : "s"}`);
+  return `${label}, ${mod}${why}: dice ${rc.dice.join(", ")}; chosen ${rc.chosen} + Control ${stats.control} + Pilot skill ${stats.crewPilot} = ${rc.total} vs TN ${rc.tn}. ${parts.join(", ")}.`;
+}
 function applyDamage(race, p, amount, log) {
   p.hp = Math.max(0, p.hp - amount);
   if (p.hp === 0 && !p.out) {
@@ -974,16 +985,20 @@ function resolveTurn(race, p, choices) {
   const pendingNow = car.pendingD;
   car.pendingD = 0;
   const net = gearNet(p.gear) - (slipCount >= 2 ? 1 : 0) - (intended > tn ? 1 : 0) - pendingNow;
+  const checkSources = [];
+  if (gearNet(p.gear)) checkSources.push(`Gear ${p.gear}`);
+  if (slipCount >= 2) checkSources.push("2+ Slips");
+  if (intended > tn) checkSources.push("movement over the TN");
+  if (pendingNow) checkSources.push("earlier hits/fumbles");
   const T = { movement: intended, stopped: false };
 
   // 4. Control Task Check: triggered by 5+ hexes of movement or by more than the one free Slip.
   const triggered = intended >= 5 || slipCount >= 2;
   if (triggered) {
     const rc = rollCheck(stats.control + stats.crewPilot, net, tn);
-    log.push(`Control check: ${rc.dice.join(", ")} -> ${rc.total} vs TN ${tn} -- ${outcomeLabel(rc)}.`);
+    log.push(controlCheckLine("Control check", rc, stats, checkSources));
     if (rc.success) {
       T.movement = intended + rc.critLevels;
-      if (rc.critLevels) log.push(`Critical: +${rc.critLevels} bonus hex.`);
     } else {
       T.movement = Math.floor(intended / 2);
       slipCount = 0;
@@ -1006,7 +1021,7 @@ function resolveTurn(race, p, choices) {
       const occ = occupantAt(race, s.laneIdx0 + 1, s.hexPos, p.id);
       if (occ) {
         const ob = rollCheck(stats.control + stats.crewPilot, net, tn);
-        log.push(`Obstacle (${participantLabel(occ)}): Control check ${ob.total} vs TN ${tn} -- ${outcomeLabel(ob)}.`);
+        log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, checkSources));
         if (!ob.success) { log.push("Stops short of the obstacle."); break; }
         if (isLast) {
           const open = openHexBeside(race, geom, s.laneIdx0, s.hexPos, p.id);
@@ -1237,7 +1252,11 @@ function renderHangarBay() {
 function renderSponsorRow(ship) {
   const sponsor = sponsorOf(ship);
   const bonusTotal = sponsorBonusTotal(sponsor), penaltyTotal = sponsorPenaltyTotal(sponsor);
-  const cells = kind => SHIP_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX}" value="${sponsor[kind][s] || 0}" onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`).join("");
+  const cells = kind => SHIP_STATS.map(s => {
+    const other = kind === "bonus" ? "penalty" : "bonus";
+    const blocked = !!sponsor[other][s];
+    return `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX}" value="${sponsor[kind][s] || 0}" ${blocked ? "disabled title=\"This stat already has a " + other + "\"" : ""} onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`;
+  }).join("");
   return `<div class="row" style="align-items:flex-start"><b>Sponsor</b> <span class="muted">Spread up to ${SPONSOR_BONUS_MAX} bonus points and up to ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like.</span></div>
     <table class="mktable shiptable"><tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
     <tr><td>+</td>${cells("bonus")}</tr>
@@ -1806,7 +1825,13 @@ const App = {
     ship.sponsor = sponsor;
     const max = kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX;
     const others = (kind === "bonus" ? sponsorBonusTotal(sponsor) : sponsorPenaltyTotal(sponsor)) - (sponsor[kind][stat] || 0);
-    sponsor[kind][stat] = clampInt(val, 0, max - others, sponsor[kind][stat] || 0);
+    const v = clampInt(val, 0, max - others, sponsor[kind][stat] || 0);
+    sponsor[kind][stat] = v;
+    // A stat takes a bonus or a penalty, never both.
+    if (v > 0) {
+      const opposite = kind === "bonus" ? "penalty" : "bonus";
+      delete sponsor[opposite][stat];
+    }
     saveState(); render();
   },
 

@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Control check log shows the full breakdown
+- Each Control check line lists the modifier as A/AA/D/DD with its sources (for example "AA from Gear 1"), the dice, the chosen die, Control plus Pilot skill separately, the total against the TN, and the result. Criticals show as bonus hexes.
+- Obstacle checks use the same line.
+
 ### 2026-10-05 — Replay plays one ship's turn at a time, in turn order
 - Show Last Leg and Show Entire Race now animate each turn in the order it happened, one ship at a time, instead of every ship moving together. Each history record stores a turn sequence number (`seq`), which the replay sorts on.
 
