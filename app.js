@@ -816,7 +816,7 @@ function initLegState(race) {
       turnDone: !!p.out
     };
   });
-  race.legState = { leg, cars, order: initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id) };
+  race.legState = { leg, cars, complete: false, order: initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id) };
   STATE._openDeclFor = null;
 }
 function nextTurnParticipant(race) {
@@ -1165,10 +1165,7 @@ function afterHeroStep(race, p) {
 function advanceRace(race) {
   if (race.finished) return;
   if (!race.participants.some(x => x.type === "hero" && !x.out)) { race.finished = true; return; }
-  if (!nextTurnParticipant(race)) {
-    race.legIndex += 1;
-    initLegState(race);
-  }
+  if (!nextTurnParticipant(race)) race.legState.complete = true; // the next Leg waits for Start Leg
 }
 // Runs every consecutive NPC turn until a Hero's turn comes up (or the race ends).
 function runAutomaticTurns(race) {
@@ -1570,7 +1567,9 @@ function renderTurnPanel(race) {
     html += `<tr><td>${i + 1}</td><td>${esc(participantLabel(p))}${p.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${carStats(p).thrust}</td><td>${status}</td></tr>`;
   });
   html += `</table>`;
-  if (next && next.type === "hero") {
+  if (ls.complete) {
+    html += `<div class="row"><b>Leg ${race.legIndex + 1} is complete.</b> <button onclick="App.startNextLeg()">Start Leg ${race.legIndex + 2}</button></div>`;
+  } else if (next && next.type === "hero") {
     const t = next.id && race.legState.cars[next.id].turn;
     html += t && t.awaiting ? renderAttackPrompt(race, next, t) : renderHeroTurnForm(race, next);
   }
@@ -2027,6 +2026,14 @@ const App = {
     runAutomaticTurns(race);
     saveState(); render();
   },
+  startNextLeg() {
+    const race = STATE.race;
+    if (!race || race.finished || !race.legState.complete) return;
+    race.legIndex += 1;
+    initLegState(race);
+    runAutomaticTurns(race);
+    saveState(); render();
+  },
   takeTurn(pid) {
     const race = STATE.race;
     if (!race || race.finished || race.started === false) return;
@@ -2054,7 +2061,7 @@ const App = {
     const ringParams = hexRingParamsForCourse(course);
     // "Last leg" means the most recent leg that has finished for every ship:
     // the leg before the one in progress, or the final leg once the race is over.
-    const lastLeg = Math.max(0, race.finished ? race.legIndex : race.legIndex - 1);
+    const lastLeg = Math.max(0, race.finished || race.legState.complete ? race.legIndex : race.legIndex - 1);
     const fromLeg = lastLegOnly ? lastLeg : 0;
     if (!race.participants.some(p => (p.history || []).length)) return;
     const btnAll = document.getElementById("raceReplayBtn");
