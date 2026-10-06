@@ -1123,10 +1123,12 @@ function encounterOptions(race, p, car, cur, R, geom, course) {
   const cost = car.slipsThisLeg + 1;
   if (cost > R) return opts;
   const sn = geom.slipNeighbors[cur.laneIdx0][cur.hexPos];
+  const aheadHex = geom.laneHexLists[ahead.laneIdx0][ahead.hexPos];
   [[-1, sn.inward, "Slip left"], [1, sn.outward, "Slip right"]].forEach(([dir, cands, label]) => {
     const lane0 = cur.laneIdx0 + dir;
     if (lane0 < 0 || lane0 >= course.lanes) return;
-    const hexPos = cands.find(h => !occupantAt(race, lane0 + 1, h, p.id));
+    const forward = cands.filter(h => hexDistance(geom.laneHexLists[lane0][h], aheadHex) === 1);
+    const hexPos = forward.find(h => !occupantAt(race, lane0 + 1, h, p.id));
     if (hexPos === undefined) return;
     opts.push({ id: dir < 0 ? "left" : "right", label: `${label} (costs ${cost} movement point${cost === 1 ? "" : "s"})`, cost, dest: { laneIdx0: lane0, hexPos } });
   });
