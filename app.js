@@ -825,7 +825,7 @@ function breakInitiativeTie(group) {
   }
   return out;
 }
-function initLegState(race, presetOrder) {
+function initLegState(race) {
   const course = getCourse(race.courseId);
   const leg = rollCircularLeg(course);
   leg.finalTN = Math.min(leg.finalTN, legTNCap(race));
@@ -839,7 +839,11 @@ function initLegState(race, presetOrder) {
       turnDone: !!p.out
     };
   });
-  const order = presetOrder || initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id);
+  // Thrust never changes during a race, so the initiative order is set once
+  // (ties broken by 1D20 at the start) and every Leg keeps it. Ships that
+  // have been destroyed simply drop out of it.
+  if (!race.initiative) race.initiative = initiativeOrder(race.participants).map(p => p.id);
+  const order = race.initiative.filter(id => { const p = race.participants.find(x => x.id === id); return p && !p.out; });
   race.legState = { leg, cars, complete: false, order };
   STATE._openDeclFor = null;
 }
@@ -893,9 +897,9 @@ function startRace(courseId, shipIds, npcs) {
     p.startHexPos = p.hexPos;
   });
   const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [] };
-  // The first Leg uses the same initiative order the lanes were set from, so
-  // ties broken for the starting grid also decide who moves first.
-  initLegState(race, startOrder.map(p => p.id));
+  // Lanes and turn order both come from the same initiative order.
+  race.initiative = startOrder.map(p => p.id);
+  initLegState(race);
   STATE.race = race;
   saveState();
 }
