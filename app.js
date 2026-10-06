@@ -857,8 +857,10 @@ function startRace(courseId, shipIds, npcs) {
     });
   });
   // Starting lanes: round-robin in initiative order, outer lanes staggered ahead.
-  initiativeOrder(participants).forEach((p, i) => {
-    const laneIdx0 = course.lanes - 1 - (i % course.lanes); // first in Thrust order starts in the outermost lane
+  // Highest Thrust starts in lane 1; each slower ship starts one lane further out.
+  const byHighest = initiativeOrder(participants).reverse();
+  byHighest.forEach((p, i) => {
+    const laneIdx0 = i % course.lanes;
     p.lane = laneIdx0 + 1;
     p.hexPos = laneStartHexPos(laneIdx0);
     p.laps = 0;
@@ -940,8 +942,16 @@ function applyFumbleAffect(race, p, a, T, log) {
     T.movement = Math.max(0, T.movement - a.amount);
   } else if (a.type === "laneShift") {
     const target = a.dir === "in" ? p.lane - 1 : p.lane + 1;
-    if (target >= 1 && target <= course.lanes) p.lane = target;
-    else if (a.forced) fallOffTrack(race, p, T, log);
+    if (target >= 1 && target <= course.lanes) {
+      // Move to the matching hex in the new lane (the same neighbor the Slip
+      // map uses), so the position stays on that lane's ring.
+      const geom = circTrackGeometry(course);
+      const sn = geom.slipNeighbors[p.lane - 1][p.hexPos || 0];
+      const cands = a.dir === "in" ? sn.inward : sn.outward;
+      p.lane = target;
+      if (cands.length) p.hexPos = cands[0];
+      else p.hexPos = Math.min(p.hexPos || 0, geom.laneHexLists[target - 1].length - 1);
+    } else if (a.forced) fallOffTrack(race, p, T, log);
   } else if (a.type === "gearReset") {
     p.gear = a.to;
   } else if (a.type === "nextLegD") {

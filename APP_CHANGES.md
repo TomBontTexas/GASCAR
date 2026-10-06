@@ -15,6 +15,9 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Fix: lane shift could leave a car off its lane's ring
+- A fumble lane shift changed the lane but kept the hex position, so a shift inward onto a shorter ring could leave the car past the end of it. The race then crashed in the Slip path (intermittently). The shift now moves the car to the matching hex in the new lane, using the Slip neighbor map.
+
 ### 2026-10-05 — Start Race button; NPCs keep up with the pack
 - Starting a race from Race Setup no longer runs any turns. The race starts unstarted, and the Race tab shows a Start Race button. Pressing it runs the NPC turns that come before the first Hero.
 - NPC gear: an NPC in Gear-0 always shifts up. Otherwise it moves toward the median gear of the racers still running, and a more aggressive NPC sometimes pushes a gear higher on its own. The old rule dropped NPCs to Gear-0 about half the time.
