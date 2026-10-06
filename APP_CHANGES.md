@@ -22,6 +22,9 @@ Newest entries at the top.
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
+### 2026-10-06 — Track hover shows gear and HP
+- The hover tooltip on each ship icon on the Circular Track now includes gear and HP, next to lane and lap.
+
 ### 2026-10-06 — Hit tag shows pending Disadvantage
 - A ship with a pending Disadvantage from a hit or fumble shows a "Hit" tag with its HP in the turn panel. The tag clears when the Disadvantage is used.
 

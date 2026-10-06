@@ -614,7 +614,7 @@ function renderCircularTrackSvg(race, course) {
     const at = t ? { lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos } : p;
     const { laneIdx0, transform } = circRacerTransform(geom, at);
     const label = p.type === "hero" ? shipName(p.shipId) : p.name;
-    const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}`;
+    const lapTag = `Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}, Gear ${p.gear || 0}, HP ${p.hp != null ? p.hp : 0}/${p.maxHp != null ? p.maxHp : 0}`;
     const iconInfo = participantIconInfo(p);
     const imgHref = iconInfo ? esc(shipIconPath(iconInfo.division, iconInfo.number, iconInfo.color)) : "";
     svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" transform="${transform}">
