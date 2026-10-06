@@ -634,6 +634,18 @@ function renderCircularTrackSvg(race, course) {
       svg += `<polygon class="circstep" points="${pts}" onclick="App.encounterChoice('${p.id}','${o.id}')"><title>${esc(o.label)}</title></polygon>`;
     });
   });
+  race.participants.forEach(p => {
+    const t = turnOf(p);
+    if (!t || !t.awaiting) return;
+    t.awaiting.forEach(id => {
+      const target = race.participants.find(x => x.id === id);
+      if (!target) return;
+      const hex = geom.laneHexLists[target.lane - 1][target.hexPos];
+      const { x, y } = hexToPixel(geom, hex.q, hex.r);
+      const pts = hexCorners(geom.hexSize * 0.96, x, y).map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+      svg += `<polygon class="circattack" points="${pts}" onclick="App.decideAttack('${p.id}','${target.id}')"><title>Attack ${esc(participantLabel(target))}</title></polygon>`;
+    });
+  });
   svg += `</svg>`;
   return svg;
 }
@@ -1178,30 +1190,31 @@ function walkTurn(race, p) {
   while (!t.finished && !t.halt) {
     // One attack per turn. A racer that was offered and declined isn't offered
     // again, but a different racer coming into range is.
-    if (!t.attackUsed) {
-      const targets = attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id));
-      if (targets.length) {
-        if (p.type === "hero") {
-          t.awaiting = targets.map(x => x.id);
-          return "paused";
-        }
-        if (rollD(20) <= (p.aggression || 5)) {
-          resolveAttack(race, p, targets[0], t.log);
-          t.attackUsed = true;
-        } else {
-          t.declined.push(...targets.map(x => x.id));
-        }
+    const targets = !t.attackUsed ? attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id)) : [];
+    if (p.type === "hero") {
+      if (!targets.length && t.R <= 0) break;
+      t.awaiting = targets.length ? targets.map(x => x.id) : null;
+      if (t.R > 0) {
+        const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
+        const circ = geom.laneHexLists[t.cur.laneIdx0].length;
+        const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
+        const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+        t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null };
+      } else {
+        t.choice = null;
+      }
+      return "paused";
+    }
+    if (targets.length) {
+      if (rollD(20) <= (p.aggression || 5)) {
+        resolveAttack(race, p, targets[0], t.log);
+        t.attackUsed = true;
+      } else {
+        t.declined.push(...targets.map(x => x.id));
       }
     }
     if (t.R <= 0) break;
     const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
-    if (p.type === "hero") {
-      const circ = geom.laneHexLists[t.cur.laneIdx0].length;
-      const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
-      const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-      t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null };
-      return "paused";
-    }
     const circ = geom.laneHexLists[t.cur.laneIdx0].length;
     const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
     const slips = opts.filter(o => o.id !== "straight");
@@ -1226,19 +1239,25 @@ function walkTurn(race, p) {
 }
 
 // The hero's answer to an occupied hex ahead, or to an attack offer.
+// The hero's click on a yellow hex: moves there, and declines any attack offered at this hex.
 function decideEncounter(race, p, id) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.choice) return;
+  if (t.awaiting) {
+    t.declined.push(...t.awaiting);
+    t.awaiting = null;
+    t.log.push("Keeps moving -- no attack.");
+  }
   applyEncounter(race, p, id, t.choice.options);
   walkTurn(race, p);
 }
-// The hero (or NPC) chose whether to attack at the point where the walk paused.
+// The hero's click on a red racer (or a declined offer): attack, or keep moving.
 function decideAttack(race, p, targetId) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.awaiting) return;
   const offered = t.awaiting;
   t.awaiting = null;
-  if (targetId) {
+  if (targetId && offered.includes(targetId)) {
     const target = race.participants.find(x => x.id === targetId);
     if (target && !target.out) resolveAttack(race, p, target, t.log);
     else t.log.push("Attack: no valid target.");
@@ -1700,6 +1719,7 @@ function renderAttackPrompt(race, p, t) {
   const targets = t.awaiting.map(id => race.participants.find(x => x.id === id)).filter(Boolean);
   const pick = targets.length > 1 ? `document.getElementById('atkTarget-${p.id}').value` : `'${targets[0].id}'`;
   return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> is within 2 hexes of another racer. Attack?</div>
+    <p>Click a red racer to attack, or a yellow hex to keep moving. Movement left: <b>${t.R}</b></p>
     ${targets.length > 1 ? `<div class="formrow"><label>Target</label><select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(participantLabel(x))}</option>`).join("")}</select></div>` : `<p>Target: <b>${esc(participantLabel(targets[0]))}</b></p>`}
     <div class="row"><button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
       <button class="ghost" onclick="App.decideAttack('${p.id}', '')">Keep moving</button></div>

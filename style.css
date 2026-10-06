@@ -265,6 +265,8 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .turndot { fill: #e8e8e8; opacity: 0.85; pointer-events: none; }
 .circstep { fill: rgba(245,197,24,0.25); stroke: var(--gold); stroke-width: 2; cursor: pointer; }
 .circstep:hover { fill: rgba(245,197,24,0.5); }
+.circattack { fill: rgba(230,40,40,0.35); stroke: #ff4d4d; stroke-width: 2; cursor: pointer; }
+.circattack:hover { fill: rgba(230,40,40,0.6); }
 .circfinish { stroke: var(--gold); stroke-width: 2; stroke-dasharray: 4 3; }
 .circdot { fill: var(--gold); stroke: #111; stroke-width: 1.5; }
 .circracer.dead .circdot, .circracer.dead image { opacity: 0.4; }
