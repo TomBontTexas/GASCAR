@@ -22,6 +22,11 @@ Newest entries at the top.
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
+### 2026-10-06 — Walk pauses at occupied hexes; slips chosen on the spot
+- The walk is step by step. When the next hex holds a racer, the hero gets a prompt: straight on, or Slip left/right (only if affordable). `encounterChoice()` (App action) resumes it. NPCs choose automatically.
+- Pre-declared Slip controls were removed from the turn form. `car.slipsThisLeg` counts Slips per Leg, and the leg resets it.
+- Replay records the Slips made in the turn.
+
 ### 2026-10-06 — Fix: starting lanes and the first Leg's turn order use the same tie-break
 - With tied Thrust (for example NPC copies of your ship), the starting lanes and the first Leg's turn order each broke the tie with their own random roll, so a ship could start in lane 1 yet move first. The first Leg now uses the same order the lanes were set from. Later Legs still roll ties afresh. A race that was already started keeps its old order, so start a new race to see the fix.
 

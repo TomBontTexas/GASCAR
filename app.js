@@ -4,10 +4,11 @@
 
    Race rules follow Circus Astralis (see RULE_CHANGES.md 2026-10-05): ships
    take turns one at a time in Thrust order. Each turn shifts gear, rolls
-   movement (gear dice + Thrust), declares Slips, makes a Control Task Check
-   when the ship moves 5+ hexes or Slips more than once, walks the path
-   (stopping before or sliding around ships in the way), then optionally makes
-   one Gunner attack. Fumbles roll the 2D10 Fumble Chart. Ship classes,
+   movement (gear dice + Thrust), makes a Control Task Check when that roll
+   exceeds the Leg TN, then walks the path hex by hex. Racers in the way
+   prompt straight on or a Slip left/right around them (the nth Slip of the
+   Leg costs n movement points); entering an occupied hex needs a Control
+   check. A Gunner attack is optional along the way. Fumbles roll the 2D10 Fumble Chart. Ship classes,
    crewmen (Pilot/Gunner), sponsors, and the hex-grid Circular Track engine
    (resolveSlipPath, circTrackGeometry, etc.) are shared by every rule set. */
 
@@ -833,7 +834,7 @@ function initLegState(race) {
   const cars = {};
   race.participants.forEach(p => {
     cars[p.id] = {
-      gearChange: 0, slip: "", slipCount: 0, turn: null,
+      gearChange: 0, slipsThisLeg: 0, turn: null,
       // Disadvantage carried in from hits and fumbles; consumed by this car's next check.
       pendingD: prev[p.id] ? prev[p.id].pendingD || 0 : 0,
       turnDone: !!p.out
@@ -922,13 +923,7 @@ function npcChoices(race, p) {
   const geom = circTrackGeometry(course);
   const positions = standingsPositions(race, course);
   const agg = legAggressionFor(p, positions);
-  const gearChange = npcGearChange(race, p, agg);
-  let slip = "", slipCount = 0;
-  if (rollD(20) <= agg) {
-    slip = Math.random() < 0.5 ? "left" : "right";
-    slipCount = rollD(20) <= agg ? 2 : 1;
-  }
-  return { gearChange, slip, slipCount };
+  return { gearChange: npcGearChange(race, p, agg) };
 }
 
 /* ---------- Resolving one turn ---------- */
@@ -1031,10 +1026,12 @@ function attackTargetsFrom(race, p, geom, pos) {
   return race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, here, x));
 }
 
-// A turn starts here: gear, movement, Slips, the Control check, and any
-// fumbles. Then the walk begins. A hero's walk pauses at the first point it
-// has someone in attack range to choose from (car.turn.awaiting); decideAttack()
-// resumes it. NPCs decide on their own and never pause.
+// A turn starts here: gear, movement roll, the Control check (only when the
+// roll exceeds the Leg TN, made before moving), and any fumbles. Then the walk
+// moves one hex at a time. Slips aren't declared up front: when the next hex
+// holds another ship, the walk pauses and the hero chooses straight on, or a
+// Slip left or right. The nth Slip of the Leg costs n movement points; the
+// lateral shift is free.
 function resolveTurn(race, p, choices) {
   const ls = race.legState, car = ls.cars[p.id];
   const course = getCourse(race.courseId);
@@ -1048,55 +1045,93 @@ function resolveTurn(race, p, choices) {
   const dice = (GDATA.GEAR_TABLE[p.gear] || {}).dice || 0;
   const rolled = Array.from({ length: dice }, () => rollD(GDATA.DIE_SIDES));
   const intended = dice ? Math.max(0, rolled.reduce((a, b) => a + b, 0) + stats.thrust) : 0;
-  log.push(`Gear ${p.gear}: rolled ${rolled.length ? rolled.join(" + ") : "nothing (Gear-0)"} + Thrust ${stats.thrust} = ${intended} hexes.`);
+  log.push(`Gear ${p.gear}: rolled ${rolled.length ? rolled.join(" + ") : "nothing (Gear-0)"} + Thrust ${stats.thrust} = ${intended} movement points.`);
 
-  // 2. Slips: each is a forward hex plus one lateral hex; none can leave the track.
-  const dir = choices.slip === "left" ? -1 : choices.slip === "right" ? 1 : 0;
-  const maxLateral = dir < 0 ? p.lane - 1 : dir > 0 ? course.lanes - p.lane : 0;
-  let slipCount = dir ? clampInt(choices.slipCount, 0, Math.min(maxLateral, intended), 0) : 0;
-
-  // 3. Control Task Check modifiers (see RULE_CHANGES.md 2026-10-05). Pending
-  // Disadvantage from earlier hits/fumbles is consumed by this turn's checks.
+  // 2. Control modifiers. Pending Disadvantage from earlier hits/fumbles is
+  // consumed by this turn's checks.
   const pendingNow = car.pendingD;
   car.pendingD = 0;
-  const net = gearNet(p.gear) - (slipCount >= 2 ? 1 : 0) - (intended > tn ? 1 : 0) - pendingNow;
+  const net = gearNet(p.gear) - (intended > tn ? 1 : 0) - pendingNow;
   const checkSources = [];
   if (gearNet(p.gear)) checkSources.push(`Gear ${p.gear}`);
-  if (slipCount >= 2) checkSources.push("2+ Slips");
   if (intended > tn) checkSources.push("movement over the TN");
   if (pendingNow) checkSources.push("earlier hits/fumbles");
   const T = { movement: intended, stopped: false };
 
-  // 4. Control Task Check: triggered by 5+ hexes of movement or by more than the one free Slip.
-  const triggered = intended >= 5 || slipCount >= 2;
-  if (triggered) {
+  // 3. Control Task Check when the movement roll exceeds the Leg TN. It is made
+  // before the ship moves, so a failure halves the whole move.
+  if (intended > tn) {
     const rc = rollCheck(stats.control + stats.crewPilot, net, tn);
-    log.push(controlCheckLine("Control check", rc, stats, checkSources));
+    log.push(controlCheckLine("Control check (movement over the TN)", rc, stats, checkSources));
     if (rc.success) {
       T.movement = intended + rc.critLevels;
     } else {
       T.movement = Math.floor(intended / 2);
-      slipCount = 0;
-      log.push(`Failure: moves half its intended distance (${T.movement}), Slips fail, stays in its lane.`);
+      log.push(`Failure: moves half its intended distance (${T.movement}).`);
     }
     for (let i = 0; i < rc.fumbleLevels; i++) rollFumble(race, p, T, log);
   }
   if (p.out) T.stopped = true;
 
-  // 5. Path for the walk (computed after any fumble lane shifts or movement losses).
-  const steps = (!T.stopped && T.movement > 0)
-    ? resolveSlipPath(geom, p.lane - 1, p.hexPos || 0, T.movement, slipCount, dir || 1).steps
-    : [];
   car.turn = {
-    log, T, net, checkSources, tn, steps, slipCount,
-    idx: 0, cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
-    walked: [], attackUsed: false, declined: [], halt: false, finished: false, awaiting: null
+    log, T, net, checkSources, tn, R: T.stopped ? 0 : T.movement, slips: 0,
+    cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
+    walked: [], attackUsed: false, declined: [], halt: false, finished: false, awaiting: null, choice: null
   };
   walkTurn(race, p);
 }
 
+// Moves the walk onto `dest` (one hex), counting laps and the finish line.
+function moveWalkTo(t, dest, geom, course) {
+  if (t.cur.hexPos + 1 >= geom.laneHexLists[t.cur.laneIdx0].length) t.laps += 1;
+  t.cur = { laneIdx0: dest.laneIdx0, hexPos: dest.hexPos };
+  t.walked.push({ lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos });
+  if (t.laps >= course.laps) t.finished = true;
+}
+// The choices when the hex ahead is occupied: straight on (an obstacle Control
+// check), or a Slip to an open hex beside the ship. The Slip costs the nth
+// Slip of the Leg in movement points, and is only offered if affordable.
+function encounterOptions(race, p, car, cur, R, geom, course) {
+  const opts = [{ id: "straight", label: "Straight ahead (Control check to pass)" }];
+  const cost = car.slipsThisLeg + 1;
+  if (cost > R) return opts;
+  const sn = geom.slipNeighbors[cur.laneIdx0][cur.hexPos];
+  [[-1, sn.inward, "Slip left"], [1, sn.outward, "Slip right"]].forEach(([dir, cands, label]) => {
+    const lane0 = cur.laneIdx0 + dir;
+    if (lane0 < 0 || lane0 >= course.lanes) return;
+    const hexPos = cands.find(h => !occupantAt(race, lane0 + 1, h, p.id));
+    if (hexPos === undefined) return;
+    opts.push({ id: dir < 0 ? "left" : "right", label: `${label} (costs ${cost} movement point${cost === 1 ? "" : "s"})`, cost, dest: { laneIdx0: lane0, hexPos } });
+  });
+  return opts;
+}
+function applyEncounter(race, p, id, opts) {
+  const car = race.legState.cars[p.id], t = car.turn;
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const stats = carStats(p);
+  const circ = geom.laneHexLists[t.cur.laneIdx0].length;
+  const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
+  t.choice = null;
+  const opt = opts.find(o => o.id === id);
+  if (!opt) return;
+  if (id === "straight") {
+    const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+    const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
+    t.log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
+    if (!ob.success) { t.log.push("Stops short of the obstacle."); t.halt = true; return; }
+    t.R -= 1;
+    moveWalkTo(t, ahead, geom, course);
+    return;
+  }
+  car.slipsThisLeg += 1;
+  t.slips += 1;
+  t.R -= opt.cost;
+  t.log.push(`${opt.id === "left" ? "Slip left" : "Slip right"} around the racer ahead: costs ${opt.cost} movement point${opt.cost === 1 ? "" : "s"} (Slip ${car.slipsThisLeg} this Leg).`);
+  moveWalkTo(t, opt.dest, geom, course);
+}
+
 // Walks the path one hex at a time. Returns "paused" when a hero must decide
-// whether to attack, otherwise finishes the turn.
+// (an attack, or how to meet an occupied hex); NPCs decide on their own.
 function walkTurn(race, p) {
   const ls = race.legState, car = ls.cars[p.id], t = car.turn;
   const course = getCourse(race.courseId);
@@ -1120,36 +1155,46 @@ function walkTurn(race, p) {
         }
       }
     }
-    if (t.idx >= t.steps.length) break;
-    const s = t.steps[t.idx++];
-    const isLast = t.idx === t.steps.length;
-    const occ = occupantAt(race, s.laneIdx0 + 1, s.hexPos, p.id);
-    if (occ) {
-      const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
-      t.log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
-      if (!ob.success) { t.log.push("Stops short of the obstacle."); t.halt = true; continue; }
-      if (isLast) {
-        const open = openHexBeside(race, geom, s.laneIdx0, s.hexPos, p.id);
-        if (open) {
-          t.log.push("Slips into an open hex beside the obstacle (free).");
-          t.cur = open;
-        } else {
-          t.log.push("Every hex beside the obstacle is blocked -- automatic Fumble, turn ends.");
-          rollFumble(race, p, t.T, t.log);
-        }
-        t.halt = true;
-        continue;
+    if (t.R <= 0) break;
+    const circ = geom.laneHexLists[t.cur.laneIdx0].length;
+    const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
+    if (occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id)) {
+      const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
+      if (p.type === "hero") {
+        t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id).id };
+        return "paused";
       }
+      const slips = opts.filter(o => o.id !== "straight");
+      const pick = slips.length && rollD(20) <= (p.aggression || 5) ? slips[Math.floor(Math.random() * slips.length)].id : "straight";
+      applyEncounter(race, p, pick, opts);
+      continue;
     }
-    if (t.cur.hexPos + 1 >= geom.laneHexLists[t.cur.laneIdx0].length) t.laps += 1;
-    t.cur = { laneIdx0: s.laneIdx0, hexPos: s.hexPos };
-    t.walked.push({ lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos });
-    if (t.laps >= course.laps) t.finished = true; // crossed the finish line
+    t.R -= 1;
+    moveWalkTo(t, ahead, geom, course);
+  }
+  // A walk that ends on another ship's hex drifts to an open hex beside it
+  // (free), or rolls the Fumble Chart if every hex beside it is blocked.
+  if (!t.halt && !t.finished && occupantAt(race, t.cur.laneIdx0 + 1, t.cur.hexPos, p.id)) {
+    const open = openHexBeside(race, geom, t.cur.laneIdx0, t.cur.hexPos, p.id);
+    if (open) {
+      t.log.push("Ends on an occupied hex: drifts to an open hex beside it (free).");
+      t.cur = open;
+    } else {
+      t.log.push("Every hex beside the obstacle is blocked -- automatic Fumble, turn ends.");
+      rollFumble(race, p, t.T, t.log);
+    }
   }
   finishTurn(race, p);
   return "done";
 }
 
+// The hero's answer to an occupied hex ahead, or to an attack offer.
+function decideEncounter(race, p, id) {
+  const car = race.legState.cars[p.id], t = car.turn;
+  if (!t || !t.choice) return;
+  applyEncounter(race, p, id, t.choice.options);
+  walkTurn(race, p);
+}
 // The hero (or NPC) chose whether to attack at the point where the walk paused.
 function decideAttack(race, p, targetId) {
   const car = race.legState.cars[p.id], t = car.turn;
@@ -1180,7 +1225,7 @@ function finishTurn(race, p) {
   p.cumulative += moved;
   t.log.push(`Moved ${moved} hex${moved === 1 ? "" : "es"}; now lane ${p.lane}, lap ${Math.min(p.laps, course.laps)}/${course.laps}.`);
   race.turnSeq = (race.turnSeq || 0) + 1;
-  p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: moved, path: t.walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: t.slipCount, gear: p.gear });
+  p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: moved, path: t.walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: t.slips, gear: p.gear });
   if (p.laps >= course.laps && !p.out) {
     race.finished = true;
     race.winnerId = p.id;
@@ -1610,7 +1655,7 @@ function renderTurnPanel(race) {
     html += `<div class="row"><b>Leg ${race.legIndex + 1} is complete.</b> <button onclick="App.startNextLeg()">Start Leg ${race.legIndex + 2}</button></div>`;
   } else if (next && next.type === "hero") {
     const t = next.id && race.legState.cars[next.id].turn;
-    html += t && t.awaiting ? renderAttackPrompt(race, next, t) : renderHeroTurnForm(race, next);
+    html += t && t.awaiting ? renderAttackPrompt(race, next, t) : t && t.choice ? renderEncounterPrompt(race, next, t) : renderHeroTurnForm(race, next);
   }
   return html + `</section>`;
 }
@@ -1626,14 +1671,9 @@ function renderAttackPrompt(race, p, t) {
 }
 function renderHeroTurnForm(race, p) {
   const car = race.legState.cars[p.id];
-  const course = getCourse(race.courseId);
-  const geom = circTrackGeometry(course);
   const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
   const dice = (GDATA.GEAR_TABLE[newGear] || {}).dice || 0;
   const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod;
-  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
-  const slipMax = car.slip === "left" ? maxLeft : car.slip === "right" ? maxRight : 0;
-  const targets = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
   return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b>${shipStatusTags(p)} <span class="muted">Pending Disadvantage: ${car.pendingD}</span></div>
     <div class="formrow"><label>Gear (now ${p.gear})</label>
       <select onchange="App.setTurn('${p.id}','gearChange',this.value)">
@@ -1642,16 +1682,14 @@ function renderHeroTurnForm(race, p) {
         <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
       </select>
       <span class="muted">-> Gear ${newGear}: ${dice ? `${dice}D6 + Thrust` : "no movement"}${mod ? `, Control check ${mod}` : ""}</span></div>
-    <div class="formrow"><label>Slip</label>
-      <select onchange="App.setTurn('${p.id}','slip',this.value)">
-        <option value="" ${!car.slip ? "selected" : ""}>No Slip</option>
-        ${maxLeft > 0 ? `<option value="left" ${car.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
-        ${maxRight > 0 ? `<option value="right" ${car.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
-      </select>
-      ${car.slip ? numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipCount || 1), Math.max(1, slipMax))}" onchange="App.setTurn('${p.id}','slipCount',this.value)" style="width:56px">`) + ` lateral hex(es), max ${slipMax}` : ""}
-    </div>
-    <p class="muted">Movement, Slips, the Control check, and obstacles resolve when you take the turn. If another racer comes within 2 hexes along the way, the turn pauses and asks whether to attack. Ships act one at a time in Thrust order.</p>
+    <p class="muted">Your ship moves its full roll. If another racer is in the next hex, the turn pauses and asks: straight on, or Slip left or right around it (the nth Slip of the Leg costs n movement points). If another racer comes within 2 hexes, it also asks whether to attack. Ships act one at a time in Thrust order.</p>
     <button onclick="App.takeTurn('${p.id}')">Take turn</button>
+  </div>`;
+}
+function renderEncounterPrompt(race, p, t) {
+  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b> has a racer in the next hex. Movement left: ${t.R}.</div>
+    <div class="row">${t.choice.options.map(o => `<button onclick="App.encounterChoice('${p.id}','${o.id}')">${esc(o.label)}</button>`).join(" ")}</div>
+    ${t.log.length ? `<p class="muted">So far this turn:</p><ul>${t.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
 function shipStatusTags(p) {
@@ -1738,9 +1776,9 @@ function renderInstructions() {
     <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). The lowest Thrust starts in the outermost lane. On a ship's turn:</p>
     <ol>
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
-      <li><b>Slip</b> — optionally shift sideways one hex per Slip, as part of your movement. The first Slip is free; two or more trigger a Control check at Disadvantage.</li>
-      <li><b>Control check</b> — if the ship moves 5 or more hexes, or Slips more than once, roll 1D20 + Control + Pilot against the Leg's TN. Gear and Leg modifiers apply here: Gear 1 = AA, Gear 2 = A, Gear 4 = D, Gear 5 = DD, two or more Slips = D, moving more hexes than the Leg TN = D, and any Disadvantage carried in from earlier hits or fumbles. Success moves full distance (plus one bonus hex per Critical). Failure moves half the intended distance and cancels Slips. Every Fumble (a Disadvantage roll where both dice fail) rolls the Fumble Chart once.</li>
-      <li><b>Walk</b> — the ship moves hex by hex. Entering a hex with another ship (active or wreck) forces a Control check against the TN: on success the ship passes through, on failure it stops short of the obstacle. If it lands on an obstacle, it slips free into an open hex beside it instead; if every adjacent hex is blocked, it rolls the Fumble Chart and its turn ends.</li>
+      <li><b>Slip</b> — when the next hex holds another racer, the turn pauses and you choose straight on, or Slip left or right around it. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered.</li>
+      <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
+      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
       <li><b>Attack</b> — if you pass within 2 hexes of another racer, the turn pauses and asks whether to attack. You may attack once per turn: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
@@ -1781,12 +1819,11 @@ function renderReference() {
     <table class="mktable"><tr><th>Condition</th><th>Modifier</th></tr>
     <tr><td>Gear 1 / Gear 2</td><td>AA / A</td></tr>
     <tr><td>Gear 4 / Gear 5</td><td>D / DD</td></tr>
-    <tr><td>Two or more Slips</td><td>D</td></tr>
     <tr><td>Movement exceeds the Leg TN</td><td>D</td></tr>
     <tr><td>Each hit taken from an attack (next Control check)</td><td>D per hit</td></tr>
     <tr><td>Fumble chart roll 18 (next Control check)</td><td>DD</td></tr>
   </table>
-  <p class="muted">A Control check happens when the ship moves 5+ hexes or Slips more than once. Each obstacle entered also forces one.</p></section>`;
+  <p class="muted">A Control check happens when the movement roll exceeds the Leg TN, and each time the ship enters an occupied hex. Slips never trigger a check on their own.</p></section>`;
 
   html += `<section class="card" style="grid-row: span 2;"><h2>Fumble Chart (2d10)</h2>
     <p class="muted">Rolled once per Fumble. Low rolls are beneficial, the middle is annoying, high rolls are catastrophic.</p>
@@ -2048,13 +2085,6 @@ const App = {
       car.gearChange = clampInt(val, -1, 1, 0);
       if (p.gear + car.gearChange < 0) car.gearChange = -p.gear;
       if (p.gear + car.gearChange > GDATA.MAX_GEAR) car.gearChange = GDATA.MAX_GEAR - p.gear;
-    } else if (field === "slip") {
-      car.slip = val;
-      car.slipCount = val ? Math.max(1, car.slipCount || 1) : 0;
-    } else if (field === "slipCount") {
-      const course = getCourse(race.courseId);
-      const maxLateral = car.slip === "left" ? p.lane - 1 : course.lanes - p.lane;
-      car.slipCount = clampInt(val, 1, Math.max(1, maxLateral), car.slipCount || 1);
     }
     saveState(); render();
   },
@@ -2079,7 +2109,16 @@ const App = {
     const p = race.participants.find(x => x.id === pid);
     if (!p || nextTurnParticipant(race) !== p || race.legState.cars[pid].turn) return;
     const car = race.legState.cars[pid];
-    resolveTurn(race, p, { gearChange: car.gearChange, slip: car.slip, slipCount: car.slipCount });
+    resolveTurn(race, p, { gearChange: car.gearChange });
+    afterHeroStep(race, p);
+    saveState(); render();
+  },
+  encounterChoice(pid, id) {
+    const race = STATE.race;
+    if (!race || race.finished || race.started === false) return;
+    const p = race.participants.find(x => x.id === pid);
+    if (!p) return;
+    decideEncounter(race, p, id);
     afterHeroStep(race, p);
     saveState(); render();
   },
