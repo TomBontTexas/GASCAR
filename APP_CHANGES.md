@@ -15,6 +15,9 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Show Last Leg shows every ship's turn in the last completed leg
+- Show Last Leg used the newest leg with any turns, so a leg still in progress showed only the ships that had already moved. It now replays the last completed leg (the one before the leg in progress, or the final leg once the race is over), with every ship's turn from that leg.
+
 ### 2026-10-05 — Fix: lane shift could leave a car off its lane's ring
 - A fumble lane shift changed the lane but kept the hex position, so a shift inward onto a shorter ring could leave the car past the end of it. The race then crashed in the Slip path (intermittently). The shift now moves the car to the matching hex in the new lane, using the Slip neighbor map.
 

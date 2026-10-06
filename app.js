@@ -2052,9 +2052,11 @@ const App = {
     const course = getCourse(race.courseId);
     const geom = circTrackGeometry(course);
     const ringParams = hexRingParamsForCourse(course);
-    const lastLeg = race.participants.reduce((m, p) => Math.max(m, ...(p.history || []).map(h => h.leg - 1)), -1);
-    if (lastLeg < 0) return;
+    // "Last leg" means the most recent leg that has finished for every ship:
+    // the leg before the one in progress, or the final leg once the race is over.
+    const lastLeg = Math.max(0, race.finished ? race.legIndex : race.legIndex - 1);
     const fromLeg = lastLegOnly ? lastLeg : 0;
+    if (!race.participants.some(p => (p.history || []).length)) return;
     const btnAll = document.getElementById("raceReplayBtn");
     const btnLast = document.getElementById("raceReplayLastLegBtn");
     if (btnAll) btnAll.disabled = true;
@@ -2078,6 +2080,7 @@ const App = {
       const perTurn = buildCircularLegWaypoints(p, geom);
       (p.history || []).forEach((rec, hi) => {
         if (rec.leg - 1 < fromLeg) return;
+        if (lastLegOnly && rec.leg - 1 !== fromLeg) return;
         events.push({ p, pi, rec, wp: perTurn[hi] || [], seq: rec.seq || 0 });
       });
     });
