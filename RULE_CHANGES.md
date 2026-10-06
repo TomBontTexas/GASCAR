@@ -17,6 +17,55 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-05 — Circus Astralis race rules adopted (supersedes the Circus Maximus race-resolution rules below)
+Source: `Circus Astralis v2.docx` in the GASCAR folder. Hex-grid Circular Track, Ship Classes, and construction points are kept; the race itself follows the new document.
+- **Turns:** ships act one at a time in **Thrust order** (lowest first; equal Thrust ties broken by 1D20, lowest first). Each Leg every ship takes one turn. The race ends the moment a ship crosses the finish line. Replaces simultaneous Declare/Lock/Resolve.
+- **Gear:** starts at 0, shifts by at most 1 per Leg. Gear 0 = no movement; gear 1-5 roll 1-5 D6 plus Thrust. Replaces the 1D10-to-3D20 table.
+- **Control Task Check:** 1D20 + Control + Pilot vs the Leg TN. Triggered when the ship moves **5+ hexes** or Slips **more than once**. Success moves the full distance plus one bonus hex per Critical (extra success under Advantage). **Failure** moves half the intended distance (rounded down) and cancels the Slips. Each Fumble (both dice fail at Disadvantage) rolls the Fumble Chart once.
+- **Slips:** one forward hex plus one lateral hex each; the first is free. Two or more Slips trigger the Control check at **flat D** (no longer one D per hex).
+- **Task Check modifiers** (apply to Control checks; Gunner checks have none): Gear 1 = AA, Gear 2 = A, Gear 4 = D, Gear 5 = DD; two or more Slips = D; movement over the Leg TN = D; each hit taken = D on the victim's next check; fumble roll 18 = DD next check.
+- **Obstacles:** entering a hex with another ship (active or wreck) forces a Control check. Success passes through. Failure stops the ship short of the obstacle. Landing on an obstacle slips the ship into an open neighboring hex (free). If every neighbor is blocked, the ship rolls the Fumble Chart and its turn ends.
+- **Gunner attack:** one per turn, at any racer within 2 hexes. 1D20 + Gunner + crew Gunner vs the Leg TN. A hit deals 1D6 + the attacker's Damage bonus minus the target's Armor. Racemaster option: flat 4 instead of 1D6 (per-course checkbox).
+- **Falling off the track:** a forced lane shift past the edge costs 3 HP (ignoring Armor), the turn ends, and the next Leg starts in Gear-1.
+- **Death:** HP 0 destroys the ship and leaves a wreck in its hex. Wrecks are obstacles.
+- **Crew:** each Crewman starts at Pilot-5 and Gunner-5 and divides 5 points between them, one per increase. Built once: **XP and the Cantina leveling are removed.** A ship's crew (one crewman) supplies its Pilot and Gunner. Extra crew names are flavor only.
+- **Sponsors (new):** each Ship may take up to 3 bonus points across up to 3 stats, plus a -3 penalty to one stat. The bonuses are free, not paid from construction points.
+- **Removed:** Nudge, Block, and Ram (the document defines only the Attack).
+- **Fumble Chart:** the 2D10 chart from 2026-10-05 is updated to the document's wording. Roll 18 is DD next turn, gear to Gear-1. Roll 20 drops to Gear-0.
+- **Judgment calls (flag if wrong):** (1) a Control check is rolled before the walk, using the intended distance, and its result sets how far the ship goes; (2) an attack happens after the attacker's movement, at a target within 2 hexes of its final position; (3) pending Disadvantage is used by the next check (or lost if that turn has no check); (4) the Critical rule uses the existing Advantage-success count; (5) "3 hits" on falling off is read as 3 HP; (6) a forced lane shift (rolls 13, 16, 19) is the only way to fall off; optional shifts (8, 9) do nothing at the edge.
+- **Where:** `GDATA.GEAR_TABLE`, `GDATA.FUMBLE_CHART`, `GDATA.CREWMAN_BASE`/`CREWMAN_SPLIT_POINTS` in `data.js`; `resolveTurn()`, `initiativeOrder()`, `advanceRace()`, `runAutomaticTurns()` in `app.js`.
+
+### 2026-10-05 — Out-of-Control Chart rebuilt: 2D10 bell curve, low = beneficial, high = catastrophic
+- **Earlier value:** a flat 1D10 chart -- every one of the 10 outcomes
+  equally likely, monotonically escalating from "no ill effect" (roll 1) to
+  the worst case (roll 10). Nothing was ever actually GOOD.
+- **Current value:** rolled **2D10** (both dice summed, range 2-20, 19
+  possible outcomes) instead. Because 2D10 is a bell curve, not a flat
+  distribution, this reshapes the chart into three deliberate zones:
+  - **Low rolls (2-6, rare)** are genuinely **beneficial** -- a GAIN of
+    bonus movement this Leg (5 hexes at the rarest/best, down to 1).
+  - **The broad middle (7-15, the common case)** is merely **annoying** --
+    small hex losses, a lane shoved in/out, or a glancing/solid hit.
+  - **High rolls (16-20, rare)** are **catastrophic** -- heavy HP damage
+    stacked with lane shifts, lost ground, a gear reset, and at the very
+    top (20) the Leg's movement stopping outright.
+  - This combines the flavor of the old, retired Flash Division and
+    Spaceflight Fumble tables (see the 2026-08 entries below) into one
+    chart that reads naturally for atmospheric or deep-space racing alike,
+    without reviving their multi-Leg Disadvantage penalties (which don't
+    fit this engine's one-Leg-at-a-time resolution) -- every effect is
+    still one of the same five structured types the 1D10 chart used
+    (HP/hexes/lane/gear/stopped), just a hex LOSS can now also be a
+    negative amount, meaning a GAIN.
+  - Mechanically unchanged otherwise: still rolled once per Fumble Level on
+    a failed Skill Check, still one universal chart for every car.
+- **Why:** user-directed rebuild, explicitly requesting a 2D10 bell-curve
+  shape (so the common outcome is mild, not an even chance of anything),
+  combining the old Flash/Spaceflight flavor with the Circus Maximus
+  chart's structure.
+- **Where:** `GDATA.OUT_OF_CONTROL` in `data.js`; `rollOneOutOfControl()`/
+  `describeOutOfControlAffects()` in `app.js`.
+
 ### 2026-10-04 — Ship Class stats rebuilt: construction points, baselines, Control, Gunner, dice Damage
 - **Earlier value:** a Ship Class's construction-point budget was Tier-looked-
   up (6/7/8/9), spent on five stats (Thrust/Points/Armor/Attack/Damage), every

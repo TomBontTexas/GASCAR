@@ -2,32 +2,14 @@
    GASCAR = Galactic Association for Spaceship Competitive Astro-Racing,
    the in-world racing league depicted in the tabletop game Warp Space: GASCAR.
 
-   Circus Maximus conversion (see RULE_CHANGES.md 2026-10-03): every racer is
-   a SINGLE car on the track, one roll per Leg. Movement comes from a
-   Circus-Maximus-style gear die every Leg, unconditionally; a separate
-   d20+Advantage/Disadvantage Skill Check only fires when something risky
-   happens that Leg (a Slip, a Maneuver, high gear, crossing/landing on
-   another car's hex), and only a FAILED Skill Check has consequences (the
-   Out-of-Control chart) -- success is binary, no Crit bonus. NPCs are
-   mechanically identical to Heroes (they just build their own stats
-   automatically, see freshNpcStats()). The old 4-position (Pilot/Navigator/
-   Spotter/Engineer) Task Check system, Resistance checks, and the straight/
-   Legs (non-hex) track type are gone entirely. The hex/Circular Track engine
-   itself (traceLaneRing, circTrackGeometry, resolveSlipPath, etc.) is
-   untouched -- it's the one piece of the old system explicitly kept.
-
-   Ship Class / Crewman reintroduced (see RULE_CHANGES.md 2026-10-03): a
-   Hero's car is no longer six numbers directly on the Ship record. A Ship
-   Class (Shipyard tab) holds the six construction-point-bought mechanical
-   stats (Thrust/Hit Points/Control/Gunner/Damage/Armor, see RULE_CHANGES.md
-   2026-10-04) plus the Division (-> Tier) and the hull's White icon number.
-   A Crewman (Cantina tab) holds just Skill,
-   starting at Mk5 for free and raised with XP banked by racing, not a build
-   budget. A Ship (Hangar Bay tab) is just a name + a chosen Ship Class +
-   an assigned Crewman + its own Red/Green/Blue color for the Class's icon
-   number -- multiple Ships can share one Class (same hull, different pilots/
-   paint). carStats()/carDivision() below are the single place that unifies
-   all of this (plus an NPC's own inline stats) into one flat interface. */
+   Race rules follow Circus Astralis (see RULE_CHANGES.md 2026-10-05): ships
+   take turns one at a time in Thrust order. Each turn shifts gear, rolls
+   movement (gear dice + Thrust), declares Slips, makes a Control Task Check
+   when the ship moves 5+ hexes or Slips more than once, walks the path
+   (stopping before or sliding around ships in the way), then optionally makes
+   one Gunner attack. Fumbles roll the 2D10 Fumble Chart. Ship classes,
+   crewmen (Pilot/Gunner), sponsors, and the hex-grid Circular Track engine
+   (resolveSlipPath, circTrackGeometry, etc.) are shared by every rule set. */
 
 // App version (see APP_CHANGES.md): bump the middle number for a new feature
 // or features, the last number for a bug fix. Shown at the top of the
@@ -56,9 +38,8 @@ function numStepper(inputHtml) {
 
 /* Core Task Check: roll (|net|+1) d20s, keep highest (net>=0) or lowest (net<0), add score.
    Returns success/critical/fumble info per the book's Advantage/Disadvantage rules.
-   This is the ONE dice mechanic in the whole game now -- the Skill Check,
-   the Attack-to-hit roll, everything -- just with a different score/net/TN
-   fed in each time. */
+   The ONE dice mechanic in the game -- the Control check, the Gunner check,
+   obstacle checks -- just with a different score/net/TN fed in each time. */
 function rollCheck(score, net, tn) {
   const diceCount = Math.abs(net) + 1;
   const dice = Array.from({ length: diceCount }, () => rollD(20));
@@ -72,10 +53,9 @@ function rollCheck(score, net, tn) {
   const fumbleLevels = net < 0 ? Math.max(0, failCount - 1) : 0;
   return { dice, chosen, total, tn, success, successCount, failCount, critLevels, fumbleLevels, isCrit: critLevels > 0, isFumble: fumbleLevels > 0, net };
 }
-// House rule: a Skill Check's success is binary (no Crit bonus) -- margin of
-// success doesn't matter, only margin of FAILURE (fumbleLevels -> how many
-// times the Out-of-Control chart gets rolled). Still surfaces critLevels in
-// the label for flavor/visibility even though nothing mechanical reads it.
+// Circus Astralis: each extra success under Advantage (critLevels) is one
+// bonus hex of movement on a Control check; each Fumble (fumbleLevels: a
+// failed die beyond the first under Disadvantage) rolls the Fumble Chart once.
 function outcomeLabel(rc) {
   if (rc.isFumble) return rc.fumbleLevels + " Fumble" + (rc.fumbleLevels === 1 ? "" : "s");
   if (rc.isCrit) return rc.critLevels + " Critical" + (rc.critLevels === 1 ? "" : "s") + " (no bonus)";
@@ -154,6 +134,17 @@ function migrateState(state) {
     state.race = null;
     state._shipClassStatsRebuilt = true;
   }
+  // Fourth breaking migration (see RULE_CHANGES.md 2026-10-05): Circus
+  // Astralis crew model and turn structure. Crewmen change from a Skill/XP
+  // record to a Pilot/Gunner pair built once from 5 split points, so old
+  // crewmen and the Ships pointing at them are cleared. Ship Classes are
+  // kept -- their stats didn't change shape.
+  if (!state._circusAstralisCrew) {
+    state.ships = [];
+    state.crewmen = [];
+    state.race = null;
+    state._circusAstralisCrew = true;
+  }
   state.shipClasses = state.shipClasses || [];
   state.crewmen = state.crewmen || [];
   // Self-heal a cached race: a car at 0 HP must be out of the race. Early
@@ -185,7 +176,7 @@ function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); re
    flavor crew size and a Ship Class's construction-point budget (Tier x 10).
 
    A car is six Ship Class stats (Thrust/Points/Control/Gunner/Damage/Armor)
-   plus one Crewman stat (Skill) -- see carStats() below, the one place that
+   plus a crewman's Pilot and Gunner -- see carStats() below, the one place that
    reads both and (for NPCs, who have neither a Class nor a Crewman) its own
    inline numbers instead. */
 const SHIP_STATS = GDATA.SHIP_STATS;
@@ -227,11 +218,11 @@ function formatStatValue(cls, stat) {
   return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? "+" + bonus : ""}`;
 }
 // ---------- Crewman (Cantina) ----------
-// A Crewman's Skill starts at GDATA.CREWMAN_SKILL_BASE for free; raising it
-// further costs banked XP via the same mkStepCost() progression (so Mk5->Mk6
-// costs 6, same as any Ship Class stat's 5th->6th point would).
-function freshCrewman(name) { return { id: uid("crew"), name, skill: GDATA.CREWMAN_SKILL_BASE, xp: 0 }; }
-function crewmanNextStepCost(crewman) { return mkStepCost(crewman.skill - GDATA.CREWMAN_SKILL_BASE); }
+// Each crewman starts at Pilot-5 and Gunner-5, then divides 5 split points
+// between the two, one point per increase (see GDATA.CREWMAN_SPLIT_POINTS).
+function freshCrewman(name) { return { id: uid("crew"), name, pilot: GDATA.CREWMAN_BASE, gunner: GDATA.CREWMAN_BASE }; }
+function crewmanSplitSpent(crewman) { return (crewman.pilot - GDATA.CREWMAN_BASE) + (crewman.gunner - GDATA.CREWMAN_BASE); }
+function crewmanSplitRemaining(crewman) { return GDATA.CREWMAN_SPLIT_POINTS - crewmanSplitSpent(crewman); }
 // ---------- NPCs: auto-built, not hand-spent ----------
 // An NPC has no Ship Class/Crewman of its own -- its Division/Tier
 // construction-point budget is spent automatically, as evenly as the
@@ -252,25 +243,40 @@ function freshNpcStats(division) {
     out[stat] += 1;
     budget -= cost;
   }
-  out.skill = GDATA.CREWMAN_SKILL_BASE;
+  out.crewPilot = GDATA.CREWMAN_BASE;
+  out.crewGunner = GDATA.CREWMAN_BASE;
   return out;
 }
+// Sponsor (see RULE_CHANGES.md 2026-10-05): up to 3 bonus points spread over
+// up to 3 stats, plus a -3 penalty on one stat. Bonuses/penalty are applied
+// on top of the Ship Class's own stats; a non-Damage stat can't drop below 0.
+const SPONSOR_BONUS_MAX = 3;
+const SPONSOR_PENALTY = 3;
+function sponsorBonusTotal(sponsor) { return Object.values(sponsor.bonus || {}).reduce((a, b) => a + (b || 0), 0); }
+function sponsorBonusStats(sponsor) { return Object.keys(sponsor.bonus || {}).filter(s => (sponsor.bonus[s] || 0) > 0); }
 // Every stat a participant (Hero ship OR NPC) fights with this race --
-// unifies the two shapes (a Hero's 6 stats live on its Ship's Class, its
-// Skill on its assigned Crewman; an NPC carries all seven inline, see
-// startRace()) so the rest of the engine never has to branch on p.type to
-// read a stat.
+// unifies the two shapes (a Hero's 6 stats live on its Ship's Class plus any
+// sponsor adjustment, its Pilot/Gunner on its assigned Crewman; an NPC carries
+// them inline, see startRace()) so the rest of the engine never has to branch
+// on p.type to read a stat.
 function carStats(p) {
   const out = {};
   if (p.type === "hero") {
     const ship = getShip(p.shipId);
     const cls = ship && getShipClass(ship.classId);
-    SHIP_STATS.forEach(stat => { out[stat] = (cls && cls[stat]) || 0; });
+    const sponsor = (ship && ship.sponsor) || { bonus: {}, penalty: "" };
+    SHIP_STATS.forEach(stat => {
+      const base = (cls && cls[stat]) || 0;
+      const adj = ((sponsor.bonus || {})[stat] || 0) - (sponsor.penalty === stat ? SPONSOR_PENALTY : 0);
+      const v = base + adj;
+      out[stat] = stat === "damage" ? v : Math.max(0, v);
+    });
     const crewman = ship && getCrewman(ship.crewmanId);
-    out.skill = crewman ? crewman.skill : 0;
+    out.crewPilot = crewman ? crewman.pilot : 0;
+    out.crewGunner = crewman ? crewman.gunner : 0;
     return out;
   }
-  SHIP_STATS.concat("skill").forEach(stat => { out[stat] = p[stat] || 0; });
+  SHIP_STATS.concat(["crewPilot", "crewGunner"]).forEach(stat => { out[stat] = p[stat] || 0; });
   return out;
 }
 // A participant's Division -- lives on its Ship's Class for a Hero, inline
@@ -528,61 +534,6 @@ function resolveSlipPath(geom, originLaneIdx0, originHexPos, movement, slipHexes
   steps.reverse();
   return { steps, finalLaneIdx0: final.laneIdx0, finalHexPos: final.hexPos, lapsGained: final.lapsGained };
 }
-// House rule (see RULE_CHANGES.md 2026-10-03): cars cannot occupy the same
-// hex -- Circus Maximus's own "entering a space with another chariot"
-// obstacle rule, not a shared-hex Disadvantage penalty (Crowded Field,
-// retired). Resolves every active car's path in Circus Maximus's own turn
-// order (lowest Thrust stat first -- a slower car commits to its line
-// before a faster one has to react to it), building up an occupied-hex set
-// as each car's new position is settled.
-// `paramsFor(p)` supplies { movement, slipHexes } for this pass -- the
-// lock-time tentative gear roll (to decide if this Leg's Skill Check
-// triggers), or the finish-time final amount after Out-of-Control effects
-// (to actually place cars). `place=false` only DETECTS whether a car's path
-// would cross or land on an occupied hex, mutating nothing. `place=true`
-// also resolves what happens on an unavoidable landing collision: drift to
-// an open hex truly adjacent (any of the 6 hex neighbors, any lane) to the
-// blocked one, or -- if every neighbor is also taken -- automatically roll
-// one Out-of-Control Chart entry, exactly as the book describes (no Skill
-// Check attempt for that specific failure mode; the Leg's own Skill Check,
-// if it triggered, is handled separately).
-function resolveCarCollisions(race, geom, paramsFor, place) {
-  const order = race.participants.filter(p => !p.out).sort((a, b) => {
-    const diff = carStats(a).thrust - carStats(b).thrust;
-    return diff !== 0 ? diff : Math.random() - 0.5;
-  });
-  // hexKey -> Set of participant ids currently claiming it. A Set (not a
-  // plain boolean) matters because more racers than lanes can legitimately
-  // start a race sharing a hex (startRace()'s lane assignment wraps round-
-  // robin) -- removing just THIS car's own claim must never also drop
-  // another car that's still legitimately sitting there.
-  const occupied = new Map();
-  const claim = (key, id) => { if (!occupied.has(key)) occupied.set(key, new Set()); occupied.get(key).add(id); };
-  const unclaim = (key, id) => { const s = occupied.get(key); if (s) { s.delete(id); if (!s.size) occupied.delete(key); } };
-  race.participants.forEach(p => { if (!p.out) claim(`${p.lane}|${p.hexPos}`, p.id); });
-  const results = {};
-  order.forEach(p => {
-    unclaim(`${p.lane}|${p.hexPos}`, p.id); // this car is about to move off its current hex
-    const { movement, slipHexes } = paramsFor(p);
-    const dir = race.legState.cars[p.id].slip === "left" ? -1 : 1;
-    const path = resolveSlipPath(geom, p.lane - 1, p.hexPos, movement, slipHexes, dir);
-    let finalLaneIdx0 = path.finalLaneIdx0, finalHexPos = path.finalHexPos;
-    const collided = path.steps.some(s => occupied.has(`${s.laneIdx0 + 1}|${s.hexPos}`)) || occupied.has(`${finalLaneIdx0 + 1}|${finalHexPos}`);
-    if (place && occupied.has(`${finalLaneIdx0 + 1}|${finalHexPos}`)) {
-      const hex = geom.laneHexLists[finalLaneIdx0][finalHexPos];
-      let drifted = null;
-      for (const d of HEX_DIRS) {
-        const hit = geom.lookup.get(hexKey(hex.q + d.dq, hex.r + d.dr));
-        if (hit && !occupied.has(`${hit.lane + 1}|${hit.index}`)) { drifted = hit; break; }
-      }
-      if (drifted) { finalLaneIdx0 = drifted.lane; finalHexPos = drifted.index; }
-      else { rollOneOutOfControl(race, p); }
-    }
-    claim(`${finalLaneIdx0 + 1}|${finalHexPos}`, p.id);
-    results[p.id] = { collided, finalLaneIdx0, finalHexPos, lapsGained: path.lapsGained, movement };
-  });
-  return results;
-}
 // Every intermediate hex a racer's <g> should visit while animating through
 // each of its Legs (see App.playRaceReplay()) -- walking hex by hex instead
 // of one straight-line transition, since a straight chord cuts across a
@@ -593,6 +544,11 @@ function buildCircularLegWaypoints(p, geom) {
   let fromLane = p.startLane || 1, fromHexPos = p.startHexPos || 0;
   for (let L = 0; L < h.length; L++) {
     const rec = h[L];
+    if (rec.path) {
+      perLeg.push(rec.path.map(w => ({ lane: w.lane, hexPos: w.hexPos })));
+      fromLane = rec.lane; fromHexPos = rec.hexPos;
+      continue;
+    }
     const toLane = rec.lane, movement = rec.movement || 0;
     const dir = toLane >= fromLane ? 1 : -1;
     const path = resolveSlipPath(geom, fromLane - 1, fromHexPos, movement, rec.slipHexes || 0, dir);
@@ -796,72 +752,77 @@ function rollCircularLeg(course) {
 // A Leg's TN can never exceed the highest Skill Mk among this race's cars
 // (Hero or NPC alike now that they're mechanically identical), plus 18.
 function legTNCap(race) {
-  const scores = race.participants.map(p => carStats(p).skill);
+  const scores = race.participants.map(p => { const s = carStats(p); return s.control + s.crewPilot; });
   return (scores.length ? Math.max(...scores) : 0) + 18;
 }
 function legNaturalTN(leg) {
   return leg.finalMode === "tier" ? leg.tnTierMod : leg.finalMode === "tn" ? leg.tnTnMod : leg.baseTN;
 }
 
-/* ============================== Race engine ============================== */
-function activeCars(race) {
-  return race.participants.filter(p => !p.out || p.outLeg === race.legIndex);
+/* ============================== Race engine (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ==============================
+   Ships act one at a time, in initiative order (lowest Thrust first, ties
+   broken by lowest 1D20). A turn is: shift gear, roll movement (gear dice +
+   Thrust), declare Slips, make the Control Task Check if one is triggered,
+   walk the path (stopping or sliding around ships in the way), then at most
+   one Gunner attack. Hex geometry is the same proven track engine as before
+   (resolveSlipPath, circTrackGeometry, etc.). */
+function occupantAt(race, lane, hexPos, exceptId) {
+  return race.participants.find(x => x.id !== exceptId && x.lane === lane && x.hexPos === hexPos) || null;
 }
-function livingCars(race) {
-  return race.participants.filter(p => !p.out);
+// Initiative: lowest effective Thrust acts first; equal Thrust ties are
+// broken by 1D20, lowest first, re-rolled until every tied car is separated.
+function initiativeOrder(list) {
+  const byThrust = new Map();
+  list.forEach(p => {
+    const t = carStats(p).thrust;
+    if (!byThrust.has(t)) byThrust.set(t, []);
+    byThrust.get(t).push(p);
+  });
+  const out = [];
+  [...byThrust.keys()].sort((a, b) => a - b).forEach(t => out.push(...breakInitiativeTie(byThrust.get(t))));
+  return out;
+}
+function breakInitiativeTie(group) {
+  if (group.length <= 1) return group;
+  const rolled = group.map(p => ({ p, v: rollD(20) })).sort((a, b) => a.v - b.v);
+  const out = [];
+  let i = 0;
+  while (i < rolled.length) {
+    let j = i;
+    while (j + 1 < rolled.length && rolled[j + 1].v === rolled[i].v) j++;
+    if (j === i) out.push(rolled[i].p);
+    else out.push(...breakInitiativeTie(rolled.slice(i, j + 1).map(r => r.p)));
+    i = j + 1;
+  }
+  return out;
 }
 function initLegState(race) {
   const course = getCourse(race.courseId);
   const leg = rollCircularLeg(course);
   leg.finalTN = Math.min(leg.finalTN, legTNCap(race));
+  const prev = race.legState ? race.legState.cars : {};
   const cars = {};
   race.participants.forEach(p => {
     cars[p.id] = {
-      gearChange: 0, // -1/0/+1, chosen at Declare (Heroes) or by autoDeclareNpc (NPCs)
-      slip: "", slipHexes: 0, slipD: 0, slipTouchesCurve: false,
-      maneuver: "", maneuverTarget: "",
-      maneuverReceivedD: 0, maneuverInstigatedD: 0,
-      declared: p.type === "npc", // NPCs auto-declare at lock time; Heroes must declare first
-      gear: p.gear || 0, gearMovement: 0,
-      triggered: false, collided: false, net: 0, skillCheck: null,
-      outOfControlRolls: [],
-      hexesLost: 0, stopped: false,
-      autoLast: !!p.out
+      gearChange: 0, slip: "", slipCount: 0, attackTargetId: "",
+      // Disadvantage carried in from hits and fumbles; consumed by this car's next check.
+      pendingD: prev[p.id] ? prev[p.id].pendingD || 0 : 0,
+      turnDone: !!p.out
     };
   });
-  race.legState = { leg, declLocked: false, cars };
+  race.legState = { leg, cars, order: initiativeOrder(race.participants.filter(p => !p.out)).map(p => p.id) };
   STATE._openDeclFor = null;
 }
-// Initiative = d20 + the car's own Thrust stat.
-function resolveInitiativeOrder(participants) {
-  const rolled = participants.map(p => ({ p, val: rollD(20) + carStats(p).thrust }));
-  rolled.forEach(r => { r.p.initiative = r.val; });
-  rolled.sort((a, b) => b.val - a.val);
-  const result = [];
-  let i = 0;
-  while (i < rolled.length) {
-    let j = i;
-    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
-    if (j === i) { result.push(rolled[i].p); i++; continue; }
-    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
-    i = j + 1;
+function nextTurnParticipant(race) {
+  const ls = race.legState;
+  for (const id of ls.order) {
+    const p = race.participants.find(x => x.id === id);
+    if (p && !p.out && !ls.cars[p.id].turnDone) return p;
   }
-  return result;
+  return null;
 }
-function breakTieOrder(tied) {
-  const rolled = tied.map(p => ({ p, val: rollD(20) + carStats(p).thrust }));
-  rolled.sort((a, b) => b.val - a.val);
-  const result = [];
-  let i = 0;
-  while (i < rolled.length) {
-    let j = i;
-    while (j + 1 < rolled.length && rolled[j + 1].val === rolled[i].val) j++;
-    if (j === i) { result.push(rolled[i].p); i++; continue; }
-    result.push(...breakTieOrder(rolled.slice(i, j + 1).map(r => r.p)));
-    i = j + 1;
-  }
-  return result;
-}
+function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (p.name + " (NPC)"); }
+
 function startRace(courseId, shipIds, npcs) {
   const course = getCourse(courseId);
   const participants = [];
@@ -871,19 +832,13 @@ function startRace(courseId, shipIds, npcs) {
   const usedIcons = new Set();
   shipIds.forEach(sid => {
     const ship = getShip(sid);
-    const cls = getShipClass(ship.classId);
-    const points = cls ? cls.points : 0;
-    participants.push({
-      id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [],
-      hp: points, maxHp: points, out: false, gear: 0
-    });
+    const p = { id: uid("hero"), type: "hero", shipId: sid, cumulative: 0, history: [], out: false, gear: 0 };
+    p.maxHp = carStats(p).points;
+    p.hp = p.maxHp;
+    participants.push(p);
     const info = shipIconInfo(ship);
     if (info) usedIcons.add(`${info.color}|${info.number}`);
   });
-  // An NPC racer is a full car in its own right now (see RULE_CHANGES.md) --
-  // built the same way a Hero's ship is (freshNpcStats() at the course's own
-  // Division/Tier), not a stripped-down abstraction. It gets a random icon,
-  // distinct from every Hero ship and every other NPC in this race.
   npcs.forEach(n => {
     const pick = pickRandomUnusedIcon(usedIcons);
     if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
@@ -892,14 +847,11 @@ function startRace(courseId, shipIds, npcs) {
       id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
       cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "",
-      hp: stats.points, maxHp: stats.points, out: false, gear: 0
+      out: false, gear: 0, maxHp: stats.points, hp: stats.points
     });
   });
-  // Every racer starts in a lane, round-robin by Initiative, tracking laps
-  // completed + hex position within the current lap. Outer lanes get a
-  // staggered head start (see laneStartHexPos()).
-  const order = resolveInitiativeOrder(participants);
-  order.forEach((p, i) => {
+  // Starting lanes: round-robin in initiative order, outer lanes staggered ahead.
+  initiativeOrder(participants).forEach((p, i) => {
     const laneIdx0 = i % course.lanes;
     p.lane = laneIdx0 + 1;
     p.hexPos = laneStartHexPos(laneIdx0);
@@ -907,351 +859,216 @@ function startRace(courseId, shipIds, npcs) {
     p.startLane = p.lane;
     p.startHexPos = p.hexPos;
   });
-  const race = { courseId, legIndex: 0, participants, finished: false, log: [] };
+  const race = { courseId, legIndex: 0, participants, finished: false, winnerId: "", log: [] };
   initLegState(race);
   STATE.race = race;
   saveState();
 }
-function participantLabel(p) { return p.type === "hero" ? shipName(p.shipId) : (p.name + " (NPC)"); }
 
-/* ---------- Maneuvers (see RULE_CHANGES.md 2026-10-03) ----------
-   One Maneuver per car per Leg, car vs. car. Nudge/Block/Ram always land:
-   Disadvantage to the target, self-cost Disadvantage to the instigator, and
-   BOTH cars' Skill Checks are triggered this Leg. Attack is the one with
-   its own roll -- see applyAttack(). Every Maneuver's selfD is now a flat
-   number (Attack's used to scale with Tier; the book's own trigger table
-   gives it a flat 1 instead, same as everything else). */
-function maneuverDAmount(m) { return m.selfD; }
-// Attack: the instigator's own Gunner score vs the Leg's TN (same
-// rollCheck() as everything else, net=0 -- no situational Advantage/
-// Disadvantage on the to-hit roll itself). A hit deals 1D6 + the
-// instigator's Damage bonus, reduced by the target's Armor (min 0), to the
-// target's HP; 0 HP marks it out of the race, same as an Out-of-Control hit.
-// A miss does nothing beyond the instigator's own selfD, already applied by
-// the caller.
-function applyAttack(race, instigator, target, tn) {
-  const atkStats = carStats(instigator);
-  const rc = rollCheck(atkStats.gunner, 0, tn);
-  if (!rc.success) return { hit: false, rc };
-  const tgtStats = carStats(target);
-  const die = GDATA.DAMAGE_BASE_DIE;
-  const rolled = Array.from({ length: die.n }, () => rollD(die.d)).reduce((a, b) => a + b, 0);
-  const dmg = Math.max(0, rolled + atkStats.damage - tgtStats.armor);
-  target.hp = Math.max(0, target.hp - dmg);
-  if (target.hp === 0 && !target.out) { target.out = true; target.outLeg = race.legIndex; }
-  return { hit: true, rc, dmg };
-}
-// Automates one NPC's whole Declare step: gear shift, (Circular Track) Slip,
-// and Maneuver -- all driven by its Leg Aggression (own Aggression + current
-// standings position - 1). A ship further back gambles more, regardless of
-// its base personality.
-function autoDeclareNpc(race, p, legAggression, course, geom, positions) {
-  const ls = race.legState, car = ls.cars[p.id];
-  // Gear: push up while winning the aggression gamble, otherwise hold or
-  // ease off -- simple, legible NPC behavior without a separate sub-system.
-  const roll = rollD(20);
-  if (roll <= legAggression) car.gearChange = 1;
-  else if (roll > legAggression + 5) car.gearChange = -1;
-  // Legal targets: excludes self, destroyed cars, and anyone out of
-  // Maneuver range. "Logical" target: whoever's immediately ahead of it in
-  // the standings.
-  const legalTargets = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
-  const aheadOrder = race.participants
-    .filter(x => x.id !== p.id && !x.out && positions[x.id] < positions[p.id])
-    .sort((a, b) => positions[b.id] - positions[a.id]);
-  const target = aheadOrder.find(x => legalTargets.includes(x)) || null;
-  if (target && rollD(20) <= legAggression) {
-    const margin = legAggression - rollD(20);
-    // Deterministic pick by how decisively it rolled: Attack only once
-    // genuinely aggressive (margin >= 6), otherwise the more severe
-    // interference Maneuver.
-    const mv = margin >= 6 ? GDATA.MANEUVERS.find(m => m.name === "Attack")
-      : margin >= 3 ? GDATA.MANEUVERS.find(m => m.name === "Ram")
-      : GDATA.MANEUVERS.find(m => m.name === "Nudge");
-    car.maneuver = mv.name;
-    car.maneuverTarget = target.id;
-  }
-  autoDeclareNpcSlip(race, p, legAggression, course, geom, target);
-  car.declared = true;
-}
-// NPC Slip: one more independent d20<=legAggression roll decides whether
-// the car attempts a Slip at all this Leg. A success always Slips at least
-// 1; if a legal target exists but isn't in Maneuver range yet, a second
-// roll decides whether to hunt it down instead of just leaning for
-// speed/Advantage.
-function autoDeclareNpcSlip(race, p, legAggression, course, geom, target) {
-  const car = race.legState.cars[p.id];
-  const roll = rollD(20);
-  if (roll > legAggression) return;
-  const margin = legAggression - roll;
-  const amount = Math.max(1, Math.floor(margin / 2));
-  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
-  let dir = null, hexes = 0;
-  const alreadyInRange = target && hexesWithinManeuverRange(geom, p, target);
-  if (target && !alreadyInRange) {
-    if (rollD(20) <= legAggression) {
-      const towardLeft = target.lane < p.lane;
-      const laneGap = Math.abs(target.lane - p.lane);
-      const neededLanes = Math.max(0, laneGap - MANEUVER_RANGE_HEXES);
-      const huntAmount = Math.min(amount, neededLanes, towardLeft ? maxLeft : maxRight);
-      if (huntAmount > 0) { dir = towardLeft ? "left" : "right"; hexes = huntAmount; }
-    }
-  }
-  if (dir === null) {
-    const inward = (margin / legAggression) >= 0.5;
-    dir = inward ? "left" : "right";
-    hexes = Math.min(amount, dir === "left" ? maxLeft : maxRight);
-  }
-  if (hexes <= 0) return;
-  car.slip = dir; car.slipHexes = hexes;
-}
-// Locks in Declarations: resolves gear shifts + movement, Maneuvers, Slip
-// curve-touch A/D, and Skill Check triggers for every car at once. Heroes
-// must have already declared; NPCs auto-declare here.
-function lockDeclarations() {
-  const race = STATE.race, ls = race.legState, course = getCourse(race.courseId);
-  const geom = circTrackGeometry(course);
-  const positions = standingsPositions(race, course);
-  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
-    autoDeclareNpc(race, p, legAggressionFor(p, positions), course, geom, positions);
-  });
-  // Gear + movement: unconditional, every car, every Leg.
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const car = ls.cars[p.id];
-    p.gear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
-    car.gear = p.gear;
-    const stats = carStats(p);
-    const dice = GDATA.GEAR_DICE[p.gear];
-    const rolled = dice ? Array.from({ length: dice.n }, () => rollD(dice.d)).reduce((a, b) => a + b, 0) : 0;
-    car.gearMovement = p.gear === 0 ? 0 : Math.max(0, rolled + stats.thrust);
-  });
-  // Slip: Disadvantage is just (hexes - 1) -- the first hex is free, every
-  // extra hex is +1 Disadvantage, full stop (see RULE_CHANGES.md 2026-10-03:
-  // this replaced an earlier curve-touch Advantage/Disadvantage rule -- Slip
-  // can no longer ever grant Advantage). `touchesCurve` is still tracked for
-  // Slingshot (an unrelated bonus-MOVEMENT mechanic, resolved later in
-  // finishLeg() once Out-of-Control hex losses are known) -- it no longer
-  // feeds the Skill Check at all.
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const car = ls.cars[p.id];
-    car.slipD = 0;
-    car.slipTouchesCurve = false;
-    if (!car.slip) { car.slipHexes = 0; return; }
-    const maxLane = Math.min(car.slip === "left" ? p.lane - 1 : course.lanes - p.lane, car.gearMovement || 0);
-    const hexes = clampInt(car.slipHexes, 0, Math.max(0, maxLane), 0);
-    car.slipHexes = hexes;
-    if (hexes <= 0) { car.slip = ""; return; }
-    car.slipD = Math.max(0, hexes - 1);
-    const originLaneIdx0 = p.lane - 1, originHexPos = p.hexPos || 0;
-    const dir = car.slip === "left" ? -1 : 1;
-    const projected = resolveSlipPath(geom, originLaneIdx0, originHexPos, car.gearMovement || 0, hexes, dir);
-    let touchesCurve = !isHexOnStraight(geom, originLaneIdx0, originHexPos);
-    for (let i = 0; !touchesCurve && i < projected.steps.length; i++) {
-      const step = projected.steps[i];
-      if (!isHexOnStraight(geom, step.laneIdx0, step.hexPos)) touchesCurve = true;
-    }
-    car.slipTouchesCurve = touchesCurve;
-  });
-  // Maneuvers: resolve each declared Maneuver, applying its effect and
-  // flagging both cars' Skill Checks as triggered. Nudge/Block/Ram always
-  // land, so the target is always triggered; Attack has its own roll, so the
-  // target is only triggered (and only takes the +1 Disadvantage) on an
-  // actual hit -- a miss does nothing to the target at all.
-  const tn = ls.leg.finalTN;
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const car = ls.cars[p.id];
-    if (!car.maneuver) return;
-    const mv = GDATA.MANEUVERS.find(m => m.name === car.maneuver);
-    if (!mv) return;
-    const target = race.participants.find(x => x.id === car.maneuverTarget);
-    car.maneuverInstigatedD += maneuverDAmount(mv);
-    car.maneuverTriggered = true;
-    if (!target || target.out) return;
-    const tCar = ls.cars[target.id];
-    if (mv.name === "Attack") {
-      car.attackResult = applyAttack(race, p, target, tn);
-      if (car.attackResult.hit) {
-        tCar.maneuverReceivedD += 1; // "Per Hit from an Attack this turn -- Disadvantage per hit"
-        tCar.maneuverTriggered = true;
-      }
-    } else {
-      tCar.maneuverReceivedD += mv.targetD;
-      tCar.maneuverTriggered = true;
-    }
-  });
-  // Obstacle check (see RULE_CHANGES.md 2026-10-03): a TENTATIVE pass, using
-  // this Leg's just-rolled gear movement, purely to decide whether a car's
-  // intended path would cross or land on another car's hex -- Circus
-  // Maximus's own "entering a space with another chariot" trigger. This
-  // never actually moves anyone (place=false); the real placement (with
-  // drift/auto-Out-of-Control on an unavoidable collision) happens in
-  // finishLeg(), once Out-of-Control hex losses are known.
-  const collisions = resolveCarCollisions(race, geom, p => {
-    const c = ls.cars[p.id];
-    return { movement: c.gearMovement, slipHexes: c.slip ? Math.min(c.slipHexes || 0, c.gearMovement) : 0 };
-  }, false);
-  // Skill Check trigger list (see RULE_CHANGES.md 2026-10-03 -- replaces an
-  // earlier, looser approximation with the book's own specific trigger/
-  // Disadvantage table): a Drift beyond the first free hex, being in Gear 4
-  // (triggers, no Disadvantage of its own) or Gear 5 (triggers, +1
-  // Disadvantage), this Leg's movement exceeding the Leg's TN, making or
-  // being hit by an Attack, running/receiving Nudge/Block/Ram, or a path
-  // that crosses/lands on another car's hex (the obstacle/collision rule
-  // above -- its own trigger, but contributes no Disadvantage of its own).
-  // Only ONE Skill Check is ever rolled per Leg regardless of how many of
-  // these fired; their Disadvantage stacks into that one roll.
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const car = ls.cars[p.id];
-    const gearTriggers = p.gear >= GDATA.GEAR_TRIGGER; // Gear 4 or 5 -- Gear 4 adds no Disadvantage of its own, Gear 5 does (below)
-    const gearD = GDATA.GEAR_TRIGGER_D[p.gear] || 0;
-    const movementExceedsTN = car.gearMovement > ls.leg.finalTN;
-    car.collided = !!(collisions[p.id] && collisions[p.id].collided);
-    const totalD = (car.slipD || 0) + gearD + (movementExceedsTN ? 1 : 0) + (car.maneuverReceivedD || 0) + (car.maneuverInstigatedD || 0);
-    car.triggered = totalD > 0 || car.collided || gearTriggers;
-    car.net = -totalD;
-    car.declared = true;
-  });
-  // NPCs' own Skill Checks auto-resolve immediately (same spirit as their
-  // whole Declare step being automated) -- only Heroes click their own.
-  race.participants.filter(p => p.type === "npc" && !p.out).forEach(p => {
-    const car = ls.cars[p.id];
-    if (car.triggered) rollCarSkillCheck(race, p);
-  });
-  ls.declLocked = true;
-}
-function rollCarSkillCheck(race, p) {
-  const ls = race.legState, car = ls.cars[p.id];
-  if (car.skillCheck) return; // already rolled
-  const stats = carStats(p);
-  car.skillCheck = rollCheck(stats.skill, car.net, ls.leg.finalTN);
-  for (let i = 0; i < car.skillCheck.fumbleLevels; i++) rollOneOutOfControl(race, p);
-}
-function rollOneOutOfControl(race, p) {
-  const car = race.legState.cars[p.id];
-  const entry = GDATA.OUT_OF_CONTROL[rollD(10) - 1];
-  applyOutOfControlAffects(race, p, entry.affects || []);
-  car.outOfControlRolls.push({ text: entry.text, applied: (entry.affects || []).slice() });
-}
-function applyOutOfControlAffects(race, p, affects) {
-  const car = race.legState.cars[p.id];
-  const stats = carStats(p);
-  const tier = carTier(carDivision(p));
-  affects.forEach(a => {
-    if (a.type === "hp") {
-      const dmg = Math.max(0, tier * a.tierMult - stats.armor);
-      p.hp = Math.max(0, p.hp - dmg);
-      if (p.hp === 0 && !p.out) { p.out = true; p.outLeg = race.legIndex; }
-    } else if (a.type === "loseHexes") {
-      car.hexesLost = (car.hexesLost || 0) + a.amount;
-    } else if (a.type === "laneShift") {
-      const course = getCourse(race.courseId);
-      if (a.dir === "in" && p.lane > 1) p.lane -= 1;
-      else if (a.dir === "out" && p.lane < course.lanes) p.lane += 1;
-    } else if (a.type === "gearReset") {
-      p.gear = 1;
-    } else if (a.type === "stopped") {
-      car.stopped = true;
-    }
-  });
-}
-function describeOutOfControlAffects(affects, tier) {
-  if (!affects || !affects.length) return "No lasting effect.";
-  return affects.map(a => {
-    if (a.type === "hp") return `${Math.max(0, tier * a.tierMult)} HP damage (Tier ${tier} × ${a.tierMult}, before Armor)`;
-    if (a.type === "loseHexes") return `lose ${a.amount} hexes of this Leg's movement`;
-    if (a.type === "laneShift") return `pushed 1 lane ${a.dir === "in" ? "inward" : "outward"}`;
-    if (a.type === "gearReset") return `gear drops to 1 next Leg`;
-    if (a.type === "stopped") return `this Leg's movement ends now`;
-    return "";
-  }).filter(Boolean).join("; ");
-}
-// Crewman XP (see RULE_CHANGES.md 2026-10-03 / GDATA.CREWMAN_XP): every Hero
-// that actually FINISHED the race (completed the required laps, not
-// destroyed) banks `finish` XP for its assigned Crewman; whoever finished in
-// the best real track position additionally banks `win` on top. NPCs have no
-// Crewman and are never credited.
-function awardCrewmanXp(race, course, ringParams) {
-  const finishers = race.participants.filter(p => p.type === "hero" && !p.out && (p.laps || 0) >= course.laps);
-  if (!finishers.length) return;
-  finishers.sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
-  finishers.forEach((p, i) => {
-    const ship = getShip(p.shipId);
-    const crewman = ship && getCrewman(ship.crewmanId);
-    if (!crewman) return;
-    crewman.xp += GDATA.CREWMAN_XP.finish + (i === 0 ? GDATA.CREWMAN_XP.win : 0);
-  });
-}
-function finishLeg() {
-  const race = STATE.race, ls = race.legState;
+/* ---------- Automatic choices for NPCs (aggression-driven) ---------- */
+function npcChoices(race, p) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
-  // Precompute each car's final movement/Slip breakdown (independent of
-  // where anyone else ends up) before collision resolution, which only
-  // needs the totals, not how they were built up.
-  const movementInfo = {};
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const car = ls.cars[p.id];
-    const movement = car.stopped ? 0 : Math.max(0, (car.gearMovement || 0) - (car.hexesLost || 0));
-    const declaredSlipHexes = car.slip ? (car.slipHexes || 0) : 0;
-    const actualSlipHexes = Math.min(declaredSlipHexes, movement);
-    // Slingshot: an inward Slip that touches a curve grants +1 bonus
-    // Movement per hex actually Slipped this Leg -- pure extra forward
-    // movement, gated on an ACTIVE dive toward the inside this Leg.
-    const slingshotBonus = (car.slip === "left" && car.slipTouchesCurve) ? actualSlipHexes : 0;
-    movementInfo[p.id] = { total: movement + slingshotBonus, actualSlipHexes, slingshotBonus };
-  });
-  // Movement + Slip, resolved with the "no two cars share a hex" collision
-  // rule (see RULE_CHANGES.md 2026-10-03, replacing Crowded Field) --
-  // Circus Maximus's own turn order (lowest Thrust first), drifting to an
-  // open neighbor hex or auto-rolling Out-of-Control if fully boxed in.
-  const results = resolveCarCollisions(race, geom, p => {
-    const info = movementInfo[p.id];
-    return { movement: info.total, slipHexes: info.actualSlipHexes };
-  }, true);
-  race.participants.forEach(p => {
-    if (p.out) return;
-    const r = results[p.id], info = movementInfo[p.id];
-    p.cumulative += r.movement;
-    p.lane = r.finalLaneIdx0 + 1;
-    p.hexPos = r.finalHexPos;
-    p.laps = (p.laps || 0) + r.lapsGained;
-    p.history.push({ leg: race.legIndex + 1, movement: r.movement, lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: info.actualSlipHexes, slingshotBonus: info.slingshotBonus, gear: p.gear });
-  });
-  // Race Log: Out-of-Control descriptions rolled this Leg, one entry per
-  // roll (multiple Fumble Levels each get their own line), plus each car's
-  // finishing order this Leg by real track position (cosmetic -- it has no
-  // effect on actual Movement).
-  const ringParams = hexRingParamsForCourse(course);
-  const ordered = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
-  const rows = ordered.map((p, i) => ({
-    id: p.id, name: participantLabel(p), type: p.type, position: i + 1,
-    movement: (ls.cars[p.id] && ls.cars[p.id].gearMovement != null) ? (p.history[p.history.length - 1] || {}).movement || 0 : 0,
-    out: !!p.out
-  }));
-  const outOfControl = [];
-  race.participants.forEach(p => {
-    const car = ls.cars[p.id];
-    (car.outOfControlRolls || []).forEach(roll => outOfControl.push({ name: participantLabel(p), text: roll.text }));
-  });
-  race.log.push({ legIndex: race.legIndex, rows, outOfControl });
+  const positions = standingsPositions(race, course);
+  const agg = legAggressionFor(p, positions);
+  const roll = rollD(20);
+  const gearChange = roll <= agg ? 1 : roll > agg + 5 ? -1 : 0;
+  let slip = "", slipCount = 0;
+  if (rollD(20) <= agg) {
+    slip = Math.random() < 0.5 ? "left" : "right";
+    slipCount = rollD(20) <= agg ? 2 : 1;
+  }
+  const inRange = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
+  const attackTargetId = inRange.length && rollD(20) <= agg ? inRange[0].id : "";
+  return { gearChange, slip, slipCount, attackTargetId };
+}
 
-  // The race has no fixed Leg count -- it ends the moment any racer
-  // completes the required laps, or every Hero is destroyed.
-  const someoneFinished = race.participants.some(p => !p.out && (p.laps || 0) >= course.laps);
-  const heroesLeft = race.participants.some(p => p.type === "hero" && !p.out);
-  if (someoneFinished || !heroesLeft) {
+/* ---------- Resolving one turn ---------- */
+// Gear's Task Check modifier as a net Advantage/Disadvantage count.
+function gearNet(gear) {
+  const mod = (GDATA.GEAR_TABLE[gear] || {}).mod;
+  return mod === "AA" ? 2 : mod === "A" ? 1 : mod === "D" ? -1 : mod === "DD" ? -2 : 0;
+}
+function applyDamage(race, p, amount, log) {
+  p.hp = Math.max(0, p.hp - amount);
+  if (p.hp === 0 && !p.out) {
+    p.out = true;
+    p.outLeg = race.legIndex;
+    log.push(`${participantLabel(p)} is destroyed -- a wreck stays in its hex.`);
+  }
+}
+function fallOffTrack(race, p, T, log) {
+  log.push(`${participantLabel(p)} is forced off the track: 3 HP damage (ignoring Armor), turn ends, next Leg starts in Gear-1.`);
+  applyDamage(race, p, 3, log);
+  p.gear = 1;
+  T.movement = 0;
+  T.stopped = true;
+}
+function applyFumbleAffect(race, p, a, T, log) {
+  const course = getCourse(race.courseId);
+  const car = race.legState.cars[p.id];
+  if (a.type === "hp") {
+    const dmg = Math.max(0, carTier(carDivision(p)) * a.tierMult - carStats(p).armor);
+    applyDamage(race, p, dmg, log);
+  } else if (a.type === "loseHexes") {
+    T.movement = Math.max(0, T.movement - a.amount);
+  } else if (a.type === "laneShift") {
+    const target = a.dir === "in" ? p.lane - 1 : p.lane + 1;
+    if (target >= 1 && target <= course.lanes) p.lane = target;
+    else if (a.forced) fallOffTrack(race, p, T, log);
+  } else if (a.type === "gearReset") {
+    p.gear = a.to;
+  } else if (a.type === "nextLegD") {
+    car.pendingD += a.amount;
+  } else if (a.type === "stopped") {
+    T.movement = 0;
+    T.stopped = true;
+  }
+}
+function rollFumble(race, p, T, log) {
+  const sum = rollD(10) + rollD(10);
+  const entry = GDATA.FUMBLE_CHART[sum - 2];
+  log.push(`Fumble chart (${sum}): ${entry.text}`);
+  entry.affects.forEach(a => applyFumbleAffect(race, p, a, T, log));
+}
+// An open hex beside `hex` for a car to slip into after landing on an
+// obstacle -- any real hex neighbor with nobody in it.
+function openHexBeside(race, geom, laneIdx0, hexPos, exceptId) {
+  const hex = geom.laneHexLists[laneIdx0][hexPos];
+  for (const d of HEX_DIRS) {
+    const hit = geom.lookup.get(hexKey(hex.q + d.dq, hex.r + d.dr));
+    if (hit && !occupantAt(race, hit.lane + 1, hit.index, exceptId)) return { laneIdx0: hit.lane, hexPos: hit.index };
+  }
+  return null;
+}
+
+function resolveTurn(race, p, choices) {
+  const ls = race.legState, car = ls.cars[p.id];
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const tn = ls.leg.finalTN;
+  const stats = carStats(p);
+  const log = [];
+  car.turnDone = true;
+
+  // 1. Gear shift (at most one level) and movement roll.
+  p.gear = clampInt(p.gear + clampInt(choices.gearChange, -1, 1, 0), 0, GDATA.MAX_GEAR, p.gear);
+  const dice = (GDATA.GEAR_TABLE[p.gear] || {}).dice || 0;
+  const rolled = Array.from({ length: dice }, () => rollD(GDATA.DIE_SIDES));
+  const intended = dice ? Math.max(0, rolled.reduce((a, b) => a + b, 0) + stats.thrust) : 0;
+  log.push(`Gear ${p.gear}: rolled ${rolled.length ? rolled.join(" + ") : "nothing (Gear-0)"} + Thrust ${stats.thrust} = ${intended} hexes.`);
+
+  // 2. Slips: each is a forward hex plus one lateral hex; none can leave the track.
+  const dir = choices.slip === "left" ? -1 : choices.slip === "right" ? 1 : 0;
+  const maxLateral = dir < 0 ? p.lane - 1 : dir > 0 ? course.lanes - p.lane : 0;
+  let slipCount = dir ? clampInt(choices.slipCount, 0, Math.min(maxLateral, intended), 0) : 0;
+
+  // 3. Control Task Check modifiers (see RULE_CHANGES.md 2026-10-05). Pending
+  // Disadvantage from earlier hits/fumbles is consumed by this turn's checks.
+  const pendingNow = car.pendingD;
+  car.pendingD = 0;
+  const net = gearNet(p.gear) - (slipCount >= 2 ? 1 : 0) - (intended > tn ? 1 : 0) - pendingNow;
+  const T = { movement: intended, stopped: false };
+
+  // 4. Control Task Check: triggered by 5+ hexes of movement or by more than the one free Slip.
+  const triggered = intended >= 5 || slipCount >= 2;
+  if (triggered) {
+    const rc = rollCheck(stats.control + stats.crewPilot, net, tn);
+    log.push(`Control check: ${rc.dice.join(", ")} -> ${rc.total} vs TN ${tn} -- ${outcomeLabel(rc)}.`);
+    if (rc.success) {
+      T.movement = intended + rc.critLevels;
+      if (rc.critLevels) log.push(`Critical: +${rc.critLevels} bonus hex.`);
+    } else {
+      T.movement = Math.floor(intended / 2);
+      slipCount = 0;
+      log.push(`Failure: moves half its intended distance (${T.movement}), Slips fail, stays in its lane.`);
+    }
+    for (let i = 0; i < rc.fumbleLevels; i++) rollFumble(race, p, T, log);
+  }
+
+  // 5. Walk the path. Entering a hex with another ship (active or wreck) forces
+  // an obstacle Control check; a failure stops the car before it, and landing
+  // on the obstacle sends it into an open neighboring hex instead.
+  const walked = [];
+  let cur = { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 };
+  let laps = p.laps || 0;
+  if (!T.stopped && T.movement > 0) {
+    const steps = resolveSlipPath(geom, cur.laneIdx0, cur.hexPos, T.movement, slipCount, dir || 1).steps;
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      const isLast = i === steps.length - 1;
+      const occ = occupantAt(race, s.laneIdx0 + 1, s.hexPos, p.id);
+      if (occ) {
+        const ob = rollCheck(stats.control + stats.crewPilot, net, tn);
+        log.push(`Obstacle (${participantLabel(occ)}): Control check ${ob.total} vs TN ${tn} -- ${outcomeLabel(ob)}.`);
+        if (!ob.success) { log.push("Stops short of the obstacle."); break; }
+        if (isLast) {
+          const open = openHexBeside(race, geom, s.laneIdx0, s.hexPos, p.id);
+          if (open) {
+            log.push("Slips into an open hex beside the obstacle (free).");
+            cur = open;
+          } else {
+            log.push("Every hex beside the obstacle is blocked -- automatic Fumble, turn ends.");
+            rollFumble(race, p, T, log);
+          }
+          break;
+        }
+      }
+      if (cur.hexPos + 1 >= geom.laneHexLists[cur.laneIdx0].length) laps += 1;
+      cur = { laneIdx0: s.laneIdx0, hexPos: s.hexPos };
+      walked.push({ lane: cur.laneIdx0 + 1, hexPos: cur.hexPos });
+      if (laps >= course.laps) break; // crossed the finish line
+    }
+  }
+  const moved = walked.length;
+  p.lane = cur.laneIdx0 + 1;
+  p.hexPos = cur.hexPos;
+  p.laps = laps;
+  p.cumulative += moved;
+  log.push(`Moved ${moved} hex${moved === 1 ? "" : "es"}; now lane ${p.lane}, lap ${Math.min(laps, course.laps)}/${course.laps}.`);
+  p.history.push({ leg: race.legIndex + 1, movement: moved, path: walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: slipCount, gear: p.gear });
+
+  // 6. One Gunner attack per turn, against a ship within 2 hexes of where it ended up.
+  if (laps >= course.laps) {
     race.finished = true;
-    awardCrewmanXp(race, course, ringParams);
-  } else {
+    race.winnerId = p.id;
+    log.push(`${participantLabel(p)} crosses the finish line and wins the race!`);
+  } else if (choices.attackTargetId && !p.out) {
+    const target = race.participants.find(x => x.id === choices.attackTargetId);
+    if (!target || target.out) log.push("Attack: no valid target.");
+    else if (!hexesWithinManeuverRange(geom, p, target)) log.push(`Attack: ${participantLabel(target)} is out of range (2 hexes).`);
+    else {
+      const gc = rollCheck(stats.gunner + stats.crewGunner, 0, tn);
+      log.push(`Gunner check vs ${participantLabel(target)}: ${gc.total} vs TN ${tn} -- ${gc.success ? "hit" : "miss"}.`);
+      if (gc.success) {
+        const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
+        const dmg = Math.max(0, rolledDmg + stats.damage - carStats(target).armor);
+        log.push(`Damage ${course.flatDamage ? "4 (flat)" : rolledDmg} + ${stats.damage} - Armor ${carStats(target).armor} = ${dmg}.`);
+        applyDamage(race, target, dmg, log);
+        race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
+      }
+    }
+  }
+  race.log.push({ legIndex: race.legIndex, name: participantLabel(p), lines: log });
+}
+
+// After a turn: finish the race if it's over, or roll over to the next Leg
+// once every car has acted.
+function advanceRace(race) {
+  if (race.finished) return;
+  if (!race.participants.some(x => x.type === "hero" && !x.out)) { race.finished = true; return; }
+  if (!nextTurnParticipant(race)) {
     race.legIndex += 1;
     initLegState(race);
   }
-  saveState();
+}
+// Runs every consecutive NPC turn until a Hero's turn comes up (or the race ends).
+function runAutomaticTurns(race) {
+  let p;
+  while (!race.finished && (p = nextTurnParticipant(race)) && p.type === "npc") {
+    resolveTurn(race, p, npcChoices(race, p));
+    advanceRace(race);
+  }
 }
 
 /* ============================== UI ============================== */
@@ -1328,7 +1145,7 @@ function renderShipClassCard(cls) {
     html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
       ${SHIP_STATS.map(s => `<td><b>${formatStatValue(cls, s)}</b> ${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)} <span class="muted">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</span></td>`).join("")}
     </tr></table>`;
-    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs its own Crewman assigned as pilot (Hangar Bay) -- Skill lives on the Crewman, not here. Control has no effect yet -- it's purchasable now so future rules have something to build against.</p>`;
+    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs a crewman assigned (Hangar Bay) -- Pilot and Gunner live on the crewman, not here. Control has no effect yet -- it's purchasable now so future rules have something to build against.</p>`;
     html += renderClassIconPicker(cls);
   }
   html += `</div>`;
@@ -1347,37 +1164,38 @@ function renderClassIconPicker(cls) {
   return `<div class="row"><b>Icon</b></div><div class="iconpicker">${swatches}</div>`;
 }
 
-/* ---------- Cantina: build Crewmen (Skill lives here, not on the Ship) ----------
-   See RULE_CHANGES.md 2026-10-03. Every Crewman starts at Skill Mk5 for free;
-   raising it further spends XP banked by racing (GDATA.CREWMAN_XP), not a
-   build budget -- there's no up-front point spend here. */
+/* ---------- Cantina: build Crewmen (Pilot and Gunner) ----------
+   See RULE_CHANGES.md 2026-10-05. Each crewman starts at Pilot-5 and Gunner-5
+   and divides 5 points between the two, one point per increase. Built once --
+   no XP, no leveling after creation. */
 function renderCantina() {
   let html = `<section class="card"><h2>Crewmen</h2>
-    <div class="row"><button onclick="App.addCrewman()">+ Add Crewman</button></div>`;
-  if (!STATE.crewmen.length) html += `<p class="muted">No Crewmen yet. Whichever Crewman is assigned to pilot a Ship (Hangar Bay) is whose Skill rolls that Ship's Skill Checks -- add one here first.</p>`;
+    <div class="row"><button onclick="App.addCrewman()">+ Add Crewman</button></div>
+    <p class="muted">Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner. A ship's crew shares one Pilot and one Gunner value.</p>`;
+  if (!STATE.crewmen.length) html += `<p class="muted">No Crewmen yet. A ship races with the Pilot and Gunner values of the crewman assigned to it (Hangar Bay) -- add one here first.</p>`;
   STATE.crewmen.forEach(crewman => { html += renderCrewmanCard(crewman); });
   html += `</section>`;
   return html;
 }
 function renderCrewmanCard(crewman) {
-  const cost = crewmanNextStepCost(crewman);
-  const canAfford = crewman.xp >= cost;
+  const remaining = crewmanSplitRemaining(crewman);
   const assignedTo = STATE.ships.filter(s => s.crewmanId === crewman.id).map(s => s.name);
   return `<div class="subcard">
     <div class="row">
       <input class="name-input" value="${esc(crewman.name)}" onchange="App.updateCrewman('${crewman.id}','name',this.value)">
       <button class="ghost" title="Random name" onclick="App.rerollCrewmanName('${crewman.id}')">🎲</button>
-      <span class="tag">Skill Mk${crewman.skill}</span>
-      <span class="tag" title="Earned by finishing/winning races">${crewman.xp} XP banked</span>
-      <button ${canAfford ? "" : "disabled"} title="${canAfford ? "" : `Needs ${cost} XP`}" onclick="App.spendCrewmanXp('${crewman.id}')">Spend ${cost} XP -> Mk${crewman.skill + 1}</button>
+      <span class="tag ${remaining < 0 ? "danger" : ""}">${remaining} split point${remaining === 1 ? "" : "s"} left</span>
       <span class="muted">${assignedTo.length ? `Piloting: ${assignedTo.map(n => esc(n)).join(", ")}` : "Unassigned"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteCrewman('${crewman.id}')">Delete</button>
     </div>
+    <table class="mktable shiptable"><tr><th>Pilot</th><th>Gunner</th></tr><tr>
+      <td>${numStepper(`<input type="number" style="width:48px" min="${GDATA.CREWMAN_BASE}" value="${crewman.pilot}" onchange="App.updateCrewmanSkill('${crewman.id}','pilot',this.value)">`)}</td>
+      <td>${numStepper(`<input type="number" style="width:48px" min="${GDATA.CREWMAN_BASE}" value="${crewman.gunner}" onchange="App.updateCrewmanSkill('${crewman.id}','gunner',this.value)">`)}</td>
+    </tr></table>
   </div>`;
 }
 
-/* ---------- Hangar Bay: assemble Ships from a Ship Class + an assigned
-   Crewman ---------- */
+/* ---------- Hangar Bay: assemble Ships from a Ship Class + a crewman + sponsor ---------- */
 function renderHangarBay() {
   if (!STATE.shipClasses.length) {
     return `<section class="card"><h2>Ships</h2>
@@ -1402,14 +1220,25 @@ function renderHangarBay() {
     }
     html += `</div>`;
   });
-  // A brand-new Ship with no Class chosen yet doesn't belong to any
-  // Division group above -- give it its own section so it's never hidden.
   const unassigned = STATE.ships.filter(s => !getShipClass(s.classId));
   if (unassigned.length) {
     html += `<div class="divgroup"><div class="divhead"><b>No Ship Class chosen yet</b></div><div class="divbody">${unassigned.map(s => renderShipCard(s)).join("")}</div></div>`;
   }
   html += `</section>`;
   return html;
+}
+function renderSponsorRow(ship) {
+  const sponsor = ship.sponsor || { bonus: {}, penalty: "" };
+  const total = sponsorBonusTotal(sponsor);
+  const bonusCells = SHIP_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${SPONSOR_BONUS_MAX}" value="${(sponsor.bonus || {})[s] || 0}" onchange="App.setSponsorBonus('${ship.id}','${s}',this.value)">`)}</td>`).join("");
+  return `<div class="row" style="align-items:flex-start"><b>Sponsor</b> <span class="muted">up to ${SPONSOR_BONUS_MAX} bonus points across up to 3 stats (${total} used), then a ${SPONSOR_PENALTY}-point penalty to one stat</span></div>
+    <table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+    <tr>${bonusCells}</tr></table>
+    <div class="row"><label>Penalty (-${SPONSOR_PENALTY})
+      <select onchange="App.setSponsorPenalty('${ship.id}',this.value)">
+        <option value="">none</option>
+        ${SHIP_STATS.map(s => `<option value="${s}" ${sponsor.penalty === s ? "selected" : ""}>${STAT_LABEL[s]}</option>`).join("")}
+      </select></label></div>`;
 }
 function renderShipCard(ship) {
   const cls = getShipClass(ship.classId);
@@ -1426,6 +1255,7 @@ function renderShipCard(ship) {
   }
   const collapsed = !!ship._collapsed;
   const crewman = getCrewman(ship.crewmanId);
+  const eff = carStats({ type: "hero", shipId: ship.id });
   let html = `<div class="subcard">
     <div class="row">
       <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.toggleShipCollapse('${ship.id}')">${collapsed ? "▸" : "▾"}</button>
@@ -1436,19 +1266,22 @@ function renderShipCard(ship) {
         <select onchange="App.updateShip('${ship.id}','classId',this.value)">
           ${STATE.shipClasses.map(c => `<option value="${c.id}" ${c.id === ship.classId ? "selected" : ""}>${esc(c.name)} (${c.division})</option>`).join("")}
         </select></label>
-      <label>Crewman
+      <label>Crew (Pilot/Gunner)
         <select onchange="App.updateShip('${ship.id}','crewmanId',this.value)">
           <option value="">-- none --</option>
-          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (Skill Mk${c.skill})</option>`).join("")}
+          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (P${c.pilot}/G${c.gunner})</option>`).join("")}
         </select></label>
-      <span class="tag ${crewman ? "" : "danger"}" title="${crewman ? "All set -- race-legal" : "A Ship needs an assigned Crewman to race"}">${crewman ? "Ready to race" : "🔒 Needs a Crewman"}</span>
+      <span class="tag ${crewman ? "" : "danger"}" title="${crewman ? "All set -- race-legal" : "A Ship needs an assigned crewman to race"}">${crewman ? "Ready to race" : "🔒 Needs a crewman"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
-    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Skill</th></tr><tr>
-      ${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}<td>${crewman ? `Mk${crewman.skill}` : "—"}</td>
+    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Pilot</th><th>Gunner</th></tr><tr>
+      ${SHIP_STATS.map(s => `<td>${formatStatValue({ ...cls, [s]: eff[s] }, s)}</td>`).join("")}<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td>
     </tr></table>
-    <p class="muted" style="margin:4px 0">Stats come from the Ship Class above (edit in the Shipyard) and the assigned Crewman's Skill (edit in the Cantina).</p>`;
+    <p class="muted" style="margin:4px 0">Stats shown include the Ship Class plus any sponsor adjustment. Edit the class in the Shipyard and the crewman in the Cantina.</p>`;
+    html += renderSponsorRow(ship);
+    html += `<div class="row"><label style="flex:1">Other crew (flavor only)
+      <input value="${esc(ship.flavorCrew || "")}" placeholder="e.g. Hot Dust, Mack" onchange="App.updateShip('${ship.id}','flavorCrew',this.value)" style="width:100%"></label></div>`;
     html += renderShipIconPicker(ship);
   }
   html += `</div>`;
@@ -1486,6 +1319,7 @@ function renderCourse() {
     <p class="muted">6 lanes on a real hex grid, each exactly 6 hexes longer per lap than the one inside it (an exact property of hex ring math). Race runs Leg by Leg until a racer completes the required laps -- there's no fixed Leg count.</p>
     <div class="formrow"><label>Inner Lane Hexes (approx.)</label>${numStepper(`<input id="cInnerHexes" type="number" min="1" value="50" oninput="App.previewLaneHexes(this.value)">`)}</div>
     <div class="formrow"><label>Laps to Finish</label>${numStepper(`<input id="cLaps" type="number" min="1" value="3">`)}</div>
+    <div class="formrow"><label>Damage</label><label class="chkline"><input id="cFlatDamage" type="checkbox"> Flat 4 instead of rolling 1D6 (Racemaster option, faster game)</label></div>
     <div class="formrow"><label>Apply Leg Modifier To</label>
       <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
     <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
@@ -1591,7 +1425,8 @@ function renderRace() {
     <button class="danger" onclick="App.abandonRace()">Abandon Race</button></div>`;
   html += renderStandings(race);
   if (race.finished) {
-    html += `<section class="card winner"><h2>🏁 Race Complete</h2>${renderFinalStandings(race)}
+    const winner = race.winnerId ? race.participants.find(p => p.id === race.winnerId) : null;
+    html += `<section class="card winner"><h2>🏁 Race Complete</h2>${winner ? `<p><b>${esc(participantLabel(winner))}</b> wins!</p>` : `<p>Every Hero ship was destroyed.</p>`}${renderFinalStandings(race)}
       <button onclick="App.abandonRace()">Start a New Race</button></section>`;
     html += renderLog(race);
     return html;
@@ -1602,173 +1437,63 @@ function renderRace() {
   html += `<section class="card"><h2>Leg ${race.legIndex + 1}</h2>
     <p><b>Tier ${leg.tier}</b> — ${esc(leg.feature)} ${leg.mod !== 0 ? `<span class="tag">Mod ${leg.mod >= 0 ? "+" : ""}${leg.mod}</span>` : ""} — <b>Target Number: ${leg.finalTN}</b>${tnTag}</p>
   </section>`;
-  html += renderDeclarations(race);
-  if (race.legState.declLocked) html += renderResolve(race);
+  html += renderTurnPanel(race);
   html += renderLog(race);
   return html;
 }
 
-/* ---------- Declarations ---------- */
-function renderDeclarations(race) {
+/* ---------- Turn order and the active turn ---------- */
+function renderTurnPanel(race) {
   const ls = race.legState;
-  const { header, collapsed } = renderPhaseCardOpen(race, "decl", "Declare Intentions");
-  let html = header;
-  if (ls.declLocked) {
-    if (!collapsed) {
-      html += `<table class="mktable decltable"><tr><th>Racer</th><th>Gear</th><th>Slip D</th><th>Maneuver</th><th>Maneuver Rec'd</th><th>Maneuver Inst'd</th><th title="Slip D + Gear-4/5 D + Movement-exceeds-TN D + Maneuver Rec'd + Maneuver Inst'd -- the net fed into this car's Skill Check, if one is triggered.">Net</th></tr>`;
-      race.participants.forEach(p => {
-        if (p.out && p.outLeg !== race.legIndex) return;
-        const car = ls.cars[p.id];
-        const slipTag = car.slip ? ` <span class="tag">Slipped ${car.slip} ${car.slipHexes} (${netLabel(-(car.slipD || 0))})</span>` : "";
-        const maneuverTarget = race.participants.find(x => x.id === car.maneuverTarget);
-        const maneuverText = car.maneuver ? `${car.maneuver}${maneuverTarget ? ` (${participantLabel(maneuverTarget)})` : ""}` : "—";
-        html += `<tr>${renderRacerCell(p)}<td>${p.gear}${car.gearChange ? ` (${car.gearChange > 0 ? "+" : ""}${car.gearChange})` : ""}</td><td>${p.lane}${slipTag}</td>
-          <td>${maneuverText}</td><td>${netLabel(-car.maneuverReceivedD)}</td><td>${netLabel(-car.maneuverInstigatedD)}</td><td>${netLabel(car.net)}</td></tr>`;
-      });
-      html += `</table>`;
-    }
-    html += `</section>`;
-    return html;
-  }
-  const heroes = race.participants.filter(p => p.type === "hero" && (!p.out || p.outLeg === race.legIndex));
-  const allDeclared = heroes.every(p => ls.cars[p.id].declared);
-  html += `<p class="muted">Intentions are declared privately, one ship at a time. Once every ship has declared, lock to reveal them all at once.</p>`;
-  html += `<table class="mktable"><tr><th>Ship</th><th>Status</th><th></th></tr>`;
-  heroes.forEach(p => {
-    const car = ls.cars[p.id];
-    html += `<tr><td>${iconThumbImg(getShip(p.shipId))} ${esc(shipName(p.shipId))}</td>
-      <td>${car.declared ? '<span class="tag success">Declared</span>' : '<span class="tag">Not yet declared</span>'}</td>
-      <td><button class="${car.declared ? "ghost" : ""}" onclick="App.openDeclModal('${p.id}')">${car.declared ? "Review / Edit" : "Declare Intentions"}</button></td></tr>`;
+  const next = nextTurnParticipant(race);
+  let html = `<section class="card"><h3>Turn order (lowest Thrust first)</h3>
+    <table class="mktable"><tr><th>#</th><th>Racer</th><th>Thrust</th><th>Status</th></tr>`;
+  ls.order.forEach((id, i) => {
+    const p = race.participants.find(x => x.id === id);
+    if (!p) return;
+    const status = p.out ? "Wreck" : ls.cars[id].turnDone ? "Done" : (next && next.id === id ? "Up next" : "Waiting");
+    html += `<tr><td>${i + 1}</td><td>${esc(participantLabel(p))}${p.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${carStats(p).thrust}</td><td>${status}</td></tr>`;
   });
   html += `</table>`;
-  html += `<button ${allDeclared ? "" : "disabled"} onclick="App.lockDecl()">Lock Declarations (Reveal)</button>`;
-  if (!allDeclared) html += ` <span class="muted">Waiting on: ${heroes.filter(p => !ls.cars[p.id].declared).map(p => esc(shipName(p.shipId))).join(", ")}</span>`;
-  html += `</section>`;
-  if (STATE._openDeclFor && ls.cars[STATE._openDeclFor]) html += renderDeclModal(race, STATE._openDeclFor);
-  return html;
+  if (next && next.type === "hero") html += renderHeroTurnForm(race, next);
+  return html + `</section>`;
 }
-function renderRacerCell(p) {
-  const name = p.type === "hero" ? shipName(p.shipId) : p.name;
-  const icon = p.type === "hero" ? getShip(p.shipId) : p;
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const line1 = esc(words[0] || "");
-  const line2 = esc(words.slice(1).join(" "));
-  const note = p.type === "npc" ? `NPC, Aggr ${p.aggression || 5}` : "";
-  return `<td class="racercell">${iconThumbImg(icon)}<span class="racerlines"><span>${line1}</span><span>${line2}</span><span class="muted">${esc(note)}</span></span></td>`;
-}
-function renderDeclModal(race, pid) {
-  const ls = race.legState, car = ls.cars[pid];
-  const p = race.participants.find(x => x.id === pid);
+function renderHeroTurnForm(race, p) {
+  const car = race.legState.cars[p.id];
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
-  const others = race.participants.filter(x => x.id !== pid && !x.out && hexesWithinManeuverRange(geom, p, x));
-  const slipMaxLeft = p.lane - 1, slipMaxRight = course.lanes - p.lane;
   const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
-  const slipMax = car.slip === "left" ? slipMaxLeft : car.slip === "right" ? slipMaxRight : 0;
-  return `<div class="modal-overlay" onclick="if(event.target===this) App.closeDeclModal()">
-    <div class="modal-box">
-      <div class="row spread"><h3>${iconThumbImg(getShip(p.shipId))} ${esc(shipName(p.shipId))} — Declare Intentions</h3><button class="ghost" onclick="App.closeDeclModal()">✕</button></div>
-      <div class="formrow"><label>Gear (currently ${p.gear})</label>
-        <select onchange="App.setDecl('${pid}','gearChange',this.value)">
-          <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down (-1)</option>
-          <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
-          <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
-        </select>
-        <span class="muted">-> Gear ${newGear} this Leg (${newGear === 0 ? "no movement" : `${GDATA.GEAR_DICE[newGear].n}D${GDATA.GEAR_DICE[newGear].d} + Thrust`})</span></div>
-      <div class="formrow"><label>Slip (currently Lane ${p.lane})</label>
-        <select onchange="App.setDecl('${pid}','slip',this.value)">
-          <option value="" ${!car.slip ? "selected" : ""}>No change</option>
-          ${slipMaxLeft > 0 ? `<option value="left" ${car.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
-          ${slipMaxRight > 0 ? `<option value="right" ${car.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
-        </select>
-        ${car.slip ? ` ${numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipHexes || 1), Math.max(1, slipMax))}" onchange="App.setDecl('${pid}','slipHexes',this.value)" style="width:56px">`)} hex(es) / ${slipMax} max` : ""}
-      </div>
-      <p class="muted" style="margin:-4px 0 10px">A Skill Check this Leg is triggered by: Slip (the first hex is free, each extra hex is +1 Disadvantage), being in Gear 4 (triggers, no Disadvantage) or Gear 5 (triggers, +1 Disadvantage), this Leg's movement exceeding the Leg's TN (+1 Disadvantage), making an Attack (+1 Disadvantage, plus +1 more to the target if it hits), or running/receiving Nudge/Block/Ram (their own Disadvantage either way). Two cars can never end a Leg on the same hex -- a collision also triggers a check (no Disadvantage of its own), and an unavoidable one drifts you to an open neighboring hex, or (if fully boxed in) rolls you straight onto the Out-of-Control Chart instead. An inward Slip that touches a curve still grants bonus Movement (Slingshot), separately from all of this.</p>
-      <div class="formrow" style="align-items:flex-start"><label>Maneuver</label><div style="flex:1;min-width:0">
-        <select class="monoselect" onchange="App.setManeuver('${pid}',this.value)">
-          <option value="">none</option>
-          ${GDATA.MANEUVERS.map(m => `<option value="${m.name}" ${car.maneuver === m.name ? "selected" : ""}>${padNbsp(m.name, 10)}${m.desc}</option>`).join("")}
-        </select>
-        ${car.maneuver ? `<div class="chkgrid" style="margin-top:6px">${others.length ? others.map(o => `<label class="chkline"><input type="radio" name="mantarget-${pid}" ${car.maneuverTarget === o.id ? "checked" : ""} onchange="App.setManeuverTarget('${pid}','${o.id}')"> ${esc(participantLabel(o))}</label>`).join("") : `<span class="muted">no other racers in range</span>`}</div>` : ""}
-      </div></div>
-      <button onclick="App.confirmDecl('${pid}')">I'm Done — Confirm Declaration</button>
+  const dice = (GDATA.GEAR_TABLE[newGear] || {}).dice || 0;
+  const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod;
+  const maxLeft = p.lane - 1, maxRight = course.lanes - p.lane;
+  const slipMax = car.slip === "left" ? maxLeft : car.slip === "right" ? maxRight : 0;
+  const targets = race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, p, x));
+  return `<div class="subcard"><div class="row">${iconThumbImg(getShip(p.shipId))} <b>${esc(shipName(p.shipId))}</b>${shipStatusTags(p)} <span class="muted">Pending Disadvantage: ${car.pendingD}</span></div>
+    <div class="formrow"><label>Gear (now ${p.gear})</label>
+      <select onchange="App.setTurn('${p.id}','gearChange',this.value)">
+        <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down (-1)</option>
+        <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
+        <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up (+1)</option>
+      </select>
+      <span class="muted">-> Gear ${newGear}: ${dice ? `${dice}D6 + Thrust` : "no movement"}${mod ? `, Control check ${mod}` : ""}</span></div>
+    <div class="formrow"><label>Slip</label>
+      <select onchange="App.setTurn('${p.id}','slip',this.value)">
+        <option value="" ${!car.slip ? "selected" : ""}>No Slip</option>
+        ${maxLeft > 0 ? `<option value="left" ${car.slip === "left" ? "selected" : ""}>Slip Left (inward)</option>` : ""}
+        ${maxRight > 0 ? `<option value="right" ${car.slip === "right" ? "selected" : ""}>Slip Right (outward)</option>` : ""}
+      </select>
+      ${car.slip ? numStepper(`<input type="number" min="1" max="${Math.max(1, slipMax)}" value="${Math.min(Math.max(1, car.slipCount || 1), Math.max(1, slipMax))}" onchange="App.setTurn('${p.id}','slipCount',this.value)" style="width:56px">`) + ` lateral hex(es), max ${slipMax}` : ""}
     </div>
+    <div class="formrow"><label>Attack</label>
+      <select onchange="App.setTurn('${p.id}','attackTargetId',this.value)">
+        <option value="">No attack</option>
+        ${targets.map(t => `<option value="${t.id}" ${car.attackTargetId === t.id ? "selected" : ""}>${esc(participantLabel(t))}</option>`).join("")}
+      </select>
+      <span class="muted">${targets.length ? "one attack per turn, within 2 hexes" : "no racer within 2 hexes"}</span>
+    </div>
+    <p class="muted">Movement, Slips, the Control check, obstacles, and any attack all resolve when you take the turn. Ships act one at a time in Thrust order.</p>
+    <button onclick="App.takeTurn('${p.id}')">Take turn</button>
   </div>`;
-}
-function renderPhaseCardOpen(race, key, title) {
-  const ls = race.legState;
-  ls.phaseCollapsed = ls.phaseCollapsed || {};
-  const collapsed = !!ls.phaseCollapsed[key];
-  const header = `<section class="card"><h3>
-    <button class="ghost collapse-btn" title="${collapsed ? "Expand" : "Collapse"}" onclick="App.togglePhaseCollapse('${key}')">${collapsed ? "▸" : "▾"}</button>
-    ${title}
-  </h3>`;
-  return { header, collapsed };
-}
-
-/* ---------- Resolve: gear movement + (if triggered) the Skill Check ---------- */
-function renderResolve(race) {
-  const ls = race.legState;
-  let html = `<section class="card"><h3>Resolve the Leg</h3>`;
-  const active = race.participants.filter(p => !p.out || p.outLeg === race.legIndex);
-  active.forEach(p => {
-    const car = ls.cars[p.id];
-    const label = p.type === "hero" ? shipName(p.shipId) : p.name;
-    html += `<div class="subcard"><div class="row">${iconThumbImg(p.type === "hero" ? getShip(p.shipId) : p)} <b>${esc(label)}</b>${shipStatusTags(p)}</div>`;
-    if (p.out) { html += `</div>`; return; }
-    const dTags = [];
-    if (car.slipD) dTags.push(`Slip ${netLabel(-car.slipD)}`);
-    const gearD = GDATA.GEAR_TRIGGER_D[p.gear] || 0;
-    if (gearD) dTags.push(`Gear ${p.gear} ${netLabel(-gearD)}`);
-    if (car.gearMovement > ls.leg.finalTN) dTags.push(`Movement &gt; TN ${netLabel(-1)}`);
-    html += `<p>Gear ${p.gear}: rolled <b>${car.gearMovement}</b> hex${car.gearMovement === 1 ? "" : "es"} this Leg${dTags.length ? ` (${dTags.join(", ")})` : ""}</p>`;
-    if (car.maneuver) {
-      const target = race.participants.find(x => x.id === car.maneuverTarget);
-      if (car.maneuver === "Attack" && car.attackResult) {
-        html += `<p>Attack on ${target ? esc(participantLabel(target)) : "?"}: ${car.attackResult.hit ? `<b>Hit</b> for ${car.attackResult.dmg} HP` : "<b>Miss</b>"}</p>`;
-      } else if (car.maneuver) {
-        html += `<p>${esc(car.maneuver)}${target ? ` on ${esc(participantLabel(target))}` : ""}</p>`;
-      }
-    }
-    if (p.type === "hero") {
-      if (!car.triggered) {
-        html += `<p class="muted">No Skill Check needed this Leg.</p>`;
-      } else if (!car.skillCheck) {
-        html += `<p class="muted">Net: <b>${netLabel(car.net)}</b> vs TN ${ls.leg.finalTN}</p>
-          <button onclick="App.doSkillCheck('${p.id}')">Roll Skill Check</button>`;
-      } else {
-        const rc = car.skillCheck;
-        html += `<p>Rolled ${rc.dice.join(", ")} → chosen ${rc.chosen} + ${carStats(p).skill} = <b>${rc.total}</b> vs TN ${rc.tn} → <b>${outcomeLabel(rc)}</b></p>`;
-        const tier = carTier(carDivision(p));
-        const rollsNeeded = rc.fumbleLevels;
-        const rollsDone = car.outOfControlRolls.length;
-        if (rollsDone < rollsNeeded) {
-          html += `<button class="ghost" onclick="App.doOutOfControl('${p.id}')">Roll on Out-of-Control Chart${rollsNeeded > 1 ? ` (${rollsDone + 1} of ${rollsNeeded})` : ""}</button>`;
-        } else {
-          car.outOfControlRolls.forEach((roll, i) => {
-            html += `<p class="fumbletext">${rollsNeeded > 1 ? `<b>Roll ${i + 1} of ${rollsNeeded}:</b> ` : ""}${esc(roll.text)}</p>
-              <p class="muted">Applied: ${describeOutOfControlAffects(roll.applied, tier)}</p>`;
-          });
-        }
-      }
-    } else if (car.triggered && car.skillCheck) {
-      const rc = car.skillCheck;
-      html += `<p class="muted">Skill Check: rolled ${rc.dice.join(", ")} → <b>${rc.total}</b> vs TN ${rc.tn} → ${outcomeLabel(rc)}</p>`;
-      if (car.outOfControlRolls.length) car.outOfControlRolls.forEach(roll => { html += `<p class="fumbletext">${esc(roll.text)}</p>`; });
-    }
-    html += `</div>`;
-  });
-  const allResolved = active.every(p => {
-    if (p.out) return true;
-    const car = ls.cars[p.id];
-    if (!car.triggered) return true;
-    if (!car.skillCheck) return false;
-    return car.outOfControlRolls.length >= car.skillCheck.fumbleLevels;
-  });
-  html += `<button ${allResolved ? "" : "disabled"} onclick="App.doFinishLeg()">Finish Leg &amp; Update Board</button>`;
-  if (!allResolved) html += ` <span class="muted">Waiting on every triggered Skill Check (and any Out-of-Control rolls) to finish.</span>`;
-  html += `</section>`;
-  return html;
 }
 function shipStatusTags(p) {
   const maxHp = p.maxHp != null ? p.maxHp : 0;
@@ -1776,7 +1501,7 @@ function shipStatusTags(p) {
   let tags = "";
   const hpDanger = p.out || hp < maxHp / 2;
   tags += ` <span class="tag${hpDanger ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
-  if (p.out) tags += ` <span class="tag danger">${p.type === "hero" ? "OOC — out of race" : "out — removed from race"}</span>`;
+  if (p.out) tags += ` <span class="tag danger">${p.type === "hero" ? "Destroyed" : "Wreck"}</span>`;
   return tags;
 }
 
@@ -1786,10 +1511,9 @@ function renderFinalStandings(race) {
   const ringParams = hexRingParamsForCourse(course);
   const sorted = [...race.participants].sort((a, b) => trackProgress(b, ringParams) - trackProgress(a, ringParams));
   let html = `<ol class="finallist">`;
-  sorted.forEach((p, i) => {
-    const label = p.type === "hero" ? shipName(p.shipId) : p.name + " (NPC)";
-    const oocTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
-    html += `<li>${i === 0 ? "🏆 " : ""}<b>${esc(label)}</b> — ${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} hexes${oocTag}</li>`;
+  sorted.forEach(p => {
+    const oocTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "Destroyed" : "Wreck"}</span>` : "";
+    html += `<li><b>${esc(participantLabel(p))}</b> — ${Math.min(p.laps || 0, course.laps)}/${course.laps} laps, Lane ${p.lane}, ${p.cumulative} hexes${oocTag}</li>`;
   });
   html += `</ol>`;
   return html;
@@ -1797,17 +1521,13 @@ function renderFinalStandings(race) {
 function renderLog(race) {
   if (!race.log.length) return "";
   let html = `<section class="card"><details><summary>Race Log</summary>`;
-  [...race.log].reverse().forEach(entry => {
-    html += `<h4>Leg ${entry.legIndex + 1}</h4><table class="mktable"><tr><th>Pos</th><th>Racer</th><th>Movement</th></tr>`;
-    entry.rows.forEach(r => {
-      html += `<tr><td>${r.position}</td><td>${esc(r.name)}${r.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${r.out ? "OOC" : "+" + r.movement}</td></tr>`;
+  const byLeg = new Map();
+  race.log.forEach(e => { if (!byLeg.has(e.legIndex)) byLeg.set(e.legIndex, []); byLeg.get(e.legIndex).push(e); });
+  [...byLeg.keys()].reverse().forEach(li => {
+    html += `<h4>Leg ${li + 1}</h4>`;
+    byLeg.get(li).forEach(e => {
+      html += `<p><b>${esc(e.name)}</b></p><ul>${e.lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>`;
     });
-    html += `</table>`;
-    if (entry.outOfControl && entry.outOfControl.length) {
-      html += `<div class="logfumbles"><b>Out of Control this Leg:</b>`;
-      entry.outOfControl.forEach(f => { html += `<p class="fumbletext"><b>${esc(f.name)}:</b> ${esc(f.text)}</p>`; });
-      html += `</div>`;
-    }
   });
   html += `</details></section>`;
   return html;
@@ -1843,29 +1563,32 @@ function renderIntroduction() {
 function renderInstructions() {
   return `<section class="card"><h2>How to Use This App</h2>
     <p class="muted" style="margin-top:-6px">v${APP_VERSION}</p>
-    <p class="muted">Build things in this order, then run the race.</p>
+    <p class="muted">Build things in this order, then run the race. Rules follow Circus Astralis (see RULE_CHANGES.md 2026-10-05).</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is a reusable hull: a Division (picks its Tier and flavor pool, nothing else mechanical), a White icon number, and six numbers -- Thrust (G's, base 3), Hit Points (base 10), Control (base 5, no effect yet), Gunner (base 5), Damage (base 1D6), Armor (base 1) -- bought up from those baselines on a construction-point budget of Tier x 10. Raising a stat one point above its baseline costs 1 construction point, the next costs 2 more (3 total), the next costs 3 more (6 total), and so on; Damage works the same way but adds to the 1D6 instead of a bare number. Thrust adds to every Leg's gear-die movement; Gunner/Damage/Armor only matter if you run the Attack Maneuver. Multiple Ships can be assembled from one Class (Hangar Bay).</p>
+    <p>A Ship Class is a reusable hull: a Division (sets its Tier, and so its construction points: Tier × 10), a White icon, and six stats -- Thrust, Hit Points, Control, Gunner, Damage (1D6 plus a bonus), and Armor -- bought up from base values (Thrust 3, Hit Points 10, Control 5, Gunner 5, Armor 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
 
     <h3>2. Cantina — build Crewmen</h3>
-    <p>Skill lives on a Crewman, not the Ship. Every Crewman starts at Skill Mk5 for free; raising it further costs banked XP (same cost progression as above: Mk5-&gt;Mk6 costs 6, Mk6-&gt;Mk7 costs 7...), earned by racing -- see Step 4. Whichever Crewman is assigned to pilot a Ship is whose Skill rolls that Ship's Skill Checks.</p>
+    <p>Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner, one point per increase. A ship's crew shares one Pilot and one Gunner value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks.</p>
 
     <h3>3. Hangar Bay — assemble ships</h3>
-    <p>A Ship is just a name, a chosen Ship Class, an assigned Crewman, and (once the Class has an icon) a Red/Green/Blue color for that same icon number. A Ship needs a Crewman assigned to be race-legal.</p>
+    <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot and Gunner values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to 3 bonus points spread over up to 3 stats, in exchange for a -3 penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
 
     <h3>4. Racecourse &amp; Race — run it</h3>
-    <p>Every course is a Circular Track: a real hex-grid, 6 lanes, each exactly 6 hexes longer per lap than the one inside it. Set the Division (flavor + Tier), inner lane hex count, and laps to finish -- the race has no fixed Leg count, it ends the moment any racer completes the required laps. Race Setup filters selectable ships to the course's Division (race-legal ones only), and you can add NPC racers -- full cars in their own right, built automatically from the same budget, each with an Aggression score (1-10) that drives its behavior. Each Leg:</p>
+    <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
+    <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). On a ship's turn:</p>
     <ol>
-      <li><b>Declare</b> — shift your gear by at most 1 (0-5), optionally Slip a lane (Circular Track), and optionally run one Maneuver against a car within 2 hexes. NPCs declare automatically, driven by their Leg Aggression (Aggression + current standings position - 1 -- a car further back gambles more).</li>
-      <li><b>Resolve</b> — movement is unconditional: your current gear's dice (1D10 up to 3D20, scaling with gear 1-5; gear 0 is no movement) plus your Thrust stat, rolled fresh every Leg. Two cars can never occupy the same hex -- movement is resolved in order of lowest Thrust stat first, and a car whose path would land on an already-occupied hex drifts to an open neighboring hex, or rolls straight onto the Out-of-Control Chart if fully boxed in (this also triggers a Skill Check, with no Disadvantage of its own). A Skill Check (d20 + Skill + Disadvantage vs the Leg's TN) is also triggered by, and gets +1 Disadvantage per hex of Slip beyond the first, +1 Disadvantage if this Leg's movement exceeds the TN, nothing extra for Gear 4 beyond triggering the check, +1 Disadvantage for Gear 5, +1 Disadvantage for making an Attack (plus +1 more to the target if it hits), or running/receiving Nudge/Block/Ram (their own Disadvantage either way) -- all of these stack into one combined check. Success is binary (no bonus); a failed check rolls once on the Out-of-Control Chart per Fumble Level, and every roll's effects stack.</li>
-      <li><b>Attack</b> is the one Maneuver with its own roll: the instigator's Gunner score vs the Leg's TN. A hit deals 1D6 + the instigator's Damage bonus (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. It still costs the instigator 1 Disadvantage on their own Skill Check either way.</li>
-      <li>A ship reduced to 0 HP (by Attack or an Out-of-Control hit) is marked out of the race and frozen at its crash position for the rest of the race.</li>
-      <li>Every Hero who finishes the race (completes the required laps) banks XP for its assigned Crewman -- more for finishing in the best real track position -- spendable in the Cantina.</li>
+      <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
+      <li><b>Slip</b> — optionally shift sideways one hex per Slip, as part of your movement. The first Slip is free; two or more trigger a Control check at Disadvantage.</li>
+      <li><b>Control check</b> — if the ship moves 5 or more hexes, or Slips more than once, roll 1D20 + Control + Pilot against the Leg's TN. Gear and Leg modifiers apply here: Gear 1 = AA, Gear 2 = A, Gear 4 = D, Gear 5 = DD, two or more Slips = D, moving more hexes than the Leg TN = D, and any Disadvantage carried in from earlier hits or fumbles. Success moves full distance (plus one bonus hex per Critical). Failure moves half the intended distance and cancels Slips. Every Fumble (a Disadvantage roll where both dice fail) rolls the Fumble Chart once.</li>
+      <li><b>Walk</b> — the ship moves hex by hex. Entering a hex with another ship (active or wreck) forces a Control check against the TN: on success the ship passes through, on failure it stops short of the obstacle. If it lands on an obstacle, it slips free into an open hex beside it instead; if every adjacent hex is blocked, it rolls the Fumble Chart and its turn ends.</li>
+      <li><b>Attack</b> — optionally, one Gunner attack against a racer within 2 hexes. Roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
     </ol>
+    <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
+
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 
-    <p class="muted">The <b>Reference</b> tab has the Division table, the Maneuvers list, the Out-of-Control Chart, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
+    <p class="muted">The <b>Reference</b> tab has the Division table, the Gear table, the Task Check modifiers, the Fumble Chart, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
   </section>`;
 }
 function renderReference() {
@@ -1883,37 +1606,33 @@ function renderReference() {
   </section>`;
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
-    <tr><th>Division</th><th>Tier</th><th>Crew</th><th>Construction Points</th></tr>
+    <tr><th>Division</th><th>Tier</th><th>Crew (flavor)</th><th>Construction Points</th></tr>
     ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
   </table>
-  <p class="muted">Every Ship Class stat (Thrust/Hit Points/Control/Gunner/Damage/Armor) starts at its own baseline and costs the same to raise: 1 point above baseline costs 1 construction point, the next costs 2 more, the next 3 more, and so on (Damage adds to its 1D6 the same way). A Ship Class's construction-point budget is Tier x 10. A Crewman's Skill starts at Mk${GDATA.CREWMAN_SKILL_BASE} for free and climbs the same way, but spent from XP banked by racing (${GDATA.CREWMAN_XP.finish} XP for finishing, +${GDATA.CREWMAN_XP.win} more for the best finish) instead of a construction-point budget.</p></section>`;
+  <p class="muted">Every Ship Class stat costs the same: 1 point for the first increase above base, 2 for the next, 3 for the one after, and so on.</p></section>`;
 
-  html += `<section class="card"><h2>Skill Check Triggers</h2>
-    <p class="muted">Any one of these triggers this Leg's Skill Check; if more than one applies, their Disadvantage stacks into that one combined roll.</p>
-    <table class="mktable">
-    <tr><th>Trigger</th><th>Disadvantage</th></tr>
-    <tr><td>Slip, per hex beyond the first</td><td>1 D per hex</td></tr>
-    <tr><td>In Gear 4 this Leg</td><td>triggers, no Disadvantage</td></tr>
-    <tr><td>In Gear 5 this Leg</td><td>1 D</td></tr>
-    <tr><td>This Leg's movement exceeds the TN</td><td>1 D</td></tr>
-    <tr><td>Made an Attack this Leg</td><td>1 D</td></tr>
-    <tr><td>Hit by an Attack this Leg</td><td>1 D per hit</td></tr>
-    <tr><td>Ran Nudge/Block/Ram this Leg</td><td>own selfD -- see Racing Maneuvers below</td></tr>
-    <tr><td>Hit by Nudge/Block/Ram this Leg</td><td>own targetD -- see Racing Maneuvers below</td></tr>
-    <tr><td>Path crosses/lands on another car's hex</td><td>none (still triggers)</td></tr>
+  html += `<section class="card"><h2>Gear Table</h2>
+    <p class="muted">Shift one gear per Leg (0-5). Movement is the dice plus the ship's Thrust.</p>
+    <table class="mktable"><tr><th>Gear</th><th>Movement</th><th>Control check modifier</th></tr>
+    ${[0, 1, 2, 3, 4, 5].map(g => { const e = GDATA.GEAR_TABLE[g]; return `<tr><td>${g}</td><td>${e.dice ? `${e.dice}D6 + Thrust` : "0"}</td><td>${e.mod || "—"}</td></tr>`; }).join("")}
   </table></section>`;
 
-  html += `<section class="card"><h2>Racing Maneuvers</h2>
-    <p class="muted">One Maneuver per car per Leg, against a car within 2 hexes.</p>
-    <table class="mktable">
-    <tr><th>Maneuver</th><th>Description</th><th>Self Cost</th><th>Deals</th></tr>
-    ${GDATA.MANEUVERS.map(m => `<tr><td>${m.name}</td><td>${esc(m.desc)}</td><td>${m.selfD === 1 ? "1 D" : `${m.selfD} D's`}</td><td>${m.targetD == null ? "Attack roll -> Damage stat + 1 D on hit" : (m.targetD === 1 ? "1 D" : `${m.targetD} D's`)}</td></tr>`).join("")}
-  </table></section>`;
+  html += `<section class="card"><h2>Task Check Modifiers</h2>
+    <p class="muted">Applied to Control checks (the Control Task Check and obstacle checks). Each Disadvantage level adds one die; Advantage levels add one die too. Gunner checks have no modifiers.</p>
+    <table class="mktable"><tr><th>Condition</th><th>Modifier</th></tr>
+    <tr><td>Gear 1 / Gear 2</td><td>AA / A</td></tr>
+    <tr><td>Gear 4 / Gear 5</td><td>D / DD</td></tr>
+    <tr><td>Two or more Slips</td><td>D</td></tr>
+    <tr><td>Movement exceeds the Leg TN</td><td>D</td></tr>
+    <tr><td>Each hit taken from an attack (next Control check)</td><td>D per hit</td></tr>
+    <tr><td>Fumble chart roll 18 (next Control check)</td><td>DD</td></tr>
+  </table>
+  <p class="muted">A Control check happens when the ship moves 5+ hexes or Slips more than once. Each obstacle entered also forces one.</p></section>`;
 
-  html += `<section class="card" style="grid-row: span 2;"><h2>Out-of-Control Chart (1d10)</h2>
-    <p class="muted">Rolled once per Fumble Level on a failed Skill Check -- every roll's effects apply and stack.</p>
+  html += `<section class="card" style="grid-row: span 2;"><h2>Fumble Chart (2d10)</h2>
+    <p class="muted">Rolled once per Fumble. Low rolls are beneficial, the middle is annoying, high rolls are catastrophic.</p>
     <table class="mktable"><tr><th>Roll</th><th>Result</th></tr>
-    ${GDATA.OUT_OF_CONTROL.map((o, i) => `<tr><td>${i + 1}</td><td>${esc(o.text)}</td></tr>`).join("")}
+    ${GDATA.FUMBLE_CHART.map(o => `<tr><td>${o.roll}</td><td>${esc(o.text)}</td></tr>`).join("")}
   </table></section>`;
 
   html += `</div>`;
@@ -2030,12 +1749,11 @@ const App = {
   },
   updateCrewman(id, field, val) { getCrewman(id)[field] = val; saveState(); },
   rerollCrewmanName(id) { getCrewman(id).name = rollHeroName(); saveState(); render(); },
-  spendCrewmanXp(id) {
+  updateCrewmanSkill(id, field, val) {
     const crewman = getCrewman(id);
-    const cost = crewmanNextStepCost(crewman);
-    if (crewman.xp < cost) return;
-    crewman.xp -= cost;
-    crewman.skill += 1;
+    const others = crewmanSplitSpent(crewman) - (crewman[field] - GDATA.CREWMAN_BASE);
+    const maxForField = GDATA.CREWMAN_BASE + (GDATA.CREWMAN_SPLIT_POINTS - others);
+    crewman[field] = clampInt(val, GDATA.CREWMAN_BASE, maxForField, crewman[field]);
     saveState(); render();
   },
 
@@ -2078,10 +1796,18 @@ const App = {
     ship.iconColor = color;
     saveState(); render();
   },
-  togglePhaseCollapse(key) {
-    const ls = STATE.race.legState;
-    ls.phaseCollapsed = ls.phaseCollapsed || {};
-    ls.phaseCollapsed[key] = !ls.phaseCollapsed[key];
+  setSponsorBonus(shipId, stat, val) {
+    const ship = getShip(shipId);
+    ship.sponsor = ship.sponsor || { bonus: {}, penalty: "" };
+    ship.sponsor.bonus = ship.sponsor.bonus || {};
+    const others = sponsorBonusTotal(ship.sponsor) - (ship.sponsor.bonus[stat] || 0);
+    ship.sponsor.bonus[stat] = clampInt(val, 0, SPONSOR_BONUS_MAX - others, ship.sponsor.bonus[stat] || 0);
+    saveState(); render();
+  },
+  setSponsorPenalty(shipId, stat) {
+    const ship = getShip(shipId);
+    ship.sponsor = ship.sponsor || { bonus: {}, penalty: "" };
+    ship.sponsor.penalty = stat;
     saveState(); render();
   },
 
@@ -2100,7 +1826,8 @@ const App = {
     const mode = document.getElementById("cMode").value;
     const innerHexes = clampInt(document.getElementById("cInnerHexes").value, 1, 999, 50);
     const laps = clampInt(document.getElementById("cLaps").value, 1, 999, 3);
-    STATE.courses.push({ id: uid("course"), name, division, lanes: 6, innerHexes, laps, legMode: mode });
+    const flatDamage = !!document.getElementById("cFlatDamage").checked;
+    STATE.courses.push({ id: uid("course"), name, division, lanes: 6, innerHexes, laps, legMode: mode, flatDamage });
     saveState(); render();
   },
   deleteCourse(id) {
@@ -2144,6 +1871,7 @@ const App = {
     const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
     if (!shipIds.length) { alert(`Select at least one ${division} Division ship with a Crewman assigned.`); return; }
     startRace(courseId, shipIds, STATE._draftNpcs || []);
+    runAutomaticTurns(STATE.race);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
     saveState(); render();
@@ -2154,70 +1882,36 @@ const App = {
   },
 
   /* Race play */
-  setDecl(pid, field, val) {
+  setTurn(pid, field, val) {
     const race = STATE.race, car = race.legState.cars[pid];
     const p = race.participants.find(x => x.id === pid);
     if (field === "gearChange") {
       car.gearChange = clampInt(val, -1, 1, 0);
-      // Clamp against the board's own min/max gear.
       if (p.gear + car.gearChange < 0) car.gearChange = -p.gear;
       if (p.gear + car.gearChange > GDATA.MAX_GEAR) car.gearChange = GDATA.MAX_GEAR - p.gear;
-      saveState(); render();
-      return;
-    }
-    if (field === "slip") {
+    } else if (field === "slip") {
       car.slip = val;
-      car.slipHexes = val ? (car.slipHexes || 1) : 0;
-      saveState(); render();
-      return;
-    }
-    if (field === "slipHexes") {
+      car.slipCount = val ? Math.max(1, car.slipCount || 1) : 0;
+    } else if (field === "slipCount") {
       const course = getCourse(race.courseId);
-      const maxLane = car.slip === "left" ? p.lane - 1 : course.lanes - p.lane;
-      car.slipHexes = clampInt(val, 1, Math.max(1, maxLane), car.slipHexes || 1);
-      saveState();
-      return;
+      const maxLateral = car.slip === "left" ? p.lane - 1 : course.lanes - p.lane;
+      car.slipCount = clampInt(val, 1, Math.max(1, maxLateral), car.slipCount || 1);
+    } else if (field === "attackTargetId") {
+      car.attackTargetId = val;
     }
-    car[field] = val;
-    saveState();
-  },
-  setManeuver(pid, val) {
-    const car = STATE.race.legState.cars[pid];
-    car.maneuver = val;
-    if (!val) car.maneuverTarget = "";
     saveState(); render();
   },
-  setManeuverTarget(pid, targetId) {
-    STATE.race.legState.cars[pid].maneuverTarget = targetId;
-    saveState();
-  },
-  openDeclModal(pid) { STATE._openDeclFor = pid; render(); },
-  closeDeclModal() { STATE._openDeclFor = null; render(); },
-  confirmDecl(pid) {
-    STATE.race.legState.cars[pid].declared = true;
-    STATE._openDeclFor = null;
-    saveState(); render();
-  },
-  lockDecl() {
+  takeTurn(pid) {
     const race = STATE.race;
-    const heroes = race.participants.filter(p => p.type === "hero" && (!p.out || p.outLeg === race.legIndex));
-    const allDeclared = heroes.every(p => race.legState.cars[p.id].declared);
-    if (!allDeclared) { alert("Not all ships have declared their intentions yet."); return; }
-    lockDeclarations(); render();
-  },
-  doSkillCheck(pid) {
-    const race = STATE.race;
+    if (!race || race.finished) return;
     const p = race.participants.find(x => x.id === pid);
-    rollCarSkillCheck(race, p);
+    if (!p || nextTurnParticipant(race) !== p) return;
+    const car = race.legState.cars[pid];
+    resolveTurn(race, p, { gearChange: car.gearChange, slip: car.slip, slipCount: car.slipCount, attackTargetId: car.attackTargetId });
+    advanceRace(race);
+    runAutomaticTurns(race);
     saveState(); render();
   },
-  doOutOfControl(pid) {
-    const race = STATE.race;
-    const p = race.participants.find(x => x.id === pid);
-    rollOneOutOfControl(race, p);
-    saveState(); render();
-  },
-  doFinishLeg() { finishLeg(); render(); },
   playRaceReplay(lastLegOnly) {
     const race = STATE.race;
     if (!race) return;

@@ -15,6 +15,15 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Race engine rewritten for Circus Astralis (turn-based, sequential)
+- **Scope:** the race layer of `app.js` is replaced. The old simultaneous Declare/Lock/Resolve (`lockDeclarations()`, `finishLeg()`, `resolveCarCollisions()`, `autoDeclareNpc*`, the Maneuver and Skill Check code) is gone. Hex geometry (`resolveSlipPath()`, `circTrackGeometry()`, the replay SVG) is untouched.
+- **New engine:** `initiativeOrder()` (Thrust-ascending with 1D20 tie-breaks), `resolveTurn()` (gear, movement, Slips, Control check, walk with obstacle checks, one attack, history), `advanceRace()` (Leg rollover, race end), `runAutomaticTurns()` (NPC turns run until a hero is up). Heroes choose gear, Slips, and an attack target in the turn form, then press Take turn.
+- **Replay fix:** each turn stores the path it actually walked (`history.path`). Replay draws that path, so an obstacle stop or a fall-off shows correctly.
+- **Data model:** a Crewman is now `{ pilot, gunner }` (no `skill`/`xp`). Ships gain `sponsor` and `flavorCrew`. Race state drops `legState.declLocked`/`phaseCollapsed`. Legs keep `order` and per-car `pendingD`/`turnDone`. Racecourses gain `flatDamage`.
+- **Breaking migration:** `_circusAstralisCrew` clears ships, crewmen, and the race. Ship Classes are kept (their stats didn't change shape).
+- **UI:** the Race tab shows the turn order and the active ship's turn form. The Cantina has Pilot/Gunner steppers with a 5-point split. The Hangar Bay ship card has a sponsor row and a flavor-crew field. Instructions and Reference describe the new rules.
+- **Testing:** `circus_astralis_race_test.html` (12 randomized races to completion, initiative order, gear movement, no-check short moves) and `circus_astralis_rules_test.html` (21 rule checks: failed checks, Slip triggers, AA, hit Disadvantage, fumbles 18 and 20, fall-off, sponsors, crew split, flat damage, all tabs rendering). All pass.
+
 ### 2026-10-03 — Random Class name button
 - Added a 🎲 button next to a Ship Class's name field in the Shipyard
   (`App.rerollShipClassName()`), matching the one already next to a Ship's

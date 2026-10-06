@@ -46,38 +46,36 @@ GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: 
    stores only the BONUS above that die (starting at 0, same cost
    progression as everything else -- +1 costs 1pt, +2 costs 3pt total, +3
    costs 6pt total...), and the actual roll (1D6 + bonus) happens when an
-   Attack is resolved (see applyAttack() in app.js), not baked into a single
+   Attack is resolved (see resolveTurn() in app.js), not baked into a single
    number the way every other stat is. */
 GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damage", "armor"];
 GDATA.STAT_BASE = { thrust: 3, points: 10, control: 5, gunner: 5, armor: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
 GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
 
-/* ---------- Crewman Skill (see RULE_CHANGES.md 2026-10-03: Skill split off
-   the ship onto a Crewman, Cantina tab) ----------
-   Every Crewman starts at Skill Mk5 for free. Raising it further uses the
-   SAME triangular progression as Ship Class stats (Mk5->Mk6 costs 6, Mk6->Mk7
-   costs 7, ...), but spent from the Crewman's own banked XP, not a Tier
-   budget -- XP is earned by racing, not bought at creation. See
-   GDATA.CREWMAN_XP for how much a race pays out. */
-GDATA.CREWMAN_SKILL_BASE = 5;
-// Judgment call (see RULE_CHANGES.md) -- easy to retune later. Every Hero
-// participant that FINISHES the race (completes the required laps, any
-// placement) banks `finish` XP for its assigned Crewman; whoever wins
-// (1st place) additionally banks `win` on top of that.
-GDATA.CREWMAN_XP = { finish: 1, win: 2 };
+/* ---------- Crewmen (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ----------
+   Each crewman starts at Pilot-5 and Gunner-5, then receives 5 points to
+   divide between the two skills, at one point per increase -- a one-time
+   build, no XP, no leveling after creation. A ship's crew shares one Pilot
+   and one Gunner value; any additional crew members are flavor only. */
+GDATA.CREWMAN_BASE = 5;
+GDATA.CREWMAN_SPLIT_POINTS = 5;
 
-/* ---------- Movement Category (GASCAR's own gear table, revised 2026-10-03) ----------
-   Shift by at most 1 level per Leg (clamped 0-5, starts at 0). The rolled
-   dice (plus the car's own Thrust stat) are that Leg's hex movement --
-   rolled unconditionally every Leg, independent of the Skill Check below. */
-GDATA.GEAR_DICE = { 0: null, 1: { n: 1, d: 10 }, 2: { n: 2, d: 10 }, 3: { n: 1, d: 20 }, 4: { n: 2, d: 20 }, 5: { n: 3, d: 20 } };
+/* ---------- Gear table (Circus Astralis) ----------
+   Each Leg a ship may shift gear by at most one level (0-5). Movement is the
+   listed dice plus the ship's Thrust (gear 0 has no movement at all). The
+   modifier is the Task Check modifier applied to that Leg's Control Task
+   Check (see RULE_CHANGES.md 2026-10-05): AA = two levels of Advantage,
+   A = one, D = one Disadvantage, DD = two. */
+GDATA.GEAR_TABLE = {
+  0: { dice: 0, mod: null },
+  1: { dice: 1, mod: "AA" },
+  2: { dice: 2, mod: "A" },
+  3: { dice: 3, mod: null },
+  4: { dice: 4, mod: "D" },
+  5: { dice: 5, mod: "DD" }
+};
 GDATA.MAX_GEAR = 5;
-// Being in Gear 4 or 5 this Leg is one of the Skill Check triggers (see
-// RULE_CHANGES.md 2026-10-03). Gear 4 triggers the check but adds no
-// Disadvantage of its own; Gear 5 triggers AND adds 1 Disadvantage. Gear 0-3
-// never trigger on their own.
-GDATA.GEAR_TRIGGER = 4;
-GDATA.GEAR_TRIGGER_D = { 5: 1 };
+GDATA.DIE_SIDES = 6; // movement and damage both roll 1D6
 
 /* ---------- Ship icon art (webapp/Divisions/Ship Icons/) ----------
    Every Division has its own full 15-number x 4-color set. A Ship Class
@@ -252,52 +250,41 @@ GDATA.SPACE_LEG_FEATURES = [
   ["Clear deep-space sprint between beacons", -2]
 ];
 
-/* ---------- Racing Maneuvers (see RULE_CHANGES.md 2026-10-03) ----------
-   One Maneuver per car per Leg, car vs. car -- no crew positions left to
-   target. Nudge/Block/Ram always land: they deal Disadvantage to the target
-   AND trigger that Leg's Skill Check for both cars; the instigator pays its
-   own `selfD` in Disadvantage on its own Skill Check regardless of outcome.
-   Attack is the odd one out and the only one with its OWN d20+Advantage/
-   Disadvantage roll (the car's Gunner score vs the Leg's TN, resolved via
-   the same rollCheck() as everything else) -- a miss does nothing at all to
-   the target (no trigger, no Disadvantage) and costs the instigator only its
-   own flat selfD; a hit deals 1D6 + the instigator's own Damage bonus,
-   reduced by the target's Armor, to the target's HP, AND 1 Disadvantage to
-   the target's own Skill Check (see applyAttack()/lockDeclarations() in
-   app.js). This gives the Gunner/Damage build stats an actual purpose
-   instead of being dead numbers on an auto-hit. Uniform for a Hero or NPC
-   target -- everyone has HP now, no "NPCs have no HP" special case. */
-GDATA.MANEUVERS = [
-  { name: "Nudge", desc: "A light tap to unsettle the target's line.", selfD: 1, targetD: 1 },
-  { name: "Block", desc: "Cut across the target's line, forcing them wide.", selfD: 1, targetD: 2 },
-  { name: "Ram", desc: "A hard, deliberate hit to shove the target off its mark.", selfD: 2, targetD: 3 },
-  { name: "Attack", desc: "Fire weapons at the target: roll the instigator's own Gunner score vs the Leg's TN. A hit deals 1D6 + the instigator's Damage bonus (reduced by the target's Armor) to the target's HP, plus 1 Disadvantage to the target's own Skill Check; a miss does nothing further. Still costs the instigator 1 Disadvantage either way. Usually illegal.", selfD: 1, targetD: null }
-];
-
-/* ---------- Out-of-Control Chart (Circus Maximus's stumble chart, converted to
-   GASCAR's hex track -- see RULE_CHANGES.md 2026-10-03) ----------
-   Rolled 1D10, once per Fumble Level (see rollCheck()'s fumbleLevels) on a
-   failed Skill Check -- every roll's effects apply; they stack. One
-   universal chart for every car, Tier and Division don't change which chart
-   is used (see RULE_CHANGES.md). `affects` is the exact, structured
-   mechanics applied automatically (see applyOutOfControlAffects() in
-   app.js):
-     { type: "hp", tierMult }      -- Tier x tierMult HP damage, reduced by Armor (min 0).
-     { type: "loseHexes", amount } -- lose this many hexes of this Leg's own movement (min 0 total).
-     { type: "laneShift", dir }    -- pushed 1 lane "in" (toward lane 1) or "out" (toward the highest lane), if room.
-     { type: "gearReset" }         -- Movement Category drops to 1 for next Leg.
-     { type: "stopped" }           -- this Leg's movement ends right now (0 hexes left to move). */
-GDATA.OUT_OF_CONTROL = [
-  { text: "Out of control, but you recover -- no ill effect.", affects: [] },
-  { text: "Out of control -- you lose ground, falling back a couple hexes.", affects: [{ type: "loseHexes", amount: 2 }] },
-  { text: "Out of control -- pushed toward the inside of the track.", affects: [{ type: "laneShift", dir: "in" }] },
-  { text: "Out of control -- pushed toward the outside of the track.", affects: [{ type: "laneShift", dir: "out" }] },
-  { text: "Out of control -- you lose significant ground this Leg.", affects: [{ type: "loseHexes", amount: 4 }] },
-  { text: "Out of control -- a glancing hit rattles the hull.", affects: [{ type: "hp", tierMult: 1 }] },
-  { text: "Out of control -- a hard knock, and you're shoved toward the inside.", affects: [{ type: "hp", tierMult: 1 }, { type: "laneShift", dir: "in" }] },
-  { text: "Out of control -- a solid hit to the hull.", affects: [{ type: "hp", tierMult: 2 }] },
-  { text: "Out of control -- a solid hit, and you lose ground recovering.", affects: [{ type: "hp", tierMult: 2 }, { type: "loseHexes", amount: 3 }] },
-  { text: "Skids out completely -- a heavy hit, dropped to first gear, and your Leg ends right there.", affects: [{ type: "hp", tierMult: 3 }, { type: "gearReset" }, { type: "stopped" }] }
+/* ---------- Fumble Chart (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ----------
+   Roll 2D10, once per Fumble (a Control Task Check where both dice fail when
+   at Disadvantage counts as one Fumble -- see rollCheck()'s fumbleLevels).
+   Low rolls are beneficial, the middle is annoying, high rolls catastrophic.
+   Entries are indexed by (roll - 2). `affects` is the structured mechanics
+   applied automatically (see applyFumbleAffects() in app.js):
+     { type: "hp", tierMult }        -- Tier x tierMult HP, reduced by Armor (min 0).
+     { type: "loseHexes", amount }   -- lose this many hexes of this turn's movement; a
+                                         NEGATIVE amount is a GAIN of that many bonus hexes.
+     { type: "laneShift", dir, forced } -- one lane "in" (toward lane 1) or "out". If the
+                                         lane is not available, a forced shift throws the
+                                         ship off the track; an unforced one does nothing.
+     { type: "gearReset", to }       -- gear becomes `to` (applies from the next Leg).
+     { type: "nextLegD", amount }    -- this many levels of Disadvantage on the next Control check.
+     { type: "stopped" }             -- this turn's movement ends right now. */
+GDATA.FUMBLE_CHART = [
+  { roll: 2, text: "Somehow you turn the near-disaster into a thing of beauty—the crowd roars. Gain 5 bonus hexes.", affects: [{ type: "loseHexes", amount: -5 }] },
+  { roll: 3, text: "A reckless save that had no business working, works anyway. Gain 4 bonus hexes.", affects: [{ type: "loseHexes", amount: -4 }] },
+  { roll: 4, text: "You ride the chaos like you planned it all along. Gain 3 bonus hexes.", affects: [{ type: "loseHexes", amount: -3 }] },
+  { roll: 5, text: "A sloppy line turns into a lucky draft. Gain 2 bonus hexes.", affects: [{ type: "loseHexes", amount: -2 }] },
+  { roll: 6, text: "Pure luck puts you on the smoothest line on the track. Gain 1 bonus hex.", affects: [{ type: "loseHexes", amount: -1 }] },
+  { roll: 7, text: "You catch a bad line and bleed off speed correcting for it. Lose 1 hex.", affects: [{ type: "loseHexes", amount: 1 }] },
+  { roll: 8, text: "Pushed 1 hex toward the inside of the track, if available.", affects: [{ type: "laneShift", dir: "in", forced: false }] },
+  { roll: 9, text: "Pushed 1 hex toward the outside of the track, if available.", affects: [{ type: "laneShift", dir: "out", forced: false }] },
+  { roll: 10, text: "You overcorrect hard and scrub off speed. Lose 2 hexes.", affects: [{ type: "loseHexes", amount: 2 }] },
+  { roll: 11, text: "A glancing hit rattles the frame. Tier × 1 HP.", affects: [{ type: "hp", tierMult: 1 }] },
+  { roll: 12, text: "A hard wobble costs you ground recovering control. Lose 3 hexes.", affects: [{ type: "loseHexes", amount: 3 }] },
+  { roll: 13, text: "A hard knock shoves you toward the inside. Tier × 1 HP + lane shift in.", affects: [{ type: "hp", tierMult: 1 }, { type: "laneShift", dir: "in", forced: true }] },
+  { roll: 14, text: "A solid knock sends you well off your line. Tier × 1 HP + lose 2 hexes.", affects: [{ type: "hp", tierMult: 1 }, { type: "loseHexes", amount: 2 }] },
+  { roll: 15, text: "A heavy hit rattles the whole frame. Tier × 2 HP.", affects: [{ type: "hp", tierMult: 2 }] },
+  { roll: 16, text: "A heavy hit shoves you hard toward the outside. Tier × 2 HP + lane shift out.", affects: [{ type: "hp", tierMult: 2 }, { type: "laneShift", dir: "out", forced: true }] },
+  { roll: 17, text: "A heavy hit costs you serious ground while recovering. Tier × 2 HP + lose 3 hexes.", affects: [{ type: "hp", tierMult: 2 }, { type: "loseHexes", amount: 3 }] },
+  { roll: 18, text: "Something critical buckles—Drop to Gear-1 next Leg. Tier × 3 HP + gear reset + DD next turn.", affects: [{ type: "hp", tierMult: 3 }, { type: "gearReset", to: 1 }, { type: "nextLegD", amount: 2 }] },
+  { roll: 19, text: "A brutal hit sends you reeling toward the inside, bleeding ground. Tier × 3 HP + lose 4 hexes + lane shift in.", affects: [{ type: "hp", tierMult: 3 }, { type: "loseHexes", amount: 4 }, { type: "laneShift", dir: "in", forced: true }] },
+  { roll: 20, text: "Total loss of control—a catastrophic hit, drop to Gear-0, and the Leg ends right there. Tier × 4 HP + gear reset + stopped.", affects: [{ type: "hp", tierMult: 4 }, { type: "gearReset", to: 0 }, { type: "stopped" }] }
 ];
 
 /* ---------- Preset "house" ships (name + suggested Division), purely flavor for quick-add ---------- */
