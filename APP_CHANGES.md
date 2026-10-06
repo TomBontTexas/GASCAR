@@ -15,6 +15,13 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-05 — Replay plays one ship's turn at a time, in turn order
+- Show Last Leg and Show Entire Race now animate each turn in the order it happened, one ship at a time, instead of every ship moving together. Each history record stores a turn sequence number (`seq`), which the replay sorts on.
+
+### 2026-10-05 — Sponsor table: bonus and penalty rows; Hangar Bay skill labels
+- The sponsor is now two rows, Bonus and Penalty, each with a per-stat point count and a running total. Replaces the single-stat penalty select. Old saves with a single-stat penalty load as no penalty.
+- Hangar Bay ship cards label the crew columns "Pilot skill" and "Gunner skill". The Cantina crewman card keeps "Pilot" and "Gunner".
+
 ### 2026-10-05 — Race engine rewritten for Circus Astralis (turn-based, sequential)
 - **Scope:** the race layer of `app.js` is replaced. The old simultaneous Declare/Lock/Resolve (`lockDeclarations()`, `finishLeg()`, `resolveCarCollisions()`, `autoDeclareNpc*`, the Maneuver and Skill Check code) is gone. Hex geometry (`resolveSlipPath()`, `circTrackGeometry()`, the replay SVG) is untouched.
 - **New engine:** `initiativeOrder()` (Thrust-ascending with 1D20 tie-breaks), `resolveTurn()` (gear, movement, Slips, Control check, walk with obstacle checks, one attack, history), `advanceRace()` (Leg rollover, race end), `runAutomaticTurns()` (NPC turns run until a hero is up). Heroes choose gear, Slips, and an attack target in the turn form, then press Take turn.

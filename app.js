@@ -251,9 +251,15 @@ function freshNpcStats(division) {
 // up to 3 stats, plus a -3 penalty on one stat. Bonuses/penalty are applied
 // on top of the Ship Class's own stats; a non-Damage stat can't drop below 0.
 const SPONSOR_BONUS_MAX = 3;
-const SPONSOR_PENALTY = 3;
+const SPONSOR_PENALTY_MAX = 3;
+// Normalized sponsor record: bonus and penalty are per-stat point counts.
+// Older saves stored the penalty as a single stat name; that reads as empty.
+function sponsorOf(ship) {
+  const s = (ship && ship.sponsor) || {};
+  return { bonus: s.bonus || {}, penalty: (s.penalty && typeof s.penalty === "object") ? s.penalty : {} };
+}
 function sponsorBonusTotal(sponsor) { return Object.values(sponsor.bonus || {}).reduce((a, b) => a + (b || 0), 0); }
-function sponsorBonusStats(sponsor) { return Object.keys(sponsor.bonus || {}).filter(s => (sponsor.bonus[s] || 0) > 0); }
+function sponsorPenaltyTotal(sponsor) { return Object.values(sponsor.penalty || {}).reduce((a, b) => a + (b || 0), 0); }
 // Every stat a participant (Hero ship OR NPC) fights with this race --
 // unifies the two shapes (a Hero's 6 stats live on its Ship's Class plus any
 // sponsor adjustment, its Pilot/Gunner on its assigned Crewman; an NPC carries
@@ -264,10 +270,10 @@ function carStats(p) {
   if (p.type === "hero") {
     const ship = getShip(p.shipId);
     const cls = ship && getShipClass(ship.classId);
-    const sponsor = (ship && ship.sponsor) || { bonus: {}, penalty: "" };
+    const sponsor = sponsorOf(ship);
     SHIP_STATS.forEach(stat => {
       const base = (cls && cls[stat]) || 0;
-      const adj = ((sponsor.bonus || {})[stat] || 0) - (sponsor.penalty === stat ? SPONSOR_PENALTY : 0);
+      const adj = (sponsor.bonus[stat] || 0) - (sponsor.penalty[stat] || 0);
       const v = base + adj;
       out[stat] = stat === "damage" ? v : Math.max(0, v);
     });
@@ -328,7 +334,7 @@ function hexRingParamsForCourse(course) {
 // the one inside it -- a fixed offset. Shared by startRace() (actual
 // gameplay hexPos) and the standings SVG (drawing each lane's own starting
 // mark at that same hex).
-var STAGGER_PER_LANE = 4;
+var STAGGER_PER_LANE = 1;
 function laneStartHexPos(laneIdx0) { return laneIdx0 * STAGGER_PER_LANE; }
 function hexKey(q, r) { return q + "," + r; }
 function hexAdd(h, dir, n) { return { q: h.q + dir.dq * n, r: h.r + dir.dr * n }; }
@@ -1026,7 +1032,8 @@ function resolveTurn(race, p, choices) {
   p.laps = laps;
   p.cumulative += moved;
   log.push(`Moved ${moved} hex${moved === 1 ? "" : "es"}; now lane ${p.lane}, lap ${Math.min(laps, course.laps)}/${course.laps}.`);
-  p.history.push({ leg: race.legIndex + 1, movement: moved, path: walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: slipCount, gear: p.gear });
+  race.turnSeq = (race.turnSeq || 0) + 1;
+  p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: moved, path: walked.slice(), lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: slipCount, gear: p.gear });
 
   // 6. One Gunner attack per turn, against a ship within 2 hexes of where it ended up.
   if (laps >= course.laps) {
@@ -1228,17 +1235,14 @@ function renderHangarBay() {
   return html;
 }
 function renderSponsorRow(ship) {
-  const sponsor = ship.sponsor || { bonus: {}, penalty: "" };
-  const total = sponsorBonusTotal(sponsor);
-  const bonusCells = SHIP_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${SPONSOR_BONUS_MAX}" value="${(sponsor.bonus || {})[s] || 0}" onchange="App.setSponsorBonus('${ship.id}','${s}',this.value)">`)}</td>`).join("");
-  return `<div class="row" style="align-items:flex-start"><b>Sponsor</b> <span class="muted">up to ${SPONSOR_BONUS_MAX} bonus points across up to 3 stats (${total} used), then a ${SPONSOR_PENALTY}-point penalty to one stat</span></div>
-    <table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
-    <tr>${bonusCells}</tr></table>
-    <div class="row"><label>Penalty (-${SPONSOR_PENALTY})
-      <select onchange="App.setSponsorPenalty('${ship.id}',this.value)">
-        <option value="">none</option>
-        ${SHIP_STATS.map(s => `<option value="${s}" ${sponsor.penalty === s ? "selected" : ""}>${STAT_LABEL[s]}</option>`).join("")}
-      </select></label></div>`;
+  const sponsor = sponsorOf(ship);
+  const bonusTotal = sponsorBonusTotal(sponsor), penaltyTotal = sponsorPenaltyTotal(sponsor);
+  const cells = kind => SHIP_STATS.map(s => `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX}" value="${sponsor[kind][s] || 0}" onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`).join("");
+  return `<div class="row" style="align-items:flex-start"><b>Sponsor</b> <span class="muted">Spread up to ${SPONSOR_BONUS_MAX} bonus points and up to ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like.</span></div>
+    <table class="mktable shiptable"><tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+    <tr><td>+</td>${cells("bonus")}</tr>
+    <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+    <tr><td>−</td>${cells("penalty")}</tr></table>`;
 }
 function renderShipCard(ship) {
   const cls = getShipClass(ship.classId);
@@ -1266,16 +1270,16 @@ function renderShipCard(ship) {
         <select onchange="App.updateShip('${ship.id}','classId',this.value)">
           ${STATE.shipClasses.map(c => `<option value="${c.id}" ${c.id === ship.classId ? "selected" : ""}>${esc(c.name)} (${c.division})</option>`).join("")}
         </select></label>
-      <label>Crew (Pilot/Gunner)
+      <label>Crew (Pilot skill / Gunner skill)
         <select onchange="App.updateShip('${ship.id}','crewmanId',this.value)">
           <option value="">-- none --</option>
-          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (P${c.pilot}/G${c.gunner})</option>`).join("")}
+          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (Pilot skill ${c.pilot}, Gunner skill ${c.gunner})</option>`).join("")}
         </select></label>
       <span class="tag ${crewman ? "" : "danger"}" title="${crewman ? "All set -- race-legal" : "A Ship needs an assigned crewman to race"}">${crewman ? "Ready to race" : "🔒 Needs a crewman"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
-    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Pilot</th><th>Gunner</th></tr><tr>
+    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Pilot skill</th><th>Gunner skill</th></tr><tr>
       ${SHIP_STATS.map(s => `<td>${formatStatValue({ ...cls, [s]: eff[s] }, s)}</td>`).join("")}<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td>
     </tr></table>
     <p class="muted" style="margin:4px 0">Stats shown include the Ship Class plus any sponsor adjustment. Edit the class in the Shipyard and the crewman in the Cantina.</p>`;
@@ -1796,18 +1800,13 @@ const App = {
     ship.iconColor = color;
     saveState(); render();
   },
-  setSponsorBonus(shipId, stat, val) {
+  setSponsor(shipId, kind, stat, val) {
     const ship = getShip(shipId);
-    ship.sponsor = ship.sponsor || { bonus: {}, penalty: "" };
-    ship.sponsor.bonus = ship.sponsor.bonus || {};
-    const others = sponsorBonusTotal(ship.sponsor) - (ship.sponsor.bonus[stat] || 0);
-    ship.sponsor.bonus[stat] = clampInt(val, 0, SPONSOR_BONUS_MAX - others, ship.sponsor.bonus[stat] || 0);
-    saveState(); render();
-  },
-  setSponsorPenalty(shipId, stat) {
-    const ship = getShip(shipId);
-    ship.sponsor = ship.sponsor || { bonus: {}, penalty: "" };
-    ship.sponsor.penalty = stat;
+    const sponsor = sponsorOf(ship);
+    ship.sponsor = sponsor;
+    const max = kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX;
+    const others = (kind === "bonus" ? sponsorBonusTotal(sponsor) : sponsorPenaltyTotal(sponsor)) - (sponsor[kind][stat] || 0);
+    sponsor[kind][stat] = clampInt(val, 0, max - others, sponsor[kind][stat] || 0);
     saveState(); render();
   },
 
@@ -1916,75 +1915,74 @@ const App = {
     const race = STATE.race;
     if (!race) return;
     const course = getCourse(race.courseId);
-    const legsCompleted = race.participants.reduce((m, p) => Math.max(m, (p.history || []).length), 0);
-    if (!legsCompleted) return;
-    const fromLeg = lastLegOnly ? legsCompleted - 1 : 0;
+    const geom = circTrackGeometry(course);
+    const ringParams = hexRingParamsForCourse(course);
+    const lastLeg = race.participants.reduce((m, p) => Math.max(m, ...(p.history || []).map(h => h.leg - 1)), -1);
+    if (lastLeg < 0) return;
+    const fromLeg = lastLegOnly ? lastLeg : 0;
     const btnAll = document.getElementById("raceReplayBtn");
     const btnLast = document.getElementById("raceReplayLastLegBtn");
     if (btnAll) btnAll.disabled = true;
     if (btnLast) btnLast.disabled = true;
-    const geom = circTrackGeometry(course);
     ensureReplayTrailClickListener();
-    const ringParams = hexRingParamsForCourse(course);
-    const tracks = race.participants.map(p => ({ p, perLeg: buildCircularLegWaypoints(p, geom) }));
-    race.participants.forEach((p, i) => {
-      const perLeg = tracks[i].perLeg;
-      let startPos = null;
-      for (let li = Math.min(fromLeg, perLeg.length) - 1; li >= 0 && !startPos; li--) {
-        const wp = perLeg[li];
-        if (wp && wp.length) startPos = wp[wp.length - 1];
-      }
-      if (!startPos) startPos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0 };
-      const g = document.getElementById(`circracer-${p.id}`);
-      if (g) g.setAttribute("transform", circRacerTransform(geom, startPos).transform);
-    });
-    let leg = fromLeg;
-    const hexStepDelay = 200;
-    function updateBoardsForLeg(legIdx) {
-      race.participants.forEach(p => {
-        const h = p.history || [];
-        let laneAtLeg = p.startLane || 1, hexPosAtLeg = p.startHexPos || 0, lapsAtLeg = 0;
-        for (let j = 0; j <= legIdx && j < h.length; j++) { laneAtLeg = h[j].lane; hexPosAtLeg = h[j].hexPos; lapsAtLeg = h[j].laps; }
-        const pct = Math.min(100, Math.round((trackProgress({ laps: lapsAtLeg, lane: laneAtLeg, hexPos: hexPosAtLeg }, ringParams) / (course.laps * 6)) * 100));
-        const fill = document.getElementById(`boardfill-${p.id}`);
-        const icon = document.getElementById(`boardicon-${p.id}`);
-        if (fill) fill.style.width = pct + "%";
-        if (icon) icon.style.left = pct + "%";
+    const pickPosition = (p) => {
+      let pos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0, laps: 0 };
+      (p.history || []).forEach(h => { if (h.leg - 1 < fromLeg) pos = h; });
+      return pos;
+    };
+    const setBar = (p, pos) => {
+      const pct = Math.min(100, Math.round((trackProgress({ laps: pos.laps || 0, lane: pos.lane, hexPos: pos.hexPos }, ringParams) / (course.laps * 6)) * 100));
+      const fill = document.getElementById(`boardfill-${p.id}`);
+      const icon = document.getElementById(`boardicon-${p.id}`);
+      if (fill) fill.style.width = pct + "%";
+      if (icon) icon.style.left = pct + "%";
+    };
+    // Every turn in the replay range, in the order the turns actually happened.
+    const events = [];
+    race.participants.forEach((p, pi) => {
+      const perTurn = buildCircularLegWaypoints(p, geom);
+      (p.history || []).forEach((rec, hi) => {
+        if (rec.leg - 1 < fromLeg) return;
+        events.push({ p, pi, rec, wp: perTurn[hi] || [], seq: rec.seq || 0 });
       });
-    }
-    updateBoardsForLeg(fromLeg - 1);
-    function playLeg(legIdx, done) {
-      const maxSteps = Math.max(1, ...tracks.map(t => (t.perLeg[legIdx] || []).length));
-      let sub = 0;
+    });
+    events.sort((a, b) => a.seq - b.seq);
+    race.participants.forEach(p => {
+      const pos = pickPosition(p);
+      const g = document.getElementById(`circracer-${p.id}`);
+      if (g) g.setAttribute("transform", circRacerTransform(geom, pos).transform);
+      setBar(p, pos);
+    });
+    const hexStepDelay = 200, turnPause = 400;
+    let idx = 0;
+    function playTurn(ev, done) {
+      let i = 0;
       function tick() {
         if (STATE.race !== race) return;
-        tracks.forEach((t, i) => {
-          const wp = t.perLeg[legIdx];
-          if (!wp || !wp.length) return;
-          const point = wp[Math.min(sub, wp.length - 1)];
-          const g = document.getElementById(`circracer-${t.p.id}`);
-          if (!g) return;
+        if (i >= ev.wp.length) { setBar(ev.p, ev.rec); done(); return; }
+        const point = ev.wp[i++];
+        const g = document.getElementById(`circracer-${ev.p.id}`);
+        if (g) {
           const m = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
           const prevRotDeg = m ? parseFloat(m[1]) : null;
           g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
-          paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(i));
-        });
-        sub += 1;
-        if (sub < maxSteps) setTimeout(tick, hexStepDelay);
-        else done();
+        }
+        paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(ev.pi));
+        setTimeout(tick, hexStepDelay);
       }
       tick();
     }
-    function step() {
+    function nextTurn() {
       if (STATE.race !== race) return;
-      playLeg(leg, () => {
-        updateBoardsForLeg(leg);
-        leg += 1;
-        if (leg < legsCompleted) step();
-        else { if (btnAll) btnAll.disabled = false; if (btnLast) btnLast.disabled = false; }
-      });
+      if (idx >= events.length) {
+        if (btnAll) btnAll.disabled = false;
+        if (btnLast) btnLast.disabled = false;
+        return;
+      }
+      const ev = events[idx++];
+      playTurn(ev, () => setTimeout(nextTurn, turnPause));
     }
-    setTimeout(step, 400);
+    setTimeout(nextTurn, 400);
   },
 
   /* Reference */

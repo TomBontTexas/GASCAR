@@ -17,6 +17,16 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-05 — Starting line stagger reduced to 1 hex per lane
+- **Earlier value:** each lane out started 4 hexes further along the track than the lane inside it (`STAGGER_PER_LANE = 4`).
+- **Current value:** each lane out starts 1 hex further along than the lane inside it. Ships and the drawn starting line for each lane use the same position.
+- **Where:** `STAGGER_PER_LANE` in `app.js`.
+
+### 2026-10-05 — Sponsor penalty is spread like the bonus
+- **Earlier value:** the sponsor's -3 penalty landed on one stat only.
+- **Current value:** the penalty is 3 points spread across any stats, the same way the bonus is (up to 3 points). A stat with a value of 1 can take a penalty of 1 without losing all 3. A stat can't drop below 0 (Damage's bonus can go negative).
+- **Where:** `sponsorOf()`/`carStats()` and the Sponsor table in the Hangar Bay in `app.js`.
+
 ### 2026-10-05 — Circus Astralis race rules adopted (supersedes the Circus Maximus race-resolution rules below)
 Source: `Circus Astralis v2.docx` in the GASCAR folder. Hex-grid Circular Track, Ship Classes, and construction points are kept; the race itself follows the new document.
 - **Turns:** ships act one at a time in **Thrust order** (lowest first; equal Thrust ties broken by 1D20, lowest first). Each Leg every ship takes one turn. The race ends the moment a ship crosses the finish line. Replaces simultaneous Declare/Lock/Resolve.
