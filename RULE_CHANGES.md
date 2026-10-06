@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-05 — NPC racers are copies of the Division's ships
+- **Earlier value:** NPCs were auto-built from the Division's construction-point budget, spread evenly.
+- **Current value:** each NPC is a copy of one of your ships in the race's Division, chosen at random (its stats, crew, and sponsor adjustments included). With only one ship in that Division, every NPC matches it. Each NPC gets an icon no ship or Ship Class in that Division uses, and no other racer in the race has.
+- **Where:** `npcStatsFromDivision()` and `pickNpcIcon()` in `app.js`.
+
 ### 2026-10-05 — Sponsor: each stat takes a bonus or a penalty, not both
 - A stat can carry either a sponsor bonus or a sponsor penalty, never both. Choosing one clears the other on that stat. The other row is disabled for that stat.
 - **Where:** `setSponsor()` and `renderSponsorRow()` in `app.js`.

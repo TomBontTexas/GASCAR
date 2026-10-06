@@ -681,6 +681,29 @@ function iconThumbImg(obj, title) {
 // Picks a uniformly random (color, number) not already in usedKeys (a Set of
 // "Color|Number" strings) -- used to give an NPC racer a random, distinct
 // icon at race start. Returns null if all 45 are taken.
+// An NPC's stats are a copy of one of the player's ships in the course's
+// Division, chosen at random (with one ship, every NPC matches it). Falls back
+// to an auto-built car when no ship exists for that Division yet.
+function npcStatsFromDivision(division) {
+  const pool = STATE.ships.filter(s => shipDivision(s) === division);
+  if (!pool.length) return freshNpcStats(division);
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  return { ...carStats({ type: "hero", shipId: pick.id }) };
+}
+// An NPC icon no class or ship in the Division uses, and no other racer in
+// this race has. Class numbers are preferred to be left alone, since every
+// ship built from a class shares its number.
+function pickNpcIcon(division, raceUsed) {
+  const divKeys = usedShipIconKeys(null);
+  const classNums = usedClassIconNumbers(null, division);
+  const free = (c, n, skipClassNums) => !divKeys.has(`${division}|${c}|${n}`) && (skipClassNums || !classNums.has(n)) && !raceUsed.has(`${c}|${n}`);
+  for (const skip of [false, true]) {
+    const options = [];
+    GDATA.SHIP_ICON_COLORS.forEach(c => GDATA.SHIP_ICON_NUMBERS.forEach(n => { if (free(c, n, skip)) options.push({ color: c, number: n }); }));
+    if (options.length) return options[Math.floor(Math.random() * options.length)];
+  }
+  return null;
+}
 function pickRandomUnusedIcon(usedKeys) {
   const options = [];
   GDATA.SHIP_ICON_COLORS.forEach(color => GDATA.SHIP_ICON_NUMBERS.forEach(number => {
@@ -846,9 +869,9 @@ function startRace(courseId, shipIds, npcs) {
     if (info) usedIcons.add(`${info.color}|${info.number}`);
   });
   npcs.forEach(n => {
-    const pick = pickRandomUnusedIcon(usedIcons);
+    const pick = pickNpcIcon(course.division, usedIcons);
     if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
-    const stats = n.stats || freshNpcStats(course.division);
+    const stats = n.stats || npcStatsFromDivision(course.division);
     participants.push({
       id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
@@ -1481,7 +1504,7 @@ function renderRaceSetup() {
       <button class="ghost" title="Randomize Aggression" onclick="App.randomizeDraftNpcAggression()">🎲</button>
       <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
     </div>
-    <p class="muted" style="margin:0 0 6px">NPCs are full cars built the same way a Hero's ship is (same Division/Tier budget, spent evenly). Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
+    <p class="muted" style="margin:0 0 6px">NPCs are copies of your ships in this Division, drawn at random (with only one ship, every NPC matches it). Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
     <div id="npcList">${(STATE._draftNpcs || []).map((n, i) => `<span class="tag">${esc(n.name)} <span class="muted">(Aggr ${n.aggression})</span> <a href="#" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join(" ")}</div>
   </div></div>`;
   html += `<button onclick="App.beginRace()">Start Race</button></section>`;
