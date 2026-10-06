@@ -22,10 +22,11 @@ applicable), the current value in use, and where it lives in the code.
 - **Current value:** each NPC is a copy of one of your ships in the race's Division, chosen at random (its stats, crew, and sponsor adjustments included). With only one ship in that Division, every NPC matches it. Each NPC gets an icon no ship or Ship Class in that Division uses, and no other racer in the race has.
 - **Where:** `npcStatsFromDivision()` and `pickNpcIcon()` in `app.js`.
 
-### 2026-10-06 — Slips and Control checks rework (interactive walk)
+### 2026-10-06 — Slips and Control checks rework (click-to-move)
 - **Earlier value:** slips were declared before the turn. Two or more Slips forced a Control check at Disadvantage, and a move of 5+ hexes forced one too.
 - **Current value:**
-  - A Slip is chosen when the next hex holds another racer: straight on, or Slip left or right around it. The walk pauses for the choice.
+  - On each hex, the hero moves by clicking the hex the ship moves into: straight ahead, or Slip left or right. Only those three are offered. The Movement counter shows the points left.
+  - Each hex the ship leaves gets a dot, which stays until the turn ends.
   - The nth Slip of a Leg costs n movement points. The sideways shift is free. A Slip the ship can't afford isn't offered.
   - Slips never trigger a Control check on their own, and the 2-Slip Disadvantage is gone.
   - A Control check happens when the movement roll exceeds the Leg TN (made before the ship moves), and each time the ship enters an occupied hex.

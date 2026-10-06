@@ -262,6 +262,9 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .circcell { fill: var(--panel2); stroke: var(--border); stroke-width: 1; }
 .circcell.curve { fill: #33363c; stroke: #6b7080; }
 .replaytraildot { pointer-events: none; }
+.turndot { fill: #e8e8e8; opacity: 0.85; pointer-events: none; }
+.circstep { fill: rgba(245,197,24,0.25); stroke: var(--gold); stroke-width: 2; cursor: pointer; }
+.circstep:hover { fill: rgba(245,197,24,0.5); }
 .circfinish { stroke: var(--gold); stroke-width: 2; stroke-dasharray: 4 3; }
 .circdot { fill: var(--gold); stroke: #111; stroke-width: 1.5; }
 .circracer.dead .circdot, .circracer.dead image { opacity: 0.4; }

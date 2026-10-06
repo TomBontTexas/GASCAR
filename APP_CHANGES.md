@@ -22,9 +22,10 @@ Newest entries at the top.
 ### 2026-10-06 — Initiative order is fixed for the whole race
 - Thrust never changes, so the turn order is set once when the race starts and every Leg keeps it. Ties are broken by 1D20 once, at the start. Ships destroyed mid-race drop out of the order; the rest keep their places. Previously each Leg re-rolled ties.
 
-### 2026-10-06 — Walk pauses at occupied hexes; slips chosen on the spot
-- The walk is step by step. When the next hex holds a racer, the hero gets a prompt: straight on, or Slip left/right (only if affordable). `encounterChoice()` (App action) resumes it. NPCs choose automatically.
-- Pre-declared Slip controls were removed from the turn form. `car.slipsThisLeg` counts Slips per Leg, and the leg resets it.
+### 2026-10-06 — Click-to-move movement
+- The hero's turn form has gear only. After Take turn, the walk pauses before every hex: the candidate hexes (straight ahead, Slip left, Slip right) are clickable polygons on the Circular Track, and `encounterChoice()` (App action) takes the click. A Movement counter shows the points left. NPCs choose automatically.
+- Each hex the ship leaves gets a `turndot` circle, drawn from `car.turn.left`. The ship icon follows the walk during the turn.
+- Pre-declared Slip controls were removed. `car.slipsThisLeg` counts Slips per Leg, and the leg resets it.
 - Replay records the Slips made in the turn.
 
 ### 2026-10-06 — Fix: starting lanes and the first Leg's turn order use the same tie-break
