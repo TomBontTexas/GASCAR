@@ -19,6 +19,9 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-05 — Fix: declining an attack no longer hides later targets
+- A hero who declined to attack one racer stopped being offered attacks for the rest of the turn, so a second racer coming into range was never offered. Declines now apply only to the racers already offered. A new racer in range still prompts. One attack per turn still applies.
+
 ### 2026-10-05 — Show Last Leg shows every ship's turn in the last completed leg
 - Show Last Leg used the newest leg with any turns, so a leg still in progress showed only the ships that had already moved. It now replays the last completed leg (the one before the leg in progress, or the final leg once the race is over), with every ship's turn from that leg.
 

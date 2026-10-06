@@ -1059,7 +1059,7 @@ function resolveTurn(race, p, choices) {
   car.turn = {
     log, T, net, checkSources, tn, steps, slipCount,
     idx: 0, cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
-    walked: [], attackDecided: false, halt: false, finished: false, awaiting: null
+    walked: [], attackUsed: false, declined: [], halt: false, finished: false, awaiting: null
   };
   walkTurn(race, p);
 }
@@ -1072,15 +1072,21 @@ function walkTurn(race, p) {
   const geom = circTrackGeometry(course);
   const stats = carStats(p);
   while (!t.finished && !t.halt) {
-    if (!t.attackDecided) {
-      const targets = attackTargetsFrom(race, p, geom, t.cur);
+    // One attack per turn. A racer that was offered and declined isn't offered
+    // again, but a different racer coming into range is.
+    if (!t.attackUsed) {
+      const targets = attackTargetsFrom(race, p, geom, t.cur).filter(x => !t.declined.includes(x.id));
       if (targets.length) {
         if (p.type === "hero") {
           t.awaiting = targets.map(x => x.id);
           return "paused";
         }
-        t.attackDecided = true;
-        if (rollD(20) <= (p.aggression || 5)) resolveAttack(race, p, targets[0], t.log);
+        if (rollD(20) <= (p.aggression || 5)) {
+          resolveAttack(race, p, targets[0], t.log);
+          t.attackUsed = true;
+        } else {
+          t.declined.push(...targets.map(x => x.id));
+        }
       }
     }
     if (t.idx >= t.steps.length) break;
@@ -1117,13 +1123,15 @@ function walkTurn(race, p) {
 function decideAttack(race, p, targetId) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.awaiting) return;
+  const offered = t.awaiting;
   t.awaiting = null;
-  t.attackDecided = true;
   if (targetId) {
     const target = race.participants.find(x => x.id === targetId);
     if (target && !target.out) resolveAttack(race, p, target, t.log);
     else t.log.push("Attack: no valid target.");
+    t.attackUsed = true;
   } else {
+    t.declined.push(...offered);
     t.log.push("Keeps moving -- no attack.");
   }
   walkTurn(race, p);
