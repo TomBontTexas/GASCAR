@@ -28,6 +28,10 @@ Newest entries at the top.
 ### 2026-10-06 — Hangar Bay ship table: one set of columns with totals
 - Pilot skill and Gunner skill are the first two columns. The six stats follow, and the sponsor bonus and penalty rows sit in the same columns. A Total row beneath gives each column's result (Class + Bonus − Penalty). The old separate sponsor table is gone. `renderShipStatsTable()` in `app.js`.
 
+### 2026-10-07 — Fix: track-centre text clipped top and bottom
+- The centre panel clipped evenly from both the top and the bottom when its content ran taller than the hole, cutting off the first line along with the last. It now anchors to the top, so any overflow trims only the bottom. Font size and line spacing were also trimmed, and blank spacer lines use a shorter dedicated gap instead of a full text row, so the Move/To Pass prompt fits without clipping on typical courses.
+- `.track-center`, `.hub`, `.hub-gap` in `style.css`.
+
 ### 2026-10-07 — Gunner check reformatted to match the Control check
 - A Gunner (attack) check now logs as `Gunner vs <target>`, `Gunner-<score><mod> vs. TN (<TN>)`, then `Max/Min(dice) + <score> vs. TN (<TN>) Hit/Miss`.
 - `gunnerCheckLine()` and `classifyLogLine()` (now matches pass/fail by the trailing word, not the line's prefix) in `app.js`.

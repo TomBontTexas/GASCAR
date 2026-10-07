@@ -2000,15 +2000,15 @@ function renderMovePrompt(race, p, t) {
   const fumbleLine = t.log.filter(l => l.startsWith("Fumble chart")).join("; ");
   const stats = carStats(p);
   const toPass = t.choice.occupantId
-    ? `<div class="hub-line">&nbsp;</div>
+    ? `<div class="hub-gap"></div>
     <div class="hub-line">To Pass</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${t.net ? netLabel(t.net) : ""} vs. TN (${t.tn})</div>
-    <div class="hub-line">&nbsp;</div>`
+    <div class="hub-gap"></div>`
     : "";
   return `<div class="hub">
     <div class="hub-line muted">${esc(rollLine)}</div>
     <div class="hub-line muted">${esc(fumbleLine)}</div>
-    <div class="hub-line">&nbsp;</div>
+    <div class="hub-gap"></div>
     <div class="hub-line"><b>${t.R}</b> movement left</div>
     <div class="hub-line muted">Next Slip costs ${race.legState.cars[p.id].slipsThisLeg + 1}</div>
     ${toPass}

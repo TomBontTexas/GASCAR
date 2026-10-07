@@ -268,8 +268,9 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .circtrack-wrap { position: relative; display: flex; justify-content: center; margin: 6px 0 16px; }
 .racegrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: center; }
 .racetrack, .racestandings { min-width: 0; }
-.track-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); box-sizing: border-box; padding: 0; container-type: size; text-align: center; font-size: 0.72rem; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
-.hub { width: 86cqmin; display: flex; flex-direction: column; align-items: stretch; gap: 3cqmin; font-size: 8cqmin; line-height: 1.2; }
+.track-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); box-sizing: border-box; padding: 0; container-type: size; text-align: center; font-size: 0.72rem; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-start; }
+.hub { width: 86cqmin; display: flex; flex-direction: column; align-items: stretch; gap: 2cqmin; font-size: 7cqmin; line-height: 1.2; }
+.hub-gap { height: 1.5cqmin; }
 .hub-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
 .hub-row { display: flex; flex-direction: column; gap: 2.5cqmin; }
 .hub select, .hub button { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; font-size: 1em; padding: 0.3em 0.2em; white-space: nowrap; }
