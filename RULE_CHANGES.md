@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — Sponsor bonus/penalty lowered to 2
+- **Earlier value:** up to 3 bonus points spread over up to 3 stats, in exchange for a -3 penalty on one stat.
+- **Current value:** up to 2 bonus points spread over up to 2 stats, in exchange for a -2 penalty on one stat.
+- **Where:** `SPONSOR_BONUS_MAX` / `SPONSOR_PENALTY_MAX` in `app.js`.
+
 ### 2026-10-07 — New Ship Class stat: Damage Control
 - **Earlier value:** no repair mechanic existed.
 - **Current value:** Damage Control is a new Ship Class stat (Hangar Bay and Shipyard tables, sponsor rows, build points), sitting between Gunner and Damage. It starts at a base of 0 and costs build points the same way as every other stat. At the start of each Leg, before Gear, a ship may choose Damage Control instead of being available to attack: it rolls 1D6 + Damage Control and repairs that much HP (never above its max HP), but cannot attack that Leg. An NPC below full HP always takes Damage Control that Leg.

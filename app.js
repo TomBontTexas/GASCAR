@@ -276,11 +276,12 @@ function freshNpcStats(division) {
   out.crewGunner = GDATA.CREWMAN_BASE;
   return out;
 }
-// Sponsor (see RULE_CHANGES.md 2026-10-05): up to 3 bonus points spread over
-// up to 3 stats, plus a -3 penalty on one stat. Bonuses/penalty are applied
-// on top of the Ship Class's own stats; a non-Damage stat can't drop below 0.
-const SPONSOR_BONUS_MAX = 3;
-const SPONSOR_PENALTY_MAX = 3;
+// Sponsor (see RULE_CHANGES.md 2026-10-05, amounts updated 2026-10-07): up to
+// 2 bonus points spread over up to 2 stats, plus a -2 penalty on one stat.
+// Bonuses/penalty are applied on top of the Ship Class's own stats; a
+// non-Damage stat can't drop below 0.
+const SPONSOR_BONUS_MAX = 2;
+const SPONSOR_PENALTY_MAX = 2;
 // Normalized sponsor record: bonus and penalty are per-stat point counts.
 // Older saves stored the penalty as a single stat name; that reads as empty.
 function sponsorOf(ship) {
@@ -2130,7 +2131,7 @@ function renderInstructions() {
     <p>Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner, one point per increase. A ship's crew shares one Pilot and one Gunner value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks.</p>
 
     <h3>3. Hangar Bay — assemble ships</h3>
-    <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot and Gunner values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to 3 bonus points spread over up to 3 stats, in exchange for a -3 penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
+    <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot and Gunner values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to ${SPONSOR_BONUS_MAX} bonus points spread over up to ${SPONSOR_BONUS_MAX} stats, in exchange for a -${SPONSOR_PENALTY_MAX} penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
 
     <h3>4. Racecourse &amp; Race — run it</h3>
     <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
