@@ -216,7 +216,7 @@ function freshClassStats() {
 function formatStatValue(cls, stat) {
   if (stat !== "damage") return String(cls[stat]);
   const bonus = cls.damage || 0;
-  return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? "+" + bonus : ""}`;
+  return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? (bonus < 0 ? "-" + -bonus : "+" + bonus) : ""}`;
 }
 // ---------- Crewman (Cantina) ----------
 // Each crewman starts at Pilot-5 and Gunner-5, then divides 5 split points
@@ -1109,7 +1109,8 @@ function resolveAttack(race, p, target, log) {
   const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
   const armor = carStats(target).armor;
   const dmg = Math.max(0, rolledDmg + stats.damage - armor);
-  log.push(`Damage ${course.flatDamage ? "4 (flat)" : rolledDmg} + ${stats.damage} - Armor ${armor} = ${dmg}.`);
+  const dmgOp = stats.damage < 0 ? `- ${-stats.damage}` : `+ ${stats.damage}`;
+  log.push(`Damage ${course.flatDamage ? "4 (flat)" : rolledDmg} ${dmgOp} - Armor ${armor} = ${dmg}.`);
   applyDamage(race, target, dmg, log);
   race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
 }
