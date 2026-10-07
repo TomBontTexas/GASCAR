@@ -1058,10 +1058,15 @@ function controlCheckLine(label, rc, stats, sources) {
 }
 // One line for a Gunner (attack) check: same shape as controlCheckLine(), but
 // scored on Gunner + Gunner skill and reported as a hit or a miss.
-function gunnerCheckLine(label, rc, stats, sources) {
-  const mod = rc.net ? netLabel(rc.net) : "no modifier";
-  const why = sources.length ? ` from ${sources.join(", ")}` : "";
-  return `${label}, ${mod}${why}: dice ${rc.dice.join(", ")}; chosen ${rc.chosen} + Gunner ${stats.gunner} + Gunner skill ${stats.crewGunner} = ${rc.total} vs TN ${rc.tn}. ${rc.success ? "Hit" : "Miss"}.`;
+function gunnerCheckLine(label, rc, stats) {
+  const modeWord = rc.net >= 0 ? "Max" : "Min";
+  const mod = rc.net ? netLabel(rc.net) : "";
+  const score = stats.gunner + stats.crewGunner;
+  return [
+    label,
+    `Gunner-${score}${mod} vs. TN (${rc.tn})`,
+    `${modeWord}(${rc.dice.join(", ")}) + ${score} vs. TN (${rc.tn}) ${rc.success ? "Hit" : "Miss"}`,
+  ];
 }
 function applyDamage(race, p, amount, log) {
   p.hp = Math.max(0, p.hp - amount);
@@ -1132,7 +1137,7 @@ function resolveAttack(race, p, target, log) {
   const tn = race.legState.leg.finalTN;
   const net = gearNet(p.gear);
   const gc = rollCheck(stats.gunner + stats.crewGunner, net, tn);
-  log.push(gunnerCheckLine(`Gunner check vs ${participantLabel(target)}`, gc, stats, net ? [`Gear ${p.gear}`] : []));
+  log.push(...gunnerCheckLine(`Gunner vs ${participantLabel(target)}`, gc, stats));
   if (!gc.success) return;
   const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
   const armor = carStats(target).armor;
@@ -1465,11 +1470,9 @@ function render() {
 // pass/fail, Critical/Fumble results, and the closing summary differently.
 function classifyLogLine(l) {
   if (l.startsWith("Move=") || l.startsWith("Gear ")) return "roll";
-  if (l.startsWith("Control Task Check") || l.startsWith("Attack?")) return "hdr";
-  if (l.startsWith("Control-") || l.startsWith("Gunner check")) {
-    if (/Success|Hit\.$/.test(l)) return "good";
-    if (/Fail|Miss\.$/.test(l)) return "bad";
-  }
+  if (l.startsWith("Control Task Check") || l.startsWith("Attack?") || l.startsWith("Gunner vs ")) return "hdr";
+  if (/ Success$/.test(l) || / Hit$/.test(l)) return "good";
+  if (/ Fail$/.test(l) || / Miss$/.test(l)) return "bad";
   if (l.startsWith("Fumble chart") || /Critical/.test(l)) return "special";
   if (l.startsWith("Stops short") || l.startsWith("Every hex beside")) return "bad";
   if (l.startsWith("Moved ") || / crosses the finish line| is destroyed/.test(l)) return "summary";

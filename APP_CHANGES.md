@@ -28,6 +28,10 @@ Newest entries at the top.
 ### 2026-10-06 — Hangar Bay ship table: one set of columns with totals
 - Pilot skill and Gunner skill are the first two columns. The six stats follow, and the sponsor bonus and penalty rows sit in the same columns. A Total row beneath gives each column's result (Class + Bonus − Penalty). The old separate sponsor table is gone. `renderShipStatsTable()` in `app.js`.
 
+### 2026-10-07 — Gunner check reformatted to match the Control check
+- A Gunner (attack) check now logs as `Gunner vs <target>`, `Gunner-<score><mod> vs. TN (<TN>)`, then `Max/Min(dice) + <score> vs. TN (<TN>) Hit/Miss`.
+- `gunnerCheckLine()` and `classifyLogLine()` (now matches pass/fail by the trailing word, not the line's prefix) in `app.js`.
+
 ### 2026-10-07 — Hero lap report pop-up after each turn
 - A modal styled like an official motorsport lap report pops up once after each hero turn finishes: Lane/Lap/Gear/HP, then the full turn log (rolls, Control Task Check breakdown, Critical/Fumble, obstacle stops, Slip costs, the closing move summary), color-coded by result. Dismiss with Continue (🏁 Victory Lap on a win). NPC turns never trigger it.
 - `TURN_REPORT`, `finishTurn()`, `renderTurnReportModal()`, `classifyLogLine()`, `App.dismissTurnReport()` in `app.js`; `.lapreport*` styles in `style.css`.
