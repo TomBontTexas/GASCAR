@@ -1407,6 +1407,15 @@ function finishTurn(race, p) {
   race.log.push({ legIndex: race.legIndex, name: participantLabel(p), lines: t.log });
   car.turnDone = true;
   car.turn = null;
+  // A pop-up lap report for the hero's own ship, shown once per turn (see renderTurnReportModal()).
+  if (p.type === "hero") {
+    TURN_REPORT = {
+      shipId: p.shipId, name: participantLabel(p), legIndex: race.legIndex,
+      lane: p.lane, laps: p.laps, courseLaps: course.laps, gear: p.gear,
+      hp: p.hp, maxHp: p.maxHp, lines: t.log.slice(),
+      won: race.finished && race.winnerId === p.id,
+    };
+  }
 }
 
 // After a hero's turn step: if the turn is finished, move on to the next
@@ -1435,6 +1444,9 @@ function runAutomaticTurns(race) {
 
 /* ============================== UI ============================== */
 let CURRENT_TAB = "shipyard";
+// The hero's own lap report, popped up once per hero turn (see finishTurn() and
+// renderTurnReportModal()). Not part of STATE -- purely a transient UI overlay.
+let TURN_REPORT = null;
 function setTab(tab) { CURRENT_TAB = tab; render(); }
 function render() {
   document.querySelectorAll(".tabbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === CURRENT_TAB));
@@ -1447,6 +1459,46 @@ function render() {
   else if (CURRENT_TAB === "race") root.innerHTML = renderRace();
   else if (CURRENT_TAB === "instructions") root.innerHTML = renderInstructions();
   else root.innerHTML = renderReference();
+  if (TURN_REPORT) root.innerHTML += renderTurnReportModal(TURN_REPORT);
+}
+// Buckets a lap-report line by what it is, so the report can style rolls,
+// pass/fail, Critical/Fumble results, and the closing summary differently.
+function classifyLogLine(l) {
+  if (l.startsWith("Move=") || l.startsWith("Gear ")) return "roll";
+  if (l.startsWith("Control Task Check") || l.startsWith("Attack?")) return "hdr";
+  if (l.startsWith("Control-") || l.startsWith("Gunner check")) {
+    if (/Success|Hit\.$/.test(l)) return "good";
+    if (/Fail|Miss\.$/.test(l)) return "bad";
+  }
+  if (l.startsWith("Fumble chart") || /Critical/.test(l)) return "special";
+  if (l.startsWith("Stops short") || l.startsWith("Every hex beside")) return "bad";
+  if (l.startsWith("Moved ") || / crosses the finish line| is destroyed/.test(l)) return "summary";
+  return "";
+}
+// A pop-up styled like an official motorsport lap report: every roll, every
+// result, any Critical or Fumble, and the reason for any shortfall, for the
+// hero's own ship, shown once after each of its turns (see finishTurn()).
+function renderTurnReportModal(r) {
+  const ship = getShip(r.shipId);
+  const pct = r.maxHp ? Math.max(0, Math.min(100, Math.round(r.hp / r.maxHp * 100))) : 0;
+  return `<div class="modal-overlay" onclick="if(event.target===this) App.dismissTurnReport()">
+    <div class="lapreport">
+      <div class="lapreport-checker"></div>
+      <div class="lapreport-banner">
+        <div class="kicker">Official Lap Report — Leg ${r.legIndex + 1}</div>
+        <div class="title">${ship ? iconThumbImg(ship) : ""}${esc(r.name)}</div>
+      </div>
+      <div class="lapreport-stats">
+        <div><small>Lane</small><b>${r.lane}</b></div>
+        <div><small>Lap</small><b>${Math.min(r.laps, r.courseLaps)}/${r.courseLaps}</b></div>
+        <div><small>Gear</small><b>${r.gear}</b></div>
+        <div><small>HP</small><b>${r.hp}/${r.maxHp} (${pct}%)</b></div>
+      </div>
+      <div class="lapreport-body">${r.lines.map(l => `<div class="lapreport-line ${classifyLogLine(l)}">${esc(l)}</div>`).join("")}</div>
+      <div class="lapreport-checker"></div>
+      <div class="lapreport-footer"><button onclick="App.dismissTurnReport()">${r.won ? "🏁 Victory Lap" : "Continue"}</button></div>
+    </div>
+  </div>`;
 }
 
 /* ---------- Shipyard: build Ship Classes (the reusable hull) ----------
@@ -2345,6 +2397,9 @@ const App = {
   abandonRace() {
     if (!confirm("Abandon the current race?")) return;
     STATE.race = null; STATE._openDeclFor = null; saveState(); render();
+  },
+  dismissTurnReport() {
+    TURN_REPORT = null; render();
   },
 
   /* Race play */
