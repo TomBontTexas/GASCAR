@@ -15,6 +15,9 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Ship Class stat table: no duplicate number next to the spinner
+- Each stat's spinner already shows its value, so the bold number that used to sit beside it is gone. Damage keeps its label (it shows "1D6+N", not just the bonus number, which the spinner alone doesn't convey).
+
 ### 2026-10-07 — Lap report: Slip log line reformatted; Leg Target Number shown
 - The Slip log line now reads "Total Slips = N at M Movement Points" instead of "Slip left/right: costs M movement point(s) (Slip N this Leg)." The nth-Slip-costs-n rule itself is unchanged, only the wording.
 - The lap report modal now shows the Leg's Tier, Description and Target Number (matching the Race tab's Leg card) directly under the banner.
