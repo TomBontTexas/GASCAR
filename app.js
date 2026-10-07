@@ -305,7 +305,7 @@ function carStats(p) {
       const base = (cls && cls[stat]) || 0;
       const adj = (sponsor.bonus[stat] || 0) - (sponsor.penalty[stat] || 0);
       const v = base + adj;
-      out[stat] = stat === "damage" ? v : Math.max(stat === "range" ? 1 : 0, v);
+      out[stat] = stat === "damage" || stat === "damageControl" ? v : Math.max(stat === "range" ? 1 : 0, v);
     });
     const crewman = ship && getCrewman(ship.crewmanId);
     out.crewPilot = crewman ? crewman.pilot : 0;
@@ -1193,7 +1193,7 @@ function resolveTurn(race, p, choices) {
   if (choices.damageControl) {
     car.attackedThisLeg = true;
     const dcRoll = rollD(GDATA.DIE_SIDES);
-    const healed = dcRoll + stats.damageControl;
+    const healed = Math.max(0, dcRoll + stats.damageControl);
     const before = p.hp;
     p.hp = Math.min(p.maxHp, p.hp + healed);
     log.push(`Damage Control: rolled ${dcRoll} + Damage Control ${stats.damageControl} = ${healed} HP repaired (${before} to ${p.hp}). No attack this Leg.`);
