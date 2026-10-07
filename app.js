@@ -1158,7 +1158,9 @@ function resolveAttack(race, p, target, log) {
   race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
 }
 // Enemy racers within the attacker's Range (weapon range, in hexes) of a position along the path.
+// No attacks on the first Leg (see RULE_CHANGES.md).
 function attackTargetsFrom(race, p, geom, pos) {
+  if (race.legIndex === 0) return [];
   const here = { lane: pos.laneIdx0 + 1, hexPos: pos.hexPos };
   const range = Math.max(1, carStats(p).range || 1);
   return race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, here, x, range));
@@ -2118,7 +2120,7 @@ function renderInstructions() {
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
       <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
-      <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
+      <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
 

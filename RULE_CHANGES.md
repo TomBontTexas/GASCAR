@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — No attacks on the first Leg
+- **Earlier value:** a racer could attack any racer in Range starting on Leg 1.
+- **Current value:** attacks aren't offered or available during the first Leg of a race. Attacking becomes available from Leg 2 onward.
+- **Where:** `attackTargetsFrom()` in `app.js`.
+
 ### 2026-10-07 — Gunner base raised back up
 - **Earlier value:** Ship Class Gunner base 3.
 - **Current value:** Ship Class Gunner base 5. Now that gear Disadvantage (D/DD) also applies to the Gunner check, base 3 made it too hard to hit. Each saved Ship Class keeps the levels it was bought with, so only its free baseline moves and build cost is unchanged.
