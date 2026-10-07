@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — New Ship Class stat: Damage Control
+- **Earlier value:** no repair mechanic existed.
+- **Current value:** Damage Control is a new Ship Class stat (Hangar Bay and Shipyard tables, sponsor rows, build points), sitting between Gunner and Damage. It starts at a base of 0 and costs build points the same way as every other stat. At the start of each Leg, before Gear, a ship may choose Damage Control instead of being available to attack: it rolls 1D6 + Damage Control and repairs that much HP (never above its max HP), but cannot attack that Leg. An NPC below full HP always takes Damage Control that Leg.
+- **Where:** `GDATA.SHIP_STATS` / `STAT_BASE` in `data.js`; `resolveTurn()`, `npcChoices()`, `renderHeroTurnForm()` in `app.js`.
+
 ### 2026-10-07 — No attacks on the first Leg
 - **Earlier value:** a racer could attack any racer in Range starting on Leg 1.
 - **Current value:** attacks aren't offered or available during the first Leg of a race. Attacking becomes available from Leg 2 onward.

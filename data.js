@@ -47,9 +47,14 @@ GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: 
    progression as everything else -- +1 costs 1pt, +2 costs 3pt total, +3
    costs 6pt total...), and the actual roll (1D6 + bonus) happens when an
    Attack is resolved (see resolveTurn() in app.js), not baked into a single
-   number the way every other stat is. */
-GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damage", "armor", "range"];
-GDATA.STAT_BASE = { thrust: 1, points: 10, control: 5, gunner: 5, armor: 0, range: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
+   number the way every other stat is.
+
+   Damage Control (see RULE_CHANGES.md 2026-10-07) also rolls a 1D6 plus its
+   value when used, same as Damage, but it DOES have a normal baseline (0,
+   in GDATA.STAT_BASE) and costs build points the usual way -- only the roll
+   mechanic is Damage-like, not the baseline. */
+GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damageControl", "damage", "armor", "range"];
+GDATA.STAT_BASE = { thrust: 1, points: 10, control: 5, gunner: 5, damageControl: 0, armor: 0, range: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
 GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
 
 /* ---------- Crewmen (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ----------

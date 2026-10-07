@@ -108,6 +108,7 @@ function loadState() {
    restart precedent as _circusMaximusConversion above. */
 function migrateState(state) {
   (state.shipClasses || []).forEach(cls => { if (cls.range === undefined) cls.range = GDATA.STAT_BASE.range; });
+  (state.shipClasses || []).forEach(cls => { if (cls.damageControl === undefined) cls.damageControl = GDATA.STAT_BASE.damageControl; });
   // Base-value change (see RULE_CHANGES.md 2026-10-06): Thrust 3->1, Gunner 5->3,
   // Armor 1->0, and crew Pilot/Gunner 5->0. Each saved stat keeps the levels it was
   // bought with, so the ship keeps its build cost and only its free baseline moves.
@@ -238,11 +239,11 @@ function freshClassStats() {
   SHIP_STATS.forEach(stat => { out[stat] = shipStatBase(stat); });
   return out;
 }
-// Damage displays as "1D6" (plus its bonus, if any) rather than a bare
-// number -- every other stat just shows its raw value.
+// Damage and Damage Control both display as "1D6" (plus their value, if
+// any) rather than a bare number -- every other stat just shows its raw value.
 function formatStatValue(cls, stat) {
-  if (stat !== "damage") return String(cls[stat]);
-  const bonus = cls.damage || 0;
+  if (stat !== "damage" && stat !== "damageControl") return String(cls[stat]);
+  const bonus = cls[stat] || 0;
   return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? (bonus < 0 ? "-" + -bonus : "+" + bonus) : ""}`;
 }
 // ---------- Crewman (Cantina) ----------
@@ -692,7 +693,7 @@ function racerTipHtml(race, p) {
   const hero = p.type === "hero" ? getShip(p.shipId) : null;
   const crewman = hero ? STATE.crewmen.find(c => c.id === hero.crewmanId) : null;
   const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
-  const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage", cs.damage], ["Armor", cs.armor]];
+  const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage Control", cs.damageControl], ["Damage", cs.damage], ["Armor", cs.armor]];
   return `<div class="tvtip">
     <div class="tvtip-stripe"><span class="tvtip-pos">P${pos}</span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
     <div class="tvtip-body">
@@ -953,7 +954,7 @@ function initLegState(race) {
   const cars = {};
   race.participants.forEach(p => {
     cars[p.id] = {
-      gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, turn: null,
+      gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, damageControl: false, turn: null,
       // Disadvantage carried in from hits and fumbles; consumed by this car's next check.
       pendingD: prev[p.id] ? prev[p.id].pendingD || 0 : 0,
       turnDone: !!p.out
@@ -1042,7 +1043,8 @@ function npcChoices(race, p) {
   const geom = circTrackGeometry(course);
   const positions = standingsPositions(race, course);
   const agg = legAggressionFor(p, positions);
-  return { gearChange: npcGearChange(race, p, agg) };
+  // An NPC below full HP uses Damage Control instead of attacking this Leg.
+  return { gearChange: npcGearChange(race, p, agg), damageControl: p.hp < p.maxHp };
 }
 
 /* ---------- Resolving one turn ---------- */
@@ -1178,6 +1180,18 @@ function resolveTurn(race, p, choices) {
   const tn = ls.leg.finalTN;
   const stats = carStats(p);
   const log = [];
+
+  // 0. Damage Control: offered at the start of the Leg, before Gear/Movement.
+  // Repairs 1D6 + Damage Control HP (never above max HP) in exchange for
+  // forgoing this Leg's attack.
+  if (choices.damageControl) {
+    car.attackedThisLeg = true;
+    const dcRoll = rollD(GDATA.DIE_SIDES);
+    const healed = dcRoll + stats.damageControl;
+    const before = p.hp;
+    p.hp = Math.min(p.maxHp, p.hp + healed);
+    log.push(`Damage Control: rolled ${dcRoll} + Damage Control ${stats.damageControl} = ${healed} HP repaired (${before} to ${p.hp}). No attack this Leg.`);
+  }
 
   // 1. Gear shift (at most one level) and movement roll.
   p.gear = clampInt(p.gear + clampInt(choices.gearChange, -1, 1, 0), 0, GDATA.MAX_GEAR, p.gear);
@@ -1485,6 +1499,7 @@ function render() {
 function classifyLogLine(l) {
   if (l.startsWith("Move=") || l.startsWith("Gear ")) return "roll";
   if (l.startsWith("Control Task Check") || l.startsWith("Attack?") || l.startsWith("Gunner vs ")) return "hdr";
+  if (l.startsWith("Damage Control:")) return "good";
   if (/ Success$/.test(l) || / Hit$/.test(l)) return "good";
   if (/ Fail$/.test(l) || / Miss$/.test(l)) return "bad";
   if (l.startsWith("Fumble chart") || /Critical/.test(l)) return "special";
@@ -1550,7 +1565,7 @@ function renderShipyard() {
   html += `</section>`;
   return html;
 }
-const STAT_LABEL = { thrust: "Thrust (G)", points: "Hit Points", control: "Control", gunner: "Gunner", damage: "Damage", armor: "Armor", range: "Range" };
+const STAT_LABEL = { thrust: "Thrust (G)", points: "Hit Points", control: "Control", gunner: "Gunner", damageControl: "Damage Control", damage: "Damage", armor: "Armor", range: "Range" };
 function renderShipClassCard(cls) {
   const tier = carTier(cls.division);
   const collapsed = !!cls._collapsed;
@@ -1577,7 +1592,7 @@ function renderShipClassCard(cls) {
     </div>`;
   if (!collapsed) {
     html += `<table class="mktable shiptable classtable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
-      ${SHIP_STATS.map(s => `<td>${s === "damage" ? `<b>${formatStatValue(cls, s)}</b> ` : ""}${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)}<div class="muted stat-next">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</div></td>`).join("")}
+      ${SHIP_STATS.map(s => `<td>${s === "damage" || s === "damageControl" ? `<b>${formatStatValue(cls, s)}</b> ` : ""}${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)}<div class="muted stat-next">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</div></td>`).join("")}
     </tr></table>`;
     html += renderClassIconPicker(cls);
   }
@@ -2003,6 +2018,7 @@ function renderHeroTurnForm(race, p) {
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
+    <label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Damage Control: 1D6+${stats.damageControl} HP (no attack this Leg)</label>
     <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + ${stats.thrust}` : "no movement"}</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${mod} vs. TN (${tn})</div>
     <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
@@ -2103,7 +2119,7 @@ function renderInstructions() {
     <p class="muted">Build things in this order, then run the race. Rules follow Circus Astralis (see RULE_CHANGES.md 2026-10-05).</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is a reusable hull: a Division (sets its Tier, and so its construction points: Tier × 10), a White icon, and six stats -- Thrust, Hit Points, Control, Gunner, Damage (1D6 plus a bonus), and Armor -- bought up from base values (Thrust 3, Hit Points 10, Control 5, Gunner 5, Armor 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
+    <p>A Ship Class is a reusable hull: a Division (sets its Tier, and so its construction points: Tier × 10), a White icon, and eight stats -- Thrust, Hit Points, Control, Gunner, Damage Control (1D6 plus a bonus), Damage (1D6 plus a bonus), Armor, and Range -- bought up from base values (Thrust 1, Hit Points 10, Control 5, Gunner 5, Damage Control 1D6, Armor 0, Range 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
 
     <h3>2. Cantina — build Crewmen</h3>
     <p>Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner, one point per increase. A ship's crew shares one Pilot and one Gunner value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks.</p>
@@ -2115,6 +2131,7 @@ function renderInstructions() {
     <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
     <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). The lowest Thrust starts in the outermost lane. On a ship's turn:</p>
     <ol>
+      <li><b>Damage Control</b> — offered at the start of the Leg, before Gear. If taken, roll 1D6 + Damage Control and repair that much HP (never above max HP), but the ship cannot attack this Leg.</li>
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
@@ -2439,6 +2456,7 @@ const App = {
       if (p.gear + car.gearChange < 0) car.gearChange = -p.gear;
       if (p.gear + car.gearChange > GDATA.MAX_GEAR) car.gearChange = GDATA.MAX_GEAR - p.gear;
     }
+    if (field === "damageControl") car.damageControl = !!val;
     saveState(); render();
   },
   startRaceNow() {
@@ -2462,7 +2480,7 @@ const App = {
     const p = race.participants.find(x => x.id === pid);
     if (!p || nextTurnParticipant(race) !== p || race.legState.cars[pid].turn) return;
     const car = race.legState.cars[pid];
-    resolveTurn(race, p, { gearChange: car.gearChange });
+    resolveTurn(race, p, { gearChange: car.gearChange, damageControl: car.damageControl });
     afterHeroStep(race, p);
     saveState(); render();
   },
