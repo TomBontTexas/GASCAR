@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-06 — New Ship Class stat: Range (weapon range)
+- **Earlier value:** every attack reached 2 hexes.
+- **Current value:** Range is a Ship Class stat. It defaults to 1 hex, and extra levels are bought with build points the same way as the other stats. Sponsor bonus and penalty apply to it too, and it never drops below 1. A racer can attack any racer within its Range, once per Leg.
+- **Where:**  /  in ,  and  in .
+
 ### 2026-10-06 — Failing to pass an occupied hex drops gear
 - **Current value:** when a ship fails the Control check to fly straight through an occupied hex, it drops one gear, to no lower than Gear 0, as well as stopping short.
 - **Where:** `applyEncounter()` in `app.js`.

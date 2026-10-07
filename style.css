@@ -319,7 +319,7 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .tvtip-hp { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; font-weight: 700; }
 .tvtip-hpbar { flex: 1; height: 10px; background: #0d1526; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
 .tvtip-hpbar div { height: 100%; background: linear-gradient(90deg, #2fbf71, var(--gold)); }
-.tvtip-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 8px; background: var(--border); border: 1px solid var(--border); font: 600 16px Bahnschrift, "Arial Narrow", Arial, sans-serif; }
+.tvtip-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 8px; background: var(--border); border: 1px solid var(--border); font: 600 16px Bahnschrift, "Arial Narrow", Arial, sans-serif; }
 .tvtip-stats div { background: #0d1526; padding: 4px 2px; }
 .tvtip-stats small { display: block; font: 700 9px Arial, sans-serif; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
 .tvtip-hit { margin-top: 8px; background: var(--danger); color: #fff; font: 600 14px Bahnschrift, "Arial Narrow", Arial, sans-serif; letter-spacing: 1px; padding: 4px; text-transform: uppercase; }

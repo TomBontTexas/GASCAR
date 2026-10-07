@@ -107,6 +107,7 @@ function loadState() {
    crewmanId instead, which don't correspond to anything -- same clear-and-
    restart precedent as _circusMaximusConversion above. */
 function migrateState(state) {
+  (state.shipClasses || []).forEach(cls => { if (cls.range === undefined) cls.range = GDATA.STAT_BASE.range; });
   if (!state._circusMaximusConversion) {
     state.ships = [];
     state.courses = [];
@@ -276,7 +277,7 @@ function carStats(p) {
       const base = (cls && cls[stat]) || 0;
       const adj = (sponsor.bonus[stat] || 0) - (sponsor.penalty[stat] || 0);
       const v = base + adj;
-      out[stat] = stat === "damage" ? v : Math.max(0, v);
+      out[stat] = stat === "damage" ? v : Math.max(stat === "range" ? 1 : 0, v);
     });
     const crewman = ship && getCrewman(ship.crewmanId);
     out.crewPilot = crewman ? crewman.pilot : 0;
@@ -400,21 +401,20 @@ function circularHexDist(a, b, circ) {
 function hexDistance(a, b) {
   return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
 }
-// House rule: Racing Maneuvers (and Attack) can target a car within
-// MANEUVER_RANGE_HEXES hexes (same lane or a nearby one), wrapping a lap in
+// An attack targets a car within the attacker's Range in hexes (same lane or a
+// nearby one), wrapping a lap in
 // the same lane. A different lane's position is compared via real hex
 // distance (cube coordinates).
-var MANEUVER_RANGE_HEXES = 2;
-function hexesWithinManeuverRange(geom, pA, pB) {
+function hexesWithinManeuverRange(geom, pA, pB, range) {
   const laneA = (pA.lane || 1) - 1, laneB = (pB.lane || 1) - 1;
-  if (Math.abs(laneA - laneB) > MANEUVER_RANGE_HEXES) return false;
+  if (Math.abs(laneA - laneB) > range) return false;
   if (laneA === laneB) {
     const circA = geom.laneHexLists[laneA].length || 1;
-    return circularHexDist(pA.hexPos || 0, pB.hexPos || 0, circA) <= MANEUVER_RANGE_HEXES;
+    return circularHexDist(pA.hexPos || 0, pB.hexPos || 0, circA) <= range;
   }
   const hexA = geom.laneHexLists[laneA][(pA.hexPos || 0) % geom.laneHexLists[laneA].length];
   const hexB = geom.laneHexLists[laneB][(pB.hexPos || 0) % geom.laneHexLists[laneB].length];
-  return hexDistance(hexA, hexB) <= MANEUVER_RANGE_HEXES;
+  return hexDistance(hexA, hexB) <= range;
 }
 // A hex's structural position expressed as (completed legs) + (fraction
 // through the current leg) -- used to sanity-check candidate Slip neighbors
@@ -666,7 +666,7 @@ function racerTipHtml(race, p) {
   const hero = p.type === "hero" ? getShip(p.shipId) : null;
   const crewman = hero ? STATE.crewmen.find(c => c.id === hero.crewmanId) : null;
   const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
-  const tipStats = [["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage", cs.damage], ["Armor", cs.armor]];
+  const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage", cs.damage], ["Armor", cs.armor]];
   return `<div class="tvtip">
     <div class="tvtip-stripe"><span class="tvtip-pos">P${pos}</span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
     <div class="tvtip-body">
@@ -1114,10 +1114,11 @@ function resolveAttack(race, p, target, log) {
   applyDamage(race, target, dmg, log);
   race.legState.cars[target.id].pendingD += 1; // taking a hit: one Disadvantage on the target's next check
 }
-// Enemy racers within attack range (2 hexes) of a position along the path.
+// Enemy racers within the attacker's Range (weapon range, in hexes) of a position along the path.
 function attackTargetsFrom(race, p, geom, pos) {
   const here = { lane: pos.laneIdx0 + 1, hexPos: pos.hexPos };
-  return race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, here, x));
+  const range = Math.max(1, carStats(p).range || 1);
+  return race.participants.filter(x => x.id !== p.id && !x.out && hexesWithinManeuverRange(geom, here, x, range));
 }
 
 // A turn starts here: gear, movement roll, the Control check (only when the
@@ -1448,7 +1449,7 @@ function renderShipyard() {
   html += `</section>`;
   return html;
 }
-const STAT_LABEL = { thrust: "Thrust (G)", points: "Hit Points", control: "Control", gunner: "Gunner", damage: "Damage", armor: "Armor" };
+const STAT_LABEL = { thrust: "Thrust (G)", points: "Hit Points", control: "Control", gunner: "Gunner", damage: "Damage", armor: "Armor", range: "Range" };
 function renderShipClassCard(cls) {
   const tier = carTier(cls.division);
   const collapsed = !!cls._collapsed;
@@ -1851,7 +1852,7 @@ function renderTurnOrder(race) {
     const status = p.out ? "Wreck" : ls.cars[id].turnDone ? "Done" : (next && next.id === id ? "Up next" : "Waiting");
     html += `<tr><td>${i + 1}</td><td>${esc(participantLabel(p))}${p.type === "npc" ? ` <span class="tag">NPC</span>` : ""}</td><td>${carStats(p).thrust}</td><td>${status}</td></tr>`;
   });
-  return html + `</table><p class="muted">Click a hex the ship moves into on the track: straight ahead, or a forward Slip left or right. Each hex you leave gets a dot until the turn ends. A red racer within 2 hexes can be attacked, once per Leg.</p></section>`;
+  return html + `</table><p class="muted">Click a hex the ship moves into on the track: straight ahead, or a forward Slip left or right. Each hex you leave gets a dot until the turn ends. A red racer within your Range can be attacked, once per Leg.</p></section>`;
 }
 function renderTurnPanel(race) {
   const ls = race.legState;
@@ -2001,7 +2002,7 @@ function renderInstructions() {
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
       <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
-      <li><b>Attack</b> — if you pass within 2 hexes of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
+      <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
 

@@ -19,6 +19,9 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Range stat added to Ship Classes
+- Range is the seventh class stat (Hangar Bay and Shipyard tables, sponsor rows, build points). Older saved classes get Range 1 on load. The attack check and the tooltip use the attacker's Range.
+
 ### 2026-10-06 — Hangar Bay ship table: one set of columns with totals
 - Pilot skill and Gunner skill are the first two columns. The six stats follow, and the sponsor bonus and penalty rows sit in the same columns. A Total row beneath gives each column's result (Class + Bonus − Penalty). The old separate sponsor table is gone. `renderShipStatsTable()` in `app.js`.
 
