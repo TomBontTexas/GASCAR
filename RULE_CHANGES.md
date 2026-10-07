@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — Gunner base raised back up
+- **Earlier value:** Ship Class Gunner base 3.
+- **Current value:** Ship Class Gunner base 5. Now that gear Disadvantage (D/DD) also applies to the Gunner check, base 3 made it too hard to hit. Each saved Ship Class keeps the levels it was bought with, so only its free baseline moves and build cost is unchanged.
+- **Where:** `GDATA.STAT_BASE` in `data.js`; `migrateState()` in `app.js`.
+
 ### 2026-10-07 — Gear's Advantage/Disadvantage now also applies to the Gunner check
 - **Earlier value:** the gear's A/AA/D/DD applied only to the Control check; the Gunner (attack) check always rolled at no modifier.
 - **Current value:** a Gunner check made this turn rolls with the same gear-based modifier as the Control check (gear only -- not the movement-over-TN or pending-hit components). The hero turn form previews both: `Control-<score><mod> vs. TN (<TN>)` and `Gunner-<score><mod> vs. TN (<TN>)`.

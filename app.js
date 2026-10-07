@@ -124,6 +124,16 @@ function migrateState(state) {
     state.race = null;
     state._statBaseLowered = true;
   }
+  // Gunner base raised back up (see RULE_CHANGES.md 2026-10-07): Gunner checks
+  // were failing too often with Disadvantage once the base dropped to 3. Each
+  // saved Ship Class keeps the levels it was bought with, so only its free
+  // baseline moves (and its build cost is unchanged).
+  if (!state._gunnerBaseRaised) {
+    const OLD_GUNNER_BASE = 3;
+    (state.shipClasses || []).forEach(cls => { cls.gunner = GDATA.STAT_BASE.gunner + Math.max(0, (cls.gunner || 0) - OLD_GUNNER_BASE); });
+    state.race = null;
+    state._gunnerBaseRaised = true;
+  }
   if (!state._circusMaximusConversion) {
     state.ships = [];
     state.courses = [];
