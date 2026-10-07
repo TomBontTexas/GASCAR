@@ -15,6 +15,9 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Lap report: Leg header reflows to avoid mid-word wrapping
+- "Tier N — Description (Mod ±N) — Target Number: N" could wrap mid-word on a narrow screen. Now two lines: "Tier N (Mod ±N)/Target N" above the Leg's Description.
+
 ### 2026-10-07 — Race tab: Damage Control checkbox hidden at full HP; hero highlighted when ready to act
 - The Damage Control checkbox only shows once the ship is below max HP -- nothing to repair otherwise.
 - The hero's own ship icon on the track gets a green ring while the Take Turn button is showing. It goes away once the turn starts walking the move or waiting on an attack.

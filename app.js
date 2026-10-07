@@ -1528,7 +1528,10 @@ function renderTurnReportModal(r) {
         <div class="kicker">Official Lap Report — Leg ${r.legIndex + 1}</div>
         <div class="title">${ship ? iconThumbImg(ship) : ""}${esc(r.name)}</div>
       </div>
-      <div class="lapreport-leg">Tier ${r.leg.tier} — ${esc(r.leg.feature)}${r.leg.mod !== 0 ? ` (Mod ${r.leg.mod >= 0 ? "+" : ""}${r.leg.mod})` : ""} — <b>Target Number: ${r.leg.finalTN}</b>${cappedTxt}</div>
+      <div class="lapreport-leg">
+        <div><b>Tier ${r.leg.tier}${r.leg.mod !== 0 ? ` (Mod ${r.leg.mod >= 0 ? "+" : ""}${r.leg.mod})` : ""}/Target ${r.leg.finalTN}</b>${cappedTxt}</div>
+        <div>${esc(r.leg.feature)}</div>
+      </div>
       <div class="lapreport-stats">
         <div><small>Lane</small><b>${r.lane}</b></div>
         <div><small>Lap</small><b>${Math.min(r.laps, r.courseLaps)}/${r.courseLaps}</b></div>
