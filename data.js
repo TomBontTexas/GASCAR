@@ -23,10 +23,13 @@ GDATA.TIERS = {
 };
 
 /* ---------- Divisions: flavor name -> Tier + which Leg Feature flavor pool
-   (FLASH_LEG_FEATURES vs SPACE_LEG_FEATURES) it draws from. No other
-   mechanical effect -- Tier alone drives crew size, build points, and TN. ---------- */
+   (FLASH_LEG_FEATURES vs SPACE_LEG_FEATURES) it draws from. Tier drives crew
+   size and TN/obstacle-damage scaling; a Ship Class's construction-point
+   budget is set directly per Division instead (see RULE_CHANGES.md
+   2026-10-07), since Flash and Spark share Tier 1 but not a budget. ---------- */
 GDATA.DIVISIONS = ["Flash", "Spark", "Comet", "Meteor", "Nova"];
 GDATA.DIVISION_TIER = { Flash: 1, Spark: 1, Comet: 2, Meteor: 3, Nova: 4 };
+GDATA.DIVISION_BUILD_POINTS = { Flash: 10, Spark: 20, Comet: 30, Meteor: 40, Nova: 50 };
 GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: false, Nova: false };
 
 /* ---------- Ship Class build stats (see RULE_CHANGES.md 2026-10-04) ----------

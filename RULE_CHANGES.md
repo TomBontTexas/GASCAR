@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — Construction points set per Division, not Tier x 10
+- **Earlier value:** a Ship Class's construction-point budget was its Division's Tier x 10 -- Flash 10, Spark 10, Comet 20, Meteor 30, Nova 40 (Flash and Spark share Tier 1, so they shared a budget).
+- **Current value:** each Division has its own budget: Flash 10, Spark 20, Comet 30, Meteor 40, Nova 50. Tier itself is unchanged and still sets flavor crew size and TN/obstacle-damage scaling.
+- **Where:** `GDATA.DIVISION_BUILD_POINTS` in `data.js`; `divisionBuildPoints()` in `app.js`.
+
 ### 2026-10-07 — Sponsor bonus/penalty lowered to 2
 - **Earlier value:** up to 3 bonus points spread over up to 3 stats, in exchange for a -3 penalty on one stat.
 - **Current value:** up to 2 bonus points spread over up to 2 stats, in exchange for a -2 penalty on one stat.

@@ -201,8 +201,11 @@ function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); re
 /* ============================== Cars: Tier, build points, stats ==============================
    See RULE_CHANGES.md 2026-10-04. Division (Flash/Spark/Comet/Meteor/Nova) is
    FLAVOR ONLY -- it just picks a Tier and which Leg Feature flavor pool to
-   draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier alone drives
-   flavor crew size and a Ship Class's construction-point budget (Tier x 10).
+   draw from (GDATA.DIVISION_TIER/DIVISION_ATMOSPHERIC). Tier drives flavor
+   crew size and TN/obstacle-damage scaling; a Ship Class's construction-point
+   budget is set directly per Division (GDATA.DIVISION_BUILD_POINTS, see
+   RULE_CHANGES.md 2026-10-07), since Flash and Spark share Tier 1 but not a
+   budget.
 
    A car is six Ship Class stats (Thrust/Points/Control/Gunner/Damage/Armor)
    plus a crewman's Pilot and Gunner -- see carStats() below, the one place that
@@ -211,8 +214,8 @@ function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); re
 const SHIP_STATS = GDATA.SHIP_STATS;
 function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
 function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
-// Construction points: Tier x 10, flat -- see RULE_CHANGES.md 2026-10-04.
-function tierBuildPoints(tier) { return tier * 10; }
+// Construction points, set directly per Division -- see RULE_CHANGES.md 2026-10-07.
+function divisionBuildPoints(division) { return GDATA.DIVISION_BUILD_POINTS[division] || 10; }
 // The uniform construction-point cost progression (see RULE_CHANGES.md
 // 2026-10-04): raising a stat one point ABOVE ITS OWN BASELINE costs 1
 // construction point, the next point costs 2 more (3 total), the next costs
@@ -233,7 +236,7 @@ function shipStatLevel(cls, stat) { return Math.max(0, (cls[stat] || 0) - shipSt
 function classBuildPointsSpent(cls) {
   return SHIP_STATS.reduce((sum, stat) => sum + mkCumulativeCost(shipStatLevel(cls, stat)), 0);
 }
-function classBuildPointsRemaining(cls) { return tierBuildPoints(carTier(cls.division)) - classBuildPointsSpent(cls); }
+function classBuildPointsRemaining(cls) { return divisionBuildPoints(cls.division) - classBuildPointsSpent(cls); }
 function freshClassStats() {
   const out = {};
   SHIP_STATS.forEach(stat => { out[stat] = shipStatBase(stat); });
@@ -253,15 +256,14 @@ function freshCrewman(name) { return { id: uid("crew"), name, pilot: GDATA.CREWM
 function crewmanSplitSpent(crewman) { return (crewman.pilot - GDATA.CREWMAN_BASE) + (crewman.gunner - GDATA.CREWMAN_BASE); }
 function crewmanSplitRemaining(crewman) { return GDATA.CREWMAN_SPLIT_POINTS - crewmanSplitSpent(crewman); }
 // ---------- NPCs: auto-built, not hand-spent ----------
-// An NPC has no Ship Class/Crewman of its own -- its Division/Tier
+// An NPC has no Ship Class/Crewman of its own -- its Division's
 // construction-point budget is spent automatically, as evenly as the
 // triangular cost curve allows (repeatedly bump whichever of the 6 Ship
 // stats has the fewest points spent ABOVE ITS OWN baseline so far), and its
 // Skill is left at the same free baseline every Crewman starts at (NPCs
 // don't earn or spend XP).
 function freshNpcStats(division) {
-  const tier = carTier(division);
-  let budget = tierBuildPoints(tier);
+  let budget = divisionBuildPoints(division);
   const out = freshClassStats();
   const levels = {}; SHIP_STATS.forEach(s => { levels[s] = 0; });
   for (;;) {
@@ -1589,7 +1591,7 @@ function renderShipClassCard(cls) {
   const tier = carTier(cls.division);
   const collapsed = !!cls._collapsed;
   const spent = classBuildPointsSpent(cls);
-  const budget = tierBuildPoints(tier);
+  const budget = divisionBuildPoints(cls.division);
   const diff = budget - spent;
   const overBudget = diff < 0;
   const budgetStatus = overBudget ? `${-diff} OVER budget` : diff > 0 ? `${diff} under budget` : "exactly on budget";
@@ -1605,7 +1607,7 @@ function renderShipClassCard(cls) {
           ${GDATA.DIVISIONS.map(d => `<option value="${d}" ${d === cls.division ? "selected" : ""}>${d}</option>`).join("")}
         </select></label>
       <span class="tag">Tier ${tier}</span>
-      <span class="tag ${overBudget ? "danger" : ""}" title="Construction Points used vs this Class's Tier x 10 budget">Construction Points ${spent} / ${budget} (${budgetStatus})</span>
+      <span class="tag ${overBudget ? "danger" : ""}" title="Construction Points used vs this Class's Division budget">Construction Points ${spent} / ${budget} (${budgetStatus})</span>
       <span class="tag" title="How many Ships in the Hangar Bay are built from this Class">${shipsBuilt} ship${shipsBuilt === 1 ? "" : "s"} built</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShipClass('${cls.id}')">Delete</button>
     </div>`;
@@ -2143,7 +2145,7 @@ function renderInstructions() {
     <p class="muted">Build things in this order, then run the race. Rules follow Circus Astralis (see RULE_CHANGES.md 2026-10-05).</p>
 
     <h3>1. Shipyard — build Ship Classes</h3>
-    <p>A Ship Class is a reusable hull: a Division (sets its Tier, and so its construction points: Tier × 10), a White icon, and eight stats -- Thrust, Hit Points, Control, Gunner, Damage Control (1D6 plus a bonus), Damage (1D6 plus a bonus), Armor, and Range -- bought up from base values (Thrust 1, Hit Points 10, Control 5, Gunner 5, Damage Control 1D6, Armor 0, Range 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
+    <p>A Ship Class is a reusable hull: a Division (sets its construction-point budget -- see the Divisions table below), a White icon, and eight stats -- Thrust, Hit Points, Control, Gunner, Damage Control (1D6 plus a bonus), Damage (1D6 plus a bonus), Armor, and Range -- bought up from base values (Thrust 1, Hit Points 10, Control 5, Gunner 5, Damage Control 1D6, Armor 0, Range 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
 
     <h3>2. Cantina — build Crewmen</h3>
     <p>Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner, one point per increase. A ship's crew shares one Pilot and one Gunner value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks.</p>
@@ -2185,7 +2187,7 @@ function renderReference() {
 
   html += `<section class="card"><h2>Divisions</h2><table class="mktable">
     <tr><th>Division</th><th>Tier</th><th>Crew (flavor)</th><th>Construction Points</th></tr>
-    ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${tierBuildPoints(t)}</td></tr>`; }).join("")}
+    ${GDATA.DIVISIONS.map(d => { const t = GDATA.DIVISION_TIER[d]; return `<tr><td>${d}</td><td>${t}</td><td>${tierCrewCount(t)}</td><td>${divisionBuildPoints(d)}</td></tr>`; }).join("")}
   </table>
   <p class="muted">Every Ship Class stat costs the same: 1 point for the first increase above base, 2 for the next, 3 for the one after, and so on.</p></section>`;
 
