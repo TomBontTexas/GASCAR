@@ -1889,9 +1889,9 @@ function renderHeroTurnForm(race, p) {
     <div class="hub-line"><b>${esc(shipName(p.shipId))}</b>${car.pendingD > 0 ? ` <span class="tag" title="Disadvantage on its next Control check">Hit</span>` : ""}</div>
     <div class="hub-row">
       <select onchange="App.setTurn('${p.id}','gearChange',this.value)" title="Gear ${p.gear}">
-        <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Down</option>
+        <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Shift up</option>
         <option value="0" ${car.gearChange === 0 ? "selected" : ""}>Hold</option>
-        <option value="1" ${car.gearChange === 1 ? "selected" : ""}>Up</option>
+        <option value="-1" ${car.gearChange === -1 ? "selected" : ""}>Shift down</option>
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
