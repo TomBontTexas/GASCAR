@@ -108,6 +108,22 @@ function loadState() {
    restart precedent as _circusMaximusConversion above. */
 function migrateState(state) {
   (state.shipClasses || []).forEach(cls => { if (cls.range === undefined) cls.range = GDATA.STAT_BASE.range; });
+  // Base-value change (see RULE_CHANGES.md 2026-10-06): Thrust 3->1, Gunner 5->3,
+  // Armor 1->0, and crew Pilot/Gunner 5->0. Each saved stat keeps the levels it was
+  // bought with, so the ship keeps its build cost and only its free baseline moves.
+  if (!state._statBaseLowered) {
+    const OLD_BASE = { thrust: 3, points: 10, control: 5, gunner: 5, armor: 1, range: 1 };
+    const OLD_CREW_BASE = 5;
+    (state.shipClasses || []).forEach(cls => {
+      Object.keys(OLD_BASE).forEach(s => { cls[s] = GDATA.STAT_BASE[s] + Math.max(0, (cls[s] || 0) - OLD_BASE[s]); });
+    });
+    (state.crewmen || []).forEach(c => {
+      c.pilot = GDATA.CREWMAN_BASE + Math.max(0, c.pilot - OLD_CREW_BASE);
+      c.gunner = GDATA.CREWMAN_BASE + Math.max(0, c.gunner - OLD_CREW_BASE);
+    });
+    state.race = null;
+    state._statBaseLowered = true;
+  }
   if (!state._circusMaximusConversion) {
     state.ships = [];
     state.courses = [];

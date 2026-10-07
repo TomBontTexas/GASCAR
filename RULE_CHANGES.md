@@ -17,6 +17,12 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-06 — New free baselines for Ship Class and crew stats
+- **Earlier value:** Thrust base 3, Gunner base 5, Armor base 1; crew Pilot and Gunner base 5 (split 5 points).
+- **Current value:** Thrust base 1, Gunner base 3, Armor base 0; crew Pilot and Gunner base 0 (split still 5 points). Points, Control, Range and Damage are unchanged. Build points still cost each level above base the same way.
+- **Existing saves:** each saved stat keeps the levels it was bought with, so ships keep their build cost. Their absolute values move to the new base (for example, Thrust 6 becomes 4). Any race in progress is dropped on load.
+- **Where:** `GDATA.STAT_BASE` and `GDATA.CREWMAN_BASE` in `data.js`; `migrateState()` in `app.js`.
+
 ### 2026-10-06 — New Ship Class stat: Range (weapon range)
 - **Earlier value:** every attack reached 2 hexes.
 - **Current value:** Range is a Ship Class stat. It defaults to 1 hex, and extra levels are bought with build points the same way as the other stats. Sponsor bonus and penalty apply to it too, and it never drops below 1. A racer can attack any racer within its Range, once per Leg.

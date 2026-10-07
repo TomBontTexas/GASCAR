@@ -19,6 +19,9 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Base values changed; saved ships converted
+- Thrust, Gunner and Armor bases lowered, and crew Pilot/Gunner base set to 0 (see RULE_CHANGES.md). `migrateState()` converts saved classes and crewmen once, keeping each level above base, and drops any race in progress.
+
 ### 2026-10-06 — Range stat added to Ship Classes
 - Range is the seventh class stat (Hangar Bay and Shipyard tables, sponsor rows, build points). Older saved classes get Range 1 on load. The attack check and the tooltip use the attacker's Range.
 

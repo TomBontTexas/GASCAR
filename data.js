@@ -49,7 +49,7 @@ GDATA.DIVISION_ATMOSPHERIC = { Flash: true, Spark: false, Comet: false, Meteor: 
    Attack is resolved (see resolveTurn() in app.js), not baked into a single
    number the way every other stat is. */
 GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damage", "armor", "range"];
-GDATA.STAT_BASE = { thrust: 3, points: 10, control: 5, gunner: 5, armor: 1, range: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
+GDATA.STAT_BASE = { thrust: 1, points: 10, control: 5, gunner: 3, armor: 0, range: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
 GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
 
 /* ---------- Crewmen (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ----------
@@ -57,7 +57,7 @@ GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
    divide between the two skills, at one point per increase -- a one-time
    build, no XP, no leveling after creation. A ship's crew shares one Pilot
    and one Gunner value; any additional crew members are flavor only. */
-GDATA.CREWMAN_BASE = 5;
+GDATA.CREWMAN_BASE = 0;
 GDATA.CREWMAN_SPLIT_POINTS = 5;
 
 /* ---------- Gear table (Circus Astralis) ----------
