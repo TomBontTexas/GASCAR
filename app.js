@@ -1576,10 +1576,9 @@ function renderShipClassCard(cls) {
       <button class="danger" style="margin-left:auto" onclick="App.deleteShipClass('${cls.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
-    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
-      ${SHIP_STATS.map(s => `<td>${s === "damage" ? `<b>${formatStatValue(cls, s)}</b> ` : ""}${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)} <span class="muted">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</span></td>`).join("")}
+    html += `<table class="mktable shiptable classtable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr><tr>
+      ${SHIP_STATS.map(s => `<td>${s === "damage" ? `<b>${formatStatValue(cls, s)}</b> ` : ""}${numStepper(`<input type="number" style="width:48px" min="${shipStatBase(s)}" value="${cls[s]}" onchange="App.updateShipClassStat('${cls.id}','${s}',this.value)">`)}<div class="muted stat-next">(next +${mkStepCost(shipStatLevel(cls, s))}pt)</div></td>`).join("")}
     </tr></table>`;
-    html += `<p class="muted" style="margin:4px 0">Crew of ${tierCrewCount(tier)} (flavor only, sized by Tier). A Ship built from this Class still needs a crewman assigned (Hangar Bay) -- Pilot and Gunner live on the crewman, not here. Control has no effect yet -- it's purchasable now so future rules have something to build against.</p>`;
     html += renderClassIconPicker(cls);
   }
   html += `</div>`;

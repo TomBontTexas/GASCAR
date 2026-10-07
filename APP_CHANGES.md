@@ -15,6 +15,9 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Ship Class stat table: cleaned up further
+- "(next +Npt)" now sits on its own centered line under every stat's spinner, instead of wrapping mid-phrase. The "Crew of N (flavor only...)" paragraph below the table is gone -- it didn't apply once Pilot/Gunner moved to the crewman.
+
 ### 2026-10-07 — Ship Class stat table: no duplicate number next to the spinner
 - Each stat's spinner already shows its value, so the bold number that used to sit beside it is gone. Damage keeps its label (it shows "1D6+N", not just the bonus number, which the spinner alone doesn't convey).
 
