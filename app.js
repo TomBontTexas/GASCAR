@@ -1871,6 +1871,7 @@ function renderAttackPrompt(race, p, t) {
   const pick = targets.length > 1 ? `document.getElementById('atkTarget-${p.id}').value` : `'${targets[0].id}'`;
   return `<div class="hub">
     <div class="hub-line"><b>Attack?</b> <span class="muted">${t.R} left</span></div>
+    ${t.R > 0 ? `<div class="hub-line muted">Next Slip costs ${race.legState.cars[p.id].slipsThisLeg + 1}</div>` : ""}
     ${targets.length > 1
       ? `<select id="atkTarget-${p.id}">${targets.map(x => `<option value="${x.id}">${esc(shortRacerName(x))}</option>`).join("")}</select>`
       : `<div class="hub-line">${esc(participantLabel(targets[0]))}</div>`}
@@ -1904,6 +1905,7 @@ function moveAllCell(race, p, t) {
 function renderMovePrompt(race, p, t) {
   return `<div class="hub">
     <div class="hub-line"><b>${t.R}</b> movement left</div>
+    <div class="hub-line muted">Next Slip costs ${race.legState.cars[p.id].slipsThisLeg + 1}</div>
     ${straightRunClear(race, p, t) ? `<button onclick="App.moveAll('${p.id}')">Move All</button>` : `<div class="hub-line muted">Click a hex</div>`}
   </div>`;
 }
