@@ -19,6 +19,9 @@ Newest entries at the top.
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
 
+### 2026-10-06 — Hangar Bay ship table: one set of columns with totals
+- Pilot skill and Gunner skill are the first two columns. The six stats follow, and the sponsor bonus and penalty rows sit in the same columns. A Total row beneath gives each column's result (Class + Bonus − Penalty). The old separate sponsor table is gone. `renderShipStatsTable()` in `app.js`.
+
 ### 2026-10-06 — Track centre rebuilt to fit the hole
 - Everything in the track's centre is one short stack of lines and full-width controls (`.hub`), sized from the hole's width, so it can't spill onto the hexes. The explanation text moved under the turn order. The finished-race winner tile is sized the same way.
 - The attack dropdown shows shortened names, so long names aren't cut off.

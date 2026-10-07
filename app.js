@@ -1558,19 +1558,25 @@ function renderHangarBay() {
   html += `</section>`;
   return html;
 }
-function renderSponsorRow(ship) {
+function renderShipStatsTable(ship, cls, crewman, eff) {
   const sponsor = sponsorOf(ship);
   const bonusTotal = sponsorBonusTotal(sponsor), penaltyTotal = sponsorPenaltyTotal(sponsor);
-  const cells = kind => SHIP_STATS.map(s => {
+  const crewCells = `<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td>`;
+  const blankCrew = `<td></td><td></td>`;
+  const sponsorCell = (kind, s) => {
     const other = kind === "bonus" ? "penalty" : "bonus";
     const blocked = !!sponsor[other][s];
-    return `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX}" value="${sponsor[kind][s] || 0}" ${blocked ? "disabled title=\"This stat already has a " + other + "\"" : ""} onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`;
-  }).join("");
-  return `<div class="row" style="align-items:flex-start"><b>Sponsor</b> <span class="muted">Spread up to ${SPONSOR_BONUS_MAX} bonus points and up to ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like.</span></div>
-    <table class="mktable shiptable"><tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
-    <tr><td>+</td>${cells("bonus")}</tr>
-    <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
-    <tr><td>−</td>${cells("penalty")}</tr></table>`;
+    const max = kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX;
+    return `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${max}" value="${sponsor[kind][s] || 0}" ${blocked ? `disabled title="This stat already has a ${other}"` : ""} onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`;
+  };
+  return `<p class="muted" style="margin:4px 0">Spread up to ${SPONSOR_BONUS_MAX} bonus and ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like. Only one of bonus or penalty per stat.</p>
+    <table class="mktable shiptable">
+      <tr><th></th><th>Pilot skill</th><th>Gunner skill</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+      <tr><th>Class</th>${crewCells}${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}</tr>
+      <tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("bonus", s)).join("")}</tr>
+      <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("penalty", s)).join("")}</tr>
+      <tr class="totals"><th>Total</th>${crewCells}${SHIP_STATS.map(s => `<td><b>${formatStatValue(eff, s)}</b></td>`).join("")}</tr>
+    </table>`;
 }
 function renderShipCard(ship) {
   const cls = getShipClass(ship.classId);
@@ -1607,11 +1613,8 @@ function renderShipCard(ship) {
       <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
     </div>`;
   if (!collapsed) {
-    html += `<table class="mktable shiptable"><tr>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}<th>Pilot skill</th><th>Gunner skill</th></tr><tr>
-      ${SHIP_STATS.map(s => `<td>${formatStatValue({ ...cls, [s]: eff[s] }, s)}</td>`).join("")}<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td>
-    </tr></table>
-    <p class="muted" style="margin:4px 0">Stats shown include the Ship Class plus any sponsor adjustment. Edit the class in the Shipyard and the crewman in the Cantina.</p>`;
-    html += renderSponsorRow(ship);
+    html += renderShipStatsTable(ship, cls, crewman, eff);
+    html += `<p class="muted" style="margin:4px 0">Totals include the Ship Class plus any sponsor adjustment. Edit the class in the Shipyard and the crewman in the Cantina.</p>`;
     html += `<div class="row"><label style="flex:1">Other crew (flavor only)
       <input value="${esc(ship.flavorCrew || "")}" placeholder="e.g. Hot Dust, Mack" onchange="App.updateShip('${ship.id}','flavorCrew',this.value)" style="width:100%"></label></div>`;
     html += renderShipIconPicker(ship);
