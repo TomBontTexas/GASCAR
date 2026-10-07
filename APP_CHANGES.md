@@ -15,6 +15,13 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Attack prompt fixes: Decline button, Gunner preview, Move All stops in range
+- **Bug:** with movement left and the straight-ahead hex occupied by the same racer offering an attack, there was no way to decline the attack and still move -- only Attack was shown. A Decline button now always shows next to Attack (labeled Finish once no movement is left, same as before); declining reveals the normal move choice (straight/Slip) for that hex. The attack is offered again if the racer is still in Range after moving, per the existing one-offer-per-hex rule.
+- **Bug:** Move All walked straight through a racer's attack Range without pausing. It now stops as soon as a racer comes into Range, the same as a manual hex-by-hex walk would.
+- The attack prompt now also shows a Gunner-N vs. TN (N) preview line, matching the Control/Gunner previews already shown before taking a turn.
+- The hero turn form shows current/max HP next to the Damage Control checkbox.
+- The Damage Control log line is now "Dmg Ctrl: 1d6 + N = roll + N = total HP repaired. hp/maxHp" (was "Damage Control: rolled roll + Damage Control N = total HP repaired (before to after). No attack this Leg.").
+
 ### 2026-10-07 — Lap report: Leg header reflows to avoid mid-word wrapping
 - "Tier N — Description (Mod ±N) — Target Number: N" could wrap mid-word on a narrow screen. Now two lines: "Tier N (Mod ±N)/Target N" above the Leg's Description.
 

@@ -1193,10 +1193,10 @@ function resolveTurn(race, p, choices) {
   if (choices.damageControl) {
     car.attackedThisLeg = true;
     const dcRoll = rollD(GDATA.DIE_SIDES);
+    const dcSign = stats.damageControl < 0 ? `- ${-stats.damageControl}` : `+ ${stats.damageControl}`;
     const healed = Math.max(0, dcRoll + stats.damageControl);
-    const before = p.hp;
     p.hp = Math.min(p.maxHp, p.hp + healed);
-    log.push(`Damage Control: rolled ${dcRoll} + Damage Control ${stats.damageControl} = ${healed} HP repaired (${before} to ${p.hp}). No attack this Leg.`);
+    log.push(`Dmg Ctrl: 1d6 ${dcSign} = ${dcRoll} ${dcSign} = ${healed} HP repaired. ${p.hp}/${p.maxHp}`);
   }
 
   // 1. Gear shift (at most one level) and movement roll.
@@ -1236,7 +1236,7 @@ function resolveTurn(race, p, choices) {
     log, T, net, checkSources, tn, R: T.stopped ? 0 : T.movement, slips: 0,
     rolled, thrustAtRoll: stats.thrust, intended,
     cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
-    walked: [], left: [], passedAttack: false, halt: false, finished: false, awaiting: null, choice: null
+    walked: [], left: [], passedAttack: false, declinedHere: false, halt: false, finished: false, awaiting: null, choice: null
   };
   walkTurn(race, p);
 }
@@ -1249,6 +1249,9 @@ function moveWalkTo(t, dest, geom, course) {
   t.cur = { laneIdx0: dest.laneIdx0, hexPos: dest.hexPos };
   t.walked.push({ lane: t.cur.laneIdx0 + 1, hexPos: t.cur.hexPos });
   if (t.laps >= course.laps) t.finished = true;
+  // A declined attack offer only holds for the hex it was declined at --
+  // moving to a new hex re-offers it if a target is still in range.
+  t.declinedHere = false;
 }
 // The moves open from the current hex: straight ahead, or a Slip to an open
 // hex beside the ship. Straight ahead into an occupied hex is an obstacle
@@ -1340,6 +1343,8 @@ function moveAllStraight(race, p) {
   const course = getCourse(race.courseId), geom = circTrackGeometry(course);
   while (!t.finished && !t.halt && t.R > 0) {
     applyEncounter(race, p, "straight", encounterOptions(race, p, car, t.cur, t.R, geom, course));
+    // Stop early once a racer comes into Range, so the attack offer isn't skipped.
+    if (!car.attackedThisLeg && attackTargetsFrom(race, p, geom, t.cur).length) break;
   }
   walkTurn(race, p);
 }
@@ -1361,7 +1366,12 @@ function walkTurn(race, p) {
         t.choice = null;
         return "paused";
       }
-      t.awaiting = targets.length ? targets.map(x => x.id) : null;
+      if (targets.length && !t.declinedHere) {
+        t.awaiting = targets.map(x => x.id);
+        t.choice = null;
+        return "paused";
+      }
+      t.awaiting = null;
       const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
       const circ = geom.laneHexLists[t.cur.laneIdx0].length;
       const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
@@ -1410,9 +1420,9 @@ function decideAttack(race, p, targetId) {
   const car = race.legState.cars[p.id], t = car.turn;
   if (!t || !t.awaiting) return;
   if (!targetId) {
-    if (t.R > 0) return;
-    t.passedAttack = true;
     t.awaiting = null;
+    if (t.R > 0) t.declinedHere = true;
+    else t.passedAttack = true;
     walkTurn(race, p);
     return;
   }
@@ -1505,7 +1515,7 @@ function render() {
 function classifyLogLine(l) {
   if (l.startsWith("Move=") || l.startsWith("Gear ")) return "roll";
   if (l.startsWith("Control Task Check") || l.startsWith("Attack?") || l.startsWith("Gunner vs ")) return "hdr";
-  if (l.startsWith("Damage Control:")) return "good";
+  if (l.startsWith("Dmg Ctrl:")) return "good";
   if (/ Success$/.test(l) || / Hit$/.test(l)) return "good";
   if (/ Fail$/.test(l) || / Miss$/.test(l)) return "bad";
   if (l.startsWith("Fumble chart") || /Critical/.test(l)) return "special";
@@ -1998,6 +2008,9 @@ function shortRacerName(x) {
 function renderAttackPrompt(race, p, t) {
   const targets = t.awaiting.map(id => race.participants.find(x => x.id === id)).filter(Boolean);
   const pick = targets.length > 1 ? `document.getElementById('atkTarget-${p.id}').value` : `'${targets[0].id}'`;
+  const stats = carStats(p);
+  const tn = race.legState.leg.finalTN;
+  const mod = (GDATA.GEAR_TABLE[p.gear] || {}).mod || "";
   return `<div class="hub">
     <div class="hub-line"><b>Attack?</b> <span class="muted">${t.R} left</span></div>
     ${t.R > 0 ? `<div class="hub-line muted">Next Slip costs ${race.legState.cars[p.id].slipsThisLeg + 1}</div>` : ""}
@@ -2006,8 +2019,10 @@ function renderAttackPrompt(race, p, t) {
       : `<div class="hub-line">${esc(participantLabel(targets[0]))}</div>`}
     <div class="hub-row">
       <button onclick="App.decideAttack('${p.id}', ${pick})">Attack</button>
-      ${t.R > 0 ? moveAllCell(race, p, t) : `<button class="ghost" onclick="App.decideAttack('${p.id}', '')">Finish</button>`}
+      ${t.R > 0 ? moveAllCell(race, p, t) : ""}
+      <button class="ghost" onclick="App.decideAttack('${p.id}', '')">${t.R > 0 ? "Decline" : "Finish"}</button>
     </div>
+    <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
   </div>`;
 }
 function renderHeroTurnForm(race, p) {
@@ -2027,7 +2042,7 @@ function renderHeroTurnForm(race, p) {
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
-    ${p.hp < p.maxHp ? `<label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6${stats.damageControl < 0 ? "-" + -stats.damageControl : "+" + stats.damageControl}</label>` : ""}
+    ${p.hp < p.maxHp ? `<label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6${stats.damageControl < 0 ? "-" + -stats.damageControl : "+" + stats.damageControl} (HP ${p.hp}/${p.maxHp})</label>` : ""}
     <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + ${stats.thrust}` : "no movement"}</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${mod} vs. TN (${tn})</div>
     <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
