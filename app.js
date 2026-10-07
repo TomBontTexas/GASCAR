@@ -1052,6 +1052,13 @@ function controlCheckLine(label, rc, stats, sources) {
   if (rc.fumbleLevels) parts.push(`${rc.fumbleLevels} Fumble${rc.fumbleLevels === 1 ? "" : "s"}`);
   return `${label}, ${mod}${why}: dice ${rc.dice.join(", ")}; chosen ${rc.chosen} + Control ${stats.control} + Pilot skill ${stats.crewPilot} = ${rc.total} vs TN ${rc.tn}. ${parts.join(", ")}.`;
 }
+// One line for a Gunner (attack) check: same shape as controlCheckLine(), but
+// scored on Gunner + Gunner skill and reported as a hit or a miss.
+function gunnerCheckLine(label, rc, stats, sources) {
+  const mod = rc.net ? netLabel(rc.net) : "no modifier";
+  const why = sources.length ? ` from ${sources.join(", ")}` : "";
+  return `${label}, ${mod}${why}: dice ${rc.dice.join(", ")}; chosen ${rc.chosen} + Gunner ${stats.gunner} + Gunner skill ${stats.crewGunner} = ${rc.total} vs TN ${rc.tn}. ${rc.success ? "Hit" : "Miss"}.`;
+}
 function applyDamage(race, p, amount, log) {
   p.hp = Math.max(0, p.hp - amount);
   if (p.hp === 0 && !p.out) {
@@ -1119,8 +1126,9 @@ function resolveAttack(race, p, target, log) {
   const course = getCourse(race.courseId);
   const stats = carStats(p);
   const tn = race.legState.leg.finalTN;
-  const gc = rollCheck(stats.gunner + stats.crewGunner, 0, tn);
-  log.push(`Gunner check vs ${participantLabel(target)}: ${gc.total} vs TN ${tn} -- ${gc.success ? "hit" : "miss"}.`);
+  const net = gearNet(p.gear);
+  const gc = rollCheck(stats.gunner + stats.crewGunner, net, tn);
+  log.push(gunnerCheckLine(`Gunner check vs ${participantLabel(target)}`, gc, stats, net ? [`Gear ${p.gear}`] : []));
   if (!gc.success) return;
   const rolledDmg = course.flatDamage ? 4 : rollD(GDATA.DIE_SIDES);
   const armor = carStats(target).armor;
@@ -1789,7 +1797,7 @@ function racerAccolades(race, p) {
   race.log.forEach(entry => {
     if (entry.name !== name) return;
     entry.lines.forEach(l => {
-      if (l.indexOf("-- hit.") !== -1) hits++;
+      if (/^Gunner check vs .* Hit\.$/.test(l)) hits++;
       const dmg = l.match(/^Damage .* = (\d+)\.$/);
       if (dmg) damage += Number(dmg[1]);
     });
@@ -1906,7 +1914,9 @@ function renderHeroTurnForm(race, p) {
   const car = race.legState.cars[p.id];
   const newGear = Math.max(0, Math.min(GDATA.MAX_GEAR, p.gear + car.gearChange));
   const dice = (GDATA.GEAR_TABLE[newGear] || {}).dice || 0;
-  const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod;
+  const mod = (GDATA.GEAR_TABLE[newGear] || {}).mod || "";
+  const stats = carStats(p);
+  const tn = race.legState.leg.finalTN;
   return `<div class="hub">
     <div class="hub-line"><b>${esc(shipName(p.shipId))}</b>${car.pendingD > 0 ? ` <span class="tag" title="Disadvantage on its next Control check">Hit</span>` : ""}</div>
     <div class="hub-row">
@@ -1917,7 +1927,9 @@ function renderHeroTurnForm(race, p) {
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
-    <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + Thrust` : "no movement"}${mod ? `, ${mod}` : ""}</div>
+    <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + ${stats.thrust}` : "no movement"}</div>
+    <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${mod} vs. TN (${tn})</div>
+    <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
   </div>`;
 }
 function moveAllCell(race, p, t) {

@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — Gear's Advantage/Disadvantage now also applies to the Gunner check
+- **Earlier value:** the gear's A/AA/D/DD applied only to the Control check; the Gunner (attack) check always rolled at no modifier.
+- **Current value:** a Gunner check made this turn rolls with the same gear-based modifier as the Control check (gear only -- not the movement-over-TN or pending-hit components). The hero turn form previews both: `Control-<score><mod> vs. TN (<TN>)` and `Gunner-<score><mod> vs. TN (<TN>)`.
+- **Where:** `resolveAttack()` and `gunnerCheckLine()` in `app.js`.
+
 ### 2026-10-06 — New free baselines for Ship Class and crew stats
 - **Earlier value:** Thrust base 3, Gunner base 5, Armor base 1; crew Pilot and Gunner base 5 (split 5 points).
 - **Current value:** Thrust base 1, Gunner base 3, Armor base 0; crew Pilot and Gunner base 0 (split still 5 points). Points, Control, Range and Damage are unchanged. Build points still cost each level above base the same way.
