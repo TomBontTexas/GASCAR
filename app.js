@@ -1044,13 +1044,17 @@ function gearNet(gear) {
 // One line for a Control check: the modifier as A/AA/D/DD (and where it came
 // from), the score broken into Control + Pilot skill, and the result.
 function controlCheckLine(label, rc, stats, sources) {
-  const mod = rc.net ? netLabel(rc.net) : "no modifier";
-  const why = sources.length ? ` from ${sources.join(", ")}` : "";
-  const parts = [];
-  if (rc.success) parts.push(rc.critLevels ? `${rc.critLevels} Critical${rc.critLevels === 1 ? "" : "s"} (+${rc.critLevels} bonus hex${rc.critLevels === 1 ? "" : "es"})` : "Success");
-  else parts.push("Failure");
-  if (rc.fumbleLevels) parts.push(`${rc.fumbleLevels} Fumble${rc.fumbleLevels === 1 ? "" : "s"}`);
-  return `${label}, ${mod}${why}: dice ${rc.dice.join(", ")}; chosen ${rc.chosen} + Control ${stats.control} + Pilot skill ${stats.crewPilot} = ${rc.total} vs TN ${rc.tn}. ${parts.join(", ")}.`;
+  const modeWord = rc.net >= 0 ? "Max" : "Min";
+  const lines = [
+    "Control Task Check",
+    `Control=${modeWord}(${rc.dice.join(",")})+C${stats.control}+P${stats.crewPilot}=${rc.total}`,
+    `Control-${rc.total} vs. TN (${rc.tn}) ${rc.success ? "Success" : "Fail"}`,
+  ];
+  const extra = [];
+  if (rc.success && rc.critLevels) extra.push(`${rc.critLevels} Critical${rc.critLevels === 1 ? "" : "s"} (+${rc.critLevels} bonus hex${rc.critLevels === 1 ? "" : "es"})`);
+  if (rc.fumbleLevels) extra.push(`${rc.fumbleLevels} Fumble${rc.fumbleLevels === 1 ? "" : "s"}`);
+  if (extra.length) lines.push(extra.join(", "));
+  return lines;
 }
 // One line for a Gunner (attack) check: same shape as controlCheckLine(), but
 // scored on Gunner + Gunner skill and reported as a hit or a miss.
@@ -1180,7 +1184,7 @@ function resolveTurn(race, p, choices) {
   // before the ship moves, so a failure halves the whole move.
   if (intended > tn) {
     const rc = rollCheck(stats.control + stats.crewPilot, net, tn);
-    log.push(controlCheckLine("Control check (movement over the TN)", rc, stats, checkSources));
+    log.push(...controlCheckLine("Control check (movement over the TN)", rc, stats, checkSources));
     if (rc.success) {
       T.movement = intended + rc.critLevels;
     } else {
@@ -1193,6 +1197,7 @@ function resolveTurn(race, p, choices) {
 
   car.turn = {
     log, T, net, checkSources, tn, R: T.stopped ? 0 : T.movement, slips: 0,
+    rolled, thrustAtRoll: stats.thrust, intended,
     cur: { laneIdx0: p.lane - 1, hexPos: p.hexPos || 0 }, laps: p.laps || 0,
     walked: [], left: [], passedAttack: false, halt: false, finished: false, awaiting: null, choice: null
   };
@@ -1242,7 +1247,7 @@ function applyEncounter(race, p, id, opts) {
     const occ = occupantAt(race, opt.dest.laneIdx0 + 1, opt.dest.hexPos, p.id);
     if (occ) {
       const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
-      t.log.push(controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
+      t.log.push(...controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
       if (!ob.success) {
         p.gear = Math.max(0, p.gear - 1);
         t.log.push(`Stops short of the obstacle; drops to Gear ${p.gear}.`);
@@ -1936,7 +1941,12 @@ function moveAllCell(race, p, t) {
   return straightRunClear(race, p, t) ? `<button class="ghost" onclick="App.moveAll('${p.id}')">Move All</button>` : `<span></span>`;
 }
 function renderMovePrompt(race, p, t) {
+  const rollLine = `Move=[${t.rolled.join("+")}]+[T${t.thrustAtRoll}] = ${t.intended}`;
+  const fumbleLine = t.log.filter(l => l.startsWith("Fumble chart")).join("; ");
   return `<div class="hub">
+    <div class="hub-line muted">${esc(rollLine)}</div>
+    <div class="hub-line muted">${esc(fumbleLine)}</div>
+    <div class="hub-line">&nbsp;</div>
     <div class="hub-line"><b>${t.R}</b> movement left</div>
     <div class="hub-line muted">Next Slip costs ${race.legState.cars[p.id].slipsThisLeg + 1}</div>
     ${straightRunClear(race, p, t) ? `<button onclick="App.moveAll('${p.id}')">Move All</button>` : `<div class="hub-line muted">Click a hex</div>`}

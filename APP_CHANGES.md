@@ -28,6 +28,11 @@ Newest entries at the top.
 ### 2026-10-06 — Hangar Bay ship table: one set of columns with totals
 - Pilot skill and Gunner skill are the first two columns. The six stats follow, and the sponsor bonus and penalty rows sit in the same columns. A Total row beneath gives each column's result (Class + Bonus − Penalty). The old separate sponsor table is gone. `renderShipStatsTable()` in `app.js`.
 
+### 2026-10-07 — Move and Control check readouts reformatted
+- The move prompt (shown after Take turn) now opens with the movement roll as `Move=[dice]+[T<thrust>] = <total>`, then any Fumble Chart result, then a blank line before the movement counter.
+- Every Control check (movement-over-TN or an obstacle) now logs as a fixed `Control Task Check` heading, a `Control=Max(dice)+C<control>+P<pilot>=<total>` formula line, a `Control-<total> vs. TN (<TN>) Success/Fail` result line, and a Critical/Fumble line when either applies.
+- `renderMovePrompt()` and `controlCheckLine()` in `app.js`.
+
 ### 2026-10-06 — Track centre rebuilt to fit the hole
 - Everything in the track's centre is one short stack of lines and full-width controls (`.hub`), sized from the hole's width, so it can't spill onto the hexes. The explanation text moved under the turn order. The finished-race winner tile is sized the same way.
 - The attack dropdown shows shortened names, so long names aren't cut off.
