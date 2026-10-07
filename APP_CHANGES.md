@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Race tab: Damage Control checkbox hidden at full HP; hero highlighted when ready to act
+- The Damage Control checkbox only shows once the ship is below max HP -- nothing to repair otherwise.
+- The hero's own ship icon on the track gets a green ring while the Take Turn button is showing. It goes away once the turn starts walking the move or waiting on an attack.
+
 ### 2026-10-07 — Ship Class stat table: cleaned up further
 - "(next +Npt)" now sits on its own centered line under every stat's spinner, instead of wrapping mid-phrase. The "Crew of N (flavor only...)" paragraph below the table is gone -- it didn't apply once Pilot/Gunner moved to the crewman.
 

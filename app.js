@@ -628,6 +628,9 @@ function renderCircularTrackSvg(race, course) {
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
   const turnOf = p => race.legState && race.legState.cars[p.id] ? race.legState.cars[p.id].turn : null;
+  // Highlighted in green only while the Take Turn button is showing (no turn
+  // started yet) -- not once it's walking the move or waiting on an attack.
+  const readyHero = nextTurnParticipant(race);
   race.participants.forEach(p => {
     const t = turnOf(p);
     if (!t) return;
@@ -643,7 +646,9 @@ function renderCircularTrackSvg(race, course) {
     const { laneIdx0, transform } = circRacerTransform(geom, at);
     const iconInfo = participantIconInfo(p);
     const imgHref = iconInfo ? esc(shipIconPath(iconInfo.division, iconInfo.number, iconInfo.color)) : "";
-    svg += `<g class="circracer${p.out ? " dead" : ""}" id="circracer-${p.id}" data-racer="${p.id}" transform="${transform}">
+    const isReady = p.type === "hero" && readyHero && p.id === readyHero.id && !t;
+    svg += `<g class="circracer${p.out ? " dead" : ""}${isReady ? " active-turn" : ""}" id="circracer-${p.id}" data-racer="${p.id}" transform="${transform}">
+      ${isReady ? `<circle r="${(iconSize / 2 * 1.3).toFixed(1)}" class="circracer-ring"/>` : ""}
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
         : `<circle r="${(iconSize / 2).toFixed(1)}" class="circdot"/>`}
@@ -2018,7 +2023,7 @@ function renderHeroTurnForm(race, p) {
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
-    <label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6+${stats.damageControl}</label>
+    ${p.hp < p.maxHp ? `<label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6+${stats.damageControl}</label>` : ""}
     <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + ${stats.thrust}` : "no movement"}</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${mod} vs. TN (${tn})</div>
     <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
