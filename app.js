@@ -1272,10 +1272,11 @@ function applyEncounter(race, p, id, opts) {
 function applySlip(race, p, opt) {
   const car = race.legState.cars[p.id], t = car.turn;
   const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const priorSlips = car.slipsThisLeg;
   car.slipsThisLeg += 1;
   t.slips += 1;
   t.R -= opt.cost;
-  t.log.push(`${opt.id === "left" ? "Slip left" : "Slip right"}: costs ${opt.cost} movement point${opt.cost === 1 ? "" : "s"} (Slip ${car.slipsThisLeg} this Leg).`);
+  t.log.push(`Total Slips = ${priorSlips} at ${opt.cost} Movement Points`);
   moveWalkTo(t, opt.dest, geom, course);
 }
 
@@ -1416,6 +1417,7 @@ function finishTurn(race, p) {
   if (p.type === "hero") {
     TURN_REPORT = {
       shipId: p.shipId, name: participantLabel(p), legIndex: race.legIndex,
+      leg: { ...race.legState.leg },
       lane: p.lane, laps: p.laps, courseLaps: course.laps, gear: p.gear,
       hp: p.hp, maxHp: p.maxHp, lines: t.log.slice(),
       won: race.finished && race.winnerId === p.id,
@@ -1484,6 +1486,8 @@ function classifyLogLine(l) {
 function renderTurnReportModal(r) {
   const ship = getShip(r.shipId);
   const pct = r.maxHp ? Math.max(0, Math.min(100, Math.round(r.hp / r.maxHp * 100))) : 0;
+  const naturalTN = legNaturalTN(r.leg);
+  const cappedTxt = naturalTN > r.leg.finalTN ? ` (capped from ${naturalTN})` : "";
   return `<div class="modal-overlay" onclick="if(event.target===this) App.dismissTurnReport()">
     <div class="lapreport">
       <div class="lapreport-checker"></div>
@@ -1491,6 +1495,7 @@ function renderTurnReportModal(r) {
         <div class="kicker">Official Lap Report — Leg ${r.legIndex + 1}</div>
         <div class="title">${ship ? iconThumbImg(ship) : ""}${esc(r.name)}</div>
       </div>
+      <div class="lapreport-leg">Tier ${r.leg.tier} — ${esc(r.leg.feature)}${r.leg.mod !== 0 ? ` (Mod ${r.leg.mod >= 0 ? "+" : ""}${r.leg.mod})` : ""} — <b>Target Number: ${r.leg.finalTN}</b>${cappedTxt}</div>
       <div class="lapreport-stats">
         <div><small>Lane</small><b>${r.lane}</b></div>
         <div><small>Lap</small><b>${Math.min(r.laps, r.courseLaps)}/${r.courseLaps}</b></div>

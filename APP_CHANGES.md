@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-07 — Lap report: Slip log line reformatted; Leg Target Number shown
+- The Slip log line now reads "Total Slips = N at M Movement Points" instead of "Slip left/right: costs M movement point(s) (Slip N this Leg)." The nth-Slip-costs-n rule itself is unchanged, only the wording.
+- The lap report modal now shows the Leg's Tier, Description and Target Number (matching the Race tab's Leg card) directly under the banner.
+
 ### 2026-10-05 — Start Leg button: legs no longer roll over automatically
 - When every ship has taken its turn, the Leg ends and the Race tab shows "Leg N is complete" with a Start Leg N+1 button. The next Leg, including any NPC turns that go first, begins when the button is pressed. Previously the next Leg started on its own.
 - Show Last Leg treats a completed Leg as the last one, even before the next Leg starts.
