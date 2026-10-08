@@ -17,6 +17,21 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-09 — Fix: a wreck was a hard stop instead of a Control Task Check
+- **Bug:** per the written rule, entering a hex occupied by another ship -- Active or Out of Commission -- always calls for a Control Task Check, success passing through, failure stopping short at the hex before it. The app had made a wreck an unconditional hard stop instead (no roll, ever), a deliberate fix earlier in development that turned out not to match the written rule.
+- **Current value:** a wreck is Control-checkable again, exactly like a live racer: success passes through, failure stops short. If the check succeeds but the ship's movement happens to run out exactly on the wreck's hex, it instead makes a free forced Slip to an open hex beside it (no cost, no extra check); if every adjacent hex is also blocked, it rolls the Fumble Chart and the turn ends. An asteroid is unaffected -- still an unconditional hard stop (see the asteroid entries below).
+- **Where:** `isHardObstacle()` / `applyEncounter()` / `encounterOptions()` in `app.js`.
+
+### 2026-10-09 — Fix: a boxed-in asteroid push swapped places instead of rolling the Fumble Chart
+- **Bug:** when an asteroid pushes a ship and all three hexes ahead of the ship are blocked, the app swapped the ship and the asteroid's hexes. The written rule instead calls for a Fumble Chart roll, with the ship's turn for the Leg ending immediately.
+- **Current value:** boxed in, the ship rolls the Fumble Chart (its effects apply in place of the normal push's flat 1 HP) and its turn for this Leg is forfeited. A normal push (at least one of the three hexes open) is unchanged: a random open hex, 1 HP ignoring Armor.
+- **Where:** `pushShip()` in `app.js`.
+
+### 2026-10-09 — Fix: a ship stopped short by an asteroid took no damage
+- **Bug:** per the written rule, a ship whose own movement is stopped short by an asteroid takes 2 HP of damage, ignoring Armor -- the app only stopped it and dropped a gear, with no damage.
+- **Current value:** stopping short of an asteroid (on the ship's own movement) now also deals 2 HP, ignoring Armor. A wreck still deals no damage on its own hard stop.
+- **Where:** `applyEncounter()` in `app.js`.
+
 ### 2026-10-09 — Asteroids reworked: a fixed count chosen per course, lane-locked drift, and a push-and-damage collision
 - **Earlier value:** the number of active asteroids was recalculated every Leg to match that Leg's TN, fading in/out as it changed; drift could carry an asteroid into a neighboring lane (same three-hex choice as a wreck); an asteroid was always a hard stop for anything that ran into it.
 - **Current value:** a Racecourse now sets a fixed Asteroid count once (type a number or roll 2D10) when the course is designed; that many are scattered at race start, avoiding every ship's starting hex, and the count never changes for the rest of the race. Each Leg, every asteroid drifts 1-2 hexes but **stays in its own lane** -- no more lane-changing drift. If an asteroid drifts into a hex an active (non-wrecked) ship occupies, it shoves that ship into one of the three hexes ahead of the ship (straight, or a forward diagonal); if all three are blocked, the ship and the asteroid swap hexes instead. Either way the ship takes 1 HP of damage, ignoring Armor. A wreck or another asteroid in an asteroid's path still just blocks it, same as before -- a ship's own deliberate movement into an asteroid's hex is also unchanged (still a hard stop, no Control check). Starting a Leg (Start Race / Start Leg N) now visibly animates that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.

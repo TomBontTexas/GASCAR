@@ -1015,9 +1015,9 @@ function occupantAt(race, lane, hexPos, exceptId) {
   return (race.asteroids || []).find(a => a.id !== exceptId && a.lane === lane && a.hexPos === hexPos) || null;
 }
 // True for anything a ship can never pass through, Control check or not --
-// a wreck or an asteroid (see RULE_CHANGES.md 2026-10-08). A live racer can
-// still be overtaken with a successful Control check.
-function isHardObstacle(occ) { return !!occ && (occ.out || occ.kind === "asteroid"); }
+// an asteroid only (see RULE_CHANGES.md 2026-10-09). A wreck or a live racer
+// can both still be overtaken with a successful Control Task Check.
+function isHardObstacle(occ) { return !!occ && occ.kind === "asteroid"; }
 // Initiative: lowest effective Thrust acts first; equal Thrust ties are
 // broken by 1D20, lowest first, re-rolled until every tied car is separated.
 function initiativeOrder(list) {
@@ -1125,7 +1125,12 @@ function driftAsteroids(race) {
       const nextHexPos = (a.hexPos + 1) % circ;
       const occ = occupantAt(race, a.lane, nextHexPos, a.id);
       if (occ && (occ.kind === "asteroid" || occ.out)) break; // a wreck or another asteroid -- blocked
-      if (occ) pushShip(race, occ, a, geom, course, lines);
+      if (occ) {
+        pushShip(race, occ, a, geom, course, lines);
+        // Boxed in, a Fumble roll might not actually move the ship -- if it's
+        // still sitting right here, the asteroid can't advance into it either.
+        if (occ.lane === a.lane && occ.hexPos === nextHexPos) break;
+      }
       a.hexPos = nextHexPos;
       path.push({ lane: a.lane, hexPos: a.hexPos });
     }
@@ -1140,22 +1145,26 @@ function driftAsteroids(race) {
 }
 // A drifting asteroid shoving an active ship out of its hex (see
 // RULE_CHANGES.md 2026-10-09): the ship moves to a random open hex among the
-// three ahead of IT (straight, or a forward diagonal), or -- if all of those
-// are occupied -- swaps places with the asteroid outright. Either way the
-// ship takes 1 HP of damage, ignoring Armor (same convention as being forced
-// off the track).
+// three ahead of IT (straight, or a forward diagonal) and takes 1 HP of
+// damage, ignoring Armor. If all three are blocked, there's no push -- the
+// ship rolls the Fumble Chart instead (its own effects apply in place of the
+// flat 1 HP) and its turn for this Leg is forfeited.
 function pushShip(race, ship, asteroid, geom, course, lines) {
   const from = { lane: ship.lane, hexPos: ship.hexPos };
   const candidates = threeForwardHexes(geom, course, { laneIdx0: ship.lane - 1, hexPos: ship.hexPos });
   const open = candidates.filter(h => !occupantAt(race, h.laneIdx0 + 1, h.hexPos, ship.id));
-  const dest = open.length ? open[rollD(open.length) - 1] : null;
-  const to = dest ? { lane: dest.laneIdx0 + 1, hexPos: dest.hexPos } : { lane: asteroid.lane, hexPos: asteroid.hexPos };
-  ship.lane = to.lane; ship.hexPos = to.hexPos;
-  lines.push(dest
-    ? `${participantLabel(ship)} is shoved by a drifting asteroid.`
-    : `${participantLabel(ship)} is boxed in -- swaps places with a drifting asteroid.`);
-  applyDamage(race, ship, 1, lines);
-  race._legStartEvents.push({ kind: "ship", id: ship.id, from, path: [to] });
+  if (open.length) {
+    const dest = open[rollD(open.length) - 1];
+    ship.lane = dest.laneIdx0 + 1; ship.hexPos = dest.hexPos;
+    lines.push(`${participantLabel(ship)} is shoved by a drifting asteroid.`);
+    applyDamage(race, ship, 1, lines);
+  } else {
+    lines.push(`${participantLabel(ship)} is boxed in by a drifting asteroid -- rolls the Fumble Chart.`);
+    rollFumble(race, ship, { movement: 0, stopped: false }, lines);
+    const car = race.legState.cars[ship.id];
+    if (car) car.turnDone = true;
+  }
+  race._legStartEvents.push({ kind: "ship", id: ship.id, from, path: [{ lane: ship.lane, hexPos: ship.hexPos }] });
 }
 // Scatters `count` asteroids around the track at random, avoiding any hex a
 // ship already occupies (see RULE_CHANGES.md 2026-10-09). Placement itself
@@ -1545,7 +1554,7 @@ function encounterOptions(race, p, car, cur, R, geom, course) {
   const ahead = { laneIdx0: cur.laneIdx0, hexPos: (cur.hexPos + 1) % circ };
   const aheadOcc = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
   const aheadLabel = isHardObstacle(aheadOcc)
-    ? `Straight ahead (blocked by ${aheadOcc.kind === "asteroid" ? "an asteroid" : "a wreck"})`
+    ? "Straight ahead (blocked by an asteroid)"
     : (aheadOcc ? "Straight ahead (Control check to pass)" : "Straight ahead");
   const opts = [{ id: "straight", label: aheadLabel, dest: ahead }];
   const cost = car.slipsThisLeg + 1;
@@ -1572,11 +1581,12 @@ function applyEncounter(race, p, id, opts) {
   if (id === "straight") {
     const occ = occupantAt(race, opt.dest.laneIdx0 + 1, opt.dest.hexPos, p.id);
     if (isHardObstacle(occ)) {
-      // A wreck or an asteroid can't be argued past with a Control check the
-      // way a live racer can be overtaken -- it's a dead stop, every time (see
-      // RULE_CHANGES.md 2026-10-08: other ships must navigate around a wreck or asteroid).
+      // An asteroid can't be argued past with a Control check -- it's a dead
+      // stop, every time, and costs 2 HP ignoring Armor (see RULE_CHANGES.md
+      // 2026-10-09). A wreck, below, is Control-checkable like a live racer.
       p.gear = Math.max(0, p.gear - 1);
-      t.log.push(`Stops short of the ${occ.kind === "asteroid" ? "asteroid field" : "wreck"}; drops to Gear ${p.gear}.`);
+      t.log.push(`Stops short of the asteroid field; drops to Gear ${p.gear}.`);
+      applyDamage(race, p, 2, t.log);
       t.halt = true;
       return;
     }
@@ -2481,11 +2491,11 @@ function renderInstructions() {
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
-      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. A wreck or an asteroid is a hard stop instead -- no check, no passing through it. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
+      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering a hex occupied by a live racer or a wreck (straight on) forces a Control check: on success the ship passes through, on failure it stops short. An asteroid is a hard stop instead -- no check, no passing through it (and it deals 2 HP of damage, ignoring Armor). Landing on another ship or wreck's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
       <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
-    <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
-    <p>A Racecourse can also scatter a fixed number of asteroids among the lanes (chosen when the course is built), shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. Each Leg, every asteroid drifts 1-2 hexes forward, staying in its own lane. A ship's own deliberate movement into an asteroid's hex is a hard stop, same as a wreck: no check, no passing through it. But if a drifting asteroid moves into an active ship's hex, it shoves that ship into one of the three hexes ahead of it (or swaps places with it if all three are blocked) and deals 1 HP of damage, ignoring Armor. Starting a Leg plays a short animation of that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.</p>
+    <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships can still try to pass -- same Control check as passing a live racer -- or must navigate around if the check fails. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
+    <p>A Racecourse can also scatter a fixed number of asteroids among the lanes (chosen when the course is built), shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. Each Leg, every asteroid drifts 1-2 hexes forward, staying in its own lane. A ship's own deliberate movement into an asteroid's hex is a hard stop -- no check, no passing through it -- and deals 2 HP of damage, ignoring Armor. But if a drifting asteroid moves into an active ship's hex, it shoves that ship into one of the three hexes ahead of it and deals 1 HP of damage, ignoring Armor; if all three are blocked, the ship rolls the Fumble Chart instead and its turn for the Leg ends. Starting a Leg plays a short animation of that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.</p>
 
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through -- wreck and asteroid drift animate too. Click anywhere to clear the trail.</p>
 
