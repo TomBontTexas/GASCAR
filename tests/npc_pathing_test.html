@@ -1,0 +1,217 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup(npcCount, asteroidCount) {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false, asteroidCount: asteroidCount || 0 });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [];
+  STATE._draftNpcs = Array.from({ length: npcCount || 1 }, (_, i) => ({ name: "NPC" + i, aggression: 5 }));
+  App.beginRace(); App.startRaceNow();
+  return STATE.race;
+}
+
+/* ---------------- controlCheckSuccessChance ---------------- */
+{
+  check("need <= 1 is guaranteed success", controlCheckSuccessChance(20, 0, 20) === 1);
+  check("need <= 1 (negative need) is guaranteed success", controlCheckSuccessChance(30, 0, 20) === 1);
+  check("need >= 21 is guaranteed failure", controlCheckSuccessChance(0, 0, 21) === 0);
+  // score=10, tn=20, net=0 -> need=10, p=(21-10)/20=0.55 (single die)
+  check("flat (net 0) chance matches (21-need)/20", Math.abs(controlCheckSuccessChance(10, 0, 20) - 0.55) < 1e-9);
+  // Advantage: net=1 -> 2 dice, keep max. P = 1-(1-p)^2
+  check("Advantage (net=1) chance matches 1-(1-p)^2", Math.abs(controlCheckSuccessChance(10, 1, 20) - (1 - Math.pow(1 - 0.55, 2))) < 1e-9);
+  // Disadvantage: net=-1 -> 2 dice, keep min. P = p^2
+  check("Disadvantage (net=-1) chance matches p^2", Math.abs(controlCheckSuccessChance(10, -1, 20) - Math.pow(0.55, 2)) < 1e-9);
+  check("more Advantage strictly raises the odds", controlCheckSuccessChance(10, 2, 20) > controlCheckSuccessChance(10, 1, 20));
+  check("more Disadvantage strictly lowers the odds", controlCheckSuccessChance(10, -2, 20) < controlCheckSuccessChance(10, -1, 20));
+}
+
+/* ---------------- npcHuntTarget ---------------- */
+{
+  const race = setup(4);
+  const npcs = race.participants;
+  const positions = {}; npcs.forEach((p, i) => positions[p.id] = i + 1); // npc0=1st...npc3=4th
+
+  // The leader (position 1) has nobody "ahead" of it by definition -- same
+  // target rule the old pre-Circus-Astralis Maneuver system used -- so even
+  // a maxed-out roll finds no target.
+  rollD = () => 1; // always passes the d10 <= HuntScore gate
+  npcs[0].aggression = 10;
+  check("the leader naturally has no hunt target (nobody's ahead of 1st)", npcHuntTarget(race, npcs[0], positions) === null);
+
+  // 2nd place, high Aggression, near the front -- gate passes, target is the leader.
+  npcs[1].aggression = 10;
+  check("a reckless 2nd-place car hunts the leader when the gate passes", npcHuntTarget(race, npcs[1], positions).id === npcs[0].id);
+
+  // Dead last: leadFactor = 0, so HuntScore = 0 regardless of Aggression -- never hunts.
+  npcs[3].aggression = 10;
+  rollD = () => 1; // the lowest possible roll -- would pass any positive HuntScore
+  check("a reckless but dead-last car never hunts (HuntScore is 0)", npcHuntTarget(race, npcs[3], positions) === null);
+
+  // A cautious (low Aggression) 2nd-place car: HuntScore = round(1 * leadFactor), tiny -- fails almost any roll.
+  npcs[1].aggression = 1;
+  rollD = () => 10; // worst roll
+  check("a cautious 2nd-place car fails the hunt gate on a bad roll", npcHuntTarget(race, npcs[1], positions) === null);
+}
+
+/* ---------------- npcStepPick: the free inward Slip ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const car = { slipsThisLeg: 0 };
+  const stats = { control: 10, crewPilot: 0 };
+  const t = { net: 0, tn: 1, R: 10 };
+  const opts = [
+    { id: "straight", dest: { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 } },
+    { id: "left", cost: 1, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } }
+  ];
+  check("open ahead, unused free Slip this Leg, inward available -> takes it", npcStepPick(race, p, car, stats, t, opts, null, 5) === "left");
+  car.slipsThisLeg = 1;
+  check("open ahead, the free Slip is already spent this Leg -> goes straight", npcStepPick(race, p, car, stats, t, opts, null, 5) === "straight");
+  car.slipsThisLeg = 0;
+  const optsNoInward = [opts[0]]; // no left option (e.g. already in lane 1)
+  check("open ahead, no inward option at all -> goes straight (never reaches for outward by default)", npcStepPick(race, p, car, stats, t, optsNoInward, null, 5) === "straight");
+}
+
+/* ---------------- npcStepPick: asteroid (hard obstacle, never gambled on) ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const car = { slipsThisLeg: 0 };
+  const stats = { control: 20, crewPilot: 0 }; // sky-high Control -- irrelevant to an asteroid
+  const t = { net: 0, tn: 1, R: 10 };
+  const astHex = { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 };
+  race.asteroids = [{ id: "ast1", kind: "asteroid", lane: astHex.laneIdx0 + 1, hexPos: astHex.hexPos }];
+  const opts = [
+    { id: "straight", dest: astHex },
+    { id: "left", cost: 1, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } }
+  ];
+  check("asteroid ahead with a detour available -> always detours, regardless of Control", npcStepPick(race, p, car, stats, t, opts, null, 5) === "left");
+  const optsNoDetour = [opts[0]];
+  check("asteroid ahead with no detour available -> forced straight", npcStepPick(race, p, car, stats, t, optsNoDetour, null, 5) === "straight");
+}
+
+/* ---------------- npcStepPick: wreck/live racer -- expected-value gamble ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const rivalHex = { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 };
+  const rival = { id: "rival1", type: "npc", name: "Rival", out: false, lane: rivalHex.laneIdx0 + 1, hexPos: rivalHex.hexPos, hp: 10, maxHp: 10, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(rival);
+  const car = { slipsThisLeg: 0 };
+  const opts = [
+    { id: "straight", dest: rivalHex },
+    { id: "left", cost: 3, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } }
+  ];
+
+  // Guaranteed success (need <= 1): always races straight through, even though a detour exists.
+  {
+    const stats = { control: 20, crewPilot: 0 };
+    const t = { net: 0, tn: 1, R: 10 };
+    check("guaranteed-success check -> races straight through a live racer", npcStepPick(race, p, car, stats, t, opts, null, 5) === "straight");
+  }
+  // Guaranteed failure (need >= 21): always detours when one exists.
+  {
+    const stats = { control: 0, crewPilot: 0 };
+    const t = { net: 0, tn: 21, R: 10 };
+    check("guaranteed-failure check -> always detours around a live racer", npcStepPick(race, p, car, stats, t, opts, null, 5) === "left");
+  }
+}
+
+/* ---------------- Aggression bias on the same gamble, varying only p.aggression ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const rivalHex = { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 };
+  const rival = { id: "rival2", type: "npc", name: "Rival", out: false, lane: rivalHex.laneIdx0 + 1, hexPos: rivalHex.hexPos, hp: 10, maxHp: 10, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(rival);
+  const car = { slipsThisLeg: 0 };
+  const stats = { control: 10, crewPilot: 0 };
+  const t = { net: 0, tn: 20, R: 5 }; // need=10, pSuccess=0.55; pureThreshold (cost 3, R 5) = 0.6
+  const opts = [{ id: "straight", dest: rivalHex }, { id: "left", cost: 3, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } }];
+  p.aggression = 10;
+  check("reckless (Aggression 10) gambles when pSuccess (0.55) clears its lowered bar (0.375)", npcStepPick(race, p, car, stats, t, opts, null, 5) === "straight");
+  p.aggression = 1;
+  check("cautious (Aggression 1) still detours at the same odds (its bar is raised to 0.825)", npcStepPick(race, p, car, stats, t, opts, null, 5) === "left");
+  p.aggression = 5;
+}
+
+/* ---------------- Lean direction: ratio-based (no hunt target) ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const rivalHex = { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 };
+  const rival = { id: "rival3", type: "npc", name: "Rival", out: false, lane: rivalHex.laneIdx0 + 1, hexPos: rivalHex.hexPos, hp: 10, maxHp: 10, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(rival);
+  const car = { slipsThisLeg: 0 };
+  const stats = { control: 0, crewPilot: 0 };
+  const t = { net: 0, tn: 21, R: 10 }; // guaranteed failure -- always detours, forcing the lean roll
+  const opts = [
+    { id: "straight", dest: rivalHex },
+    { id: "left", cost: 1, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } },
+    { id: "right", cost: 1, dest: { laneIdx0: p.lane, hexPos: p.hexPos } }
+  ];
+  // legAgg=10: a roll of 1 gives margin=9, 9/10=0.9 >= 0.5 -> inward.
+  rollD = s => (s === 20 ? 1 : 1 + Math.floor(Math.random() * s));
+  check("a low lean roll (big margin) leans inward", npcStepPick(race, p, car, stats, t, opts, null, 10) === "left");
+  // legAgg=10: a roll of 10 gives margin=0, 0/10=0 < 0.5 -> outward.
+  rollD = s => (s === 20 ? 10 : 1 + Math.floor(Math.random() * s));
+  check("a high lean roll (small/no margin) leans outward", npcStepPick(race, p, car, stats, t, opts, null, 10) === "right");
+}
+
+/* ---------------- Hunting overrides the lean/default direction ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  const rivalHex = { laneIdx0: p.lane - 1, hexPos: p.hexPos + 1 };
+  const rival = { id: "rival4", type: "npc", name: "Rival", out: false, lane: rivalHex.laneIdx0 + 1, hexPos: rivalHex.hexPos, hp: 10, maxHp: 10, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(rival);
+  const car = { slipsThisLeg: 0 };
+  const stats = { control: 0, crewPilot: 0 };
+  const t = { net: 0, tn: 21, R: 10 }; // guaranteed failure -- always detours
+  const opts = [
+    { id: "straight", dest: rivalHex },
+    { id: "left", cost: 1, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos } },
+    { id: "right", cost: 1, dest: { laneIdx0: p.lane, hexPos: p.hexPos } }
+  ];
+  // Roll that would normally favor inward (margin big), but the hunt target is OUTWARD.
+  rollD = s => (s === 20 ? 1 : 1 + Math.floor(Math.random() * s));
+  const huntTargetOutward = { lane: p.lane + 2 };
+  check("a hunt target overrides the ratio lean toward its own lane", npcStepPick(race, p, car, stats, t, opts, huntTargetOutward, 10) === "right");
+
+  // Open ahead (no obstacle): the free Slip aims at the hunt target's lane instead of blindly inward.
+  const optsOpen = [
+    { id: "straight", dest: { laneIdx0: p.lane - 1, hexPos: p.hexPos + 2 } },
+    { id: "left", cost: 1, dest: { laneIdx0: p.lane - 2, hexPos: p.hexPos + 1 } },
+    { id: "right", cost: 1, dest: { laneIdx0: p.lane, hexPos: p.hexPos + 1 } }
+  ];
+  check("the free Slip chases the hunt target's lane instead of defaulting inward", npcStepPick(race, p, car, stats, { net: 0, tn: 1, R: 10 }, optsOpen, huntTargetOutward, 10) === "right");
+}
+
+/* ---------------- Integration: a full NPC turn on an open track takes at most one Slip ---------------- */
+{
+  const race = setup(1);
+  const p = race.participants[0];
+  p.lane = 4; p.hexPos = 10; p.gear = 3;
+  race.legState.cars[p.id].slipsThisLeg = 0;
+  resolveTurn(race, p, npcChoices(race, p));
+  const car = race.legState.cars[p.id];
+  check("an NPC's own turn on an open track takes at most 1 Slip", car.slipsThisLeg <= 1);
+  check("the NPC actually moved", p.lane !== 4 || p.hexPos !== 10);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

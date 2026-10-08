@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+check("SPONSOR_BONUS_MAX is 2", SPONSOR_BONUS_MAX === 2);
+check("SPONSOR_PENALTY_MAX is 2", SPONSOR_PENALTY_MAX === 2);
+
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = [];
+App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
+App.addCrewman(); const c = STATE.crewmen[0];
+App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+
+App.setSponsor(sh.id, "bonus", "thrust", "5");
+check("a bonus on one stat is capped at 2", getShip(sh.id).sponsor.bonus.thrust === 2);
+App.setSponsor(sh.id, "bonus", "control", "5");
+check("a second bonus stat is capped by the remaining pool (0 left)", (getShip(sh.id).sponsor.bonus.control || 0) === 0);
+App.setSponsor(sh.id, "bonus", "thrust", "1");
+App.setSponsor(sh.id, "bonus", "control", "5");
+check("after freeing a point, the second stat can take what's left (1)", getShip(sh.id).sponsor.bonus.control === 1);
+
+App.setSponsor(sh.id, "penalty", "armor", "5");
+check("a penalty is capped at 2", getShip(sh.id).sponsor.penalty.armor === 2);
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+const old = {
+  ships: [], shipClasses: [{ id: "c", name: "Old", division: "Comet", thrust: 6, points: 12, control: 5, gunner: 7, damage: 2, armor: 2, range: 2 }],
+  crewmen: [{ id: "k", name: "K", pilot: 9, gunner: 6 }], courses: [], race: { started: true }, _builtinShipClassesRemoved: true,
+  _circularTrackHexed: true, _circusMaximusConversion: true, _shipClassCrewmanSplit: true, _shipClassStatsRebuilt: true, _circusAstralisCrew: true,
+  _gunnerBaseRaised: true
+};
+migrateState(old);
+const c = old.shipClasses[0];
+check("thrust keeps its 3 bought levels above the new base (1 + 3 = 4)", c.thrust === 4);
+check("points unchanged (base 10)", c.points === 12);
+check("control unchanged (base 5)", c.control === 5);
+check("gunner unchanged: old base (5) and current base (5) are now the same", c.gunner === 7);
+check("damage unchanged", c.damage === 2);
+check("armor keeps its 1 level above the new base (0 + 1 = 1)", c.armor === 1);
+check("range unchanged", c.range === 2);
+check("crew pilot keeps its 4 levels (0 + 4)", old.crewmen[0].pilot === 4);
+check("crew gunner keeps its 1 level (0 + 1)", old.crewmen[0].gunner === 1);
+check("in-progress race is dropped", old.race === null);
+check("conversion runs once", (migrateState(old), old.shipClasses[0].thrust === 4));
+
+// A real upgrade from a 0.48.00-era save: _statBaseLowered already ran (gunner base 3),
+// _gunnerBaseRaised has not. A class sitting at the then-base (3, 0 levels bought)
+// should land exactly on the new base (5).
+const old2 = {
+  ships: [], shipClasses: [{ id: "c2", name: "Old2", division: "Comet", thrust: 1, points: 10, control: 5, gunner: 3, damage: 2, armor: 0, range: 1 }],
+  crewmen: [], courses: [], race: null, _builtinShipClassesRemoved: true, _circularTrackHexed: true, _circusMaximusConversion: true,
+  _shipClassCrewmanSplit: true, _shipClassStatsRebuilt: true, _circusAstralisCrew: true, _statBaseLowered: true
+};
+migrateState(old2);
+check("gunner base-raise migration: class at then-base (3) lands on new base (5)", old2.shipClasses[0].gunner === 5);
+check("gunner base-raise migration flag set", old2._gunnerBaseRaised === true);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

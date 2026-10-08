@@ -1,0 +1,168 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+function buildShip(i, opts) {
+  App.addShipClass(); const cls = STATE.shipClasses[i];
+  if (opts && opts.thrust) cls.thrust = opts.thrust;
+  App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[i];
+  App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id); App.updateShip(sh.id, "name", "Ship " + i);
+  return sh.id;
+}
+// Mirrors the real bug: Race Setup is opened (which renders a fallback course
+// via the local `courseId` variable) but STATE._raceSetupCourse is never
+// explicitly set via the dropdown's onchange -- that's the exact path that
+// left Fill to 6 silently doing nothing.
+function setupWithoutExplicitCourseSelection() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  STATE._raceSetupCourse = null; STATE._raceSetupShips = []; STATE._draftNpcs = [];
+  App.setShipyardAddDivision("Comet");
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+}
+function setup() {
+  setupWithoutExplicitCourseSelection();
+  CURRENT_TAB = "race"; render(); // renderRaceSetup() is what persists STATE._raceSetupCourse now
+}
+
+// Ships render stacked (one per line) in a dedicated list container, and the
+// "race-legal only" wording is gone.
+{
+  setup();
+  buildShip(0); buildShip(1); buildShip(2);
+  render();
+  const list = document.querySelector(".ship-pick-list");
+  check("the ships list uses the stacked container", !!list);
+  check("all 3 ships are listed", list.querySelectorAll(".chkline").length === 3);
+  check("'race-legal only' wording is removed", document.getElementById("view").innerHTML.indexOf("race-legal only") === -1);
+}
+
+// Each ship's row shows its Class's budget note; an over-budget Class reads "Illegal N/M".
+{
+  setup();
+  buildShip(0);
+  const cls = STATE.shipClasses[0];
+  render();
+  let html = document.getElementById("view").innerHTML;
+  check("an in-budget ship shows a plain N/M note", new RegExp(classBudgetNote(cls).replace("/", "\\/")).test(html) && !html.includes("Illegal"));
+  cls.thrust = 999; // blow the budget
+  render();
+  html = document.getElementById("view").innerHTML;
+  check("an over-budget ship's note reads 'Illegal N/M'", html.indexOf("Illegal") !== -1 && html.indexOf(classBudgetNote(cls)) !== -1);
+}
+
+// The die-roll buttons sit in their own grid, left of what they roll, including the new Class picker.
+{
+  setup();
+  render();
+  const grid = document.querySelector(".npc-draft-grid");
+  check("the NPC draft uses the die-left grid", !!grid);
+  const children = [...grid.children];
+  check("row 1: die then name input", children[0].tagName === "BUTTON" && children[0].textContent.includes("🎲") && children[1].id === "npcName");
+  check("row 2: die then Aggression label", children[2].tagName === "BUTTON" && children[2].textContent.includes("🎲") && children[3].tagName === "LABEL");
+  check("row 3: die then Ship Class select", children[4].tagName === "BUTTON" && children[4].textContent.includes("🎲") && children[5].id === "npcClass");
+}
+
+// The Ship Class dropdown lists every Class in the course's Division, with a budget note, plus an auto-built option.
+{
+  setup();
+  buildShip(0); buildShip(1);
+  render();
+  const sel = document.getElementById("npcClass");
+  check("the dropdown offers an auto-built option plus one per Class", sel.options.length === 3);
+  check("each Class option shows its budget note", [...sel.options].slice(1).every(o => /\(\d+\/\d+\)|\(Illegal/.test(o.textContent)));
+}
+
+// Picking "Random Ship Class" sets the dropdown to a Class in the Division.
+{
+  setup();
+  const ids = [buildShip(0), buildShip(1)];
+  render();
+  App.randomizeDraftNpcClass();
+  const sel = document.getElementById("npcClass");
+  check("randomizing picks one of the Division's Classes", ids.map((_, i) => STATE.shipClasses[i].id).includes(sel.value));
+}
+
+// Adding an NPC with a chosen Class stores it, and the drafted list shows Name / Ship / Aggression, stacked.
+{
+  setup();
+  buildShip(0);
+  render();
+  document.getElementById("npcName").value = "Test Racer";
+  document.getElementById("npcAggression").value = "8";
+  document.getElementById("npcClass").value = STATE.shipClasses[0].id;
+  App.addDraftNpc();
+  check("the drafted NPC records the chosen classId", STATE._draftNpcs[0].classId === STATE.shipClasses[0].id);
+  render();
+  const row = document.querySelector(".npc-row");
+  check("a drafted NPC renders as a stacked .npc-row", !!row);
+  check("the row shows Name, Ship Class, and Aggression", row.textContent.includes("Test Racer") && row.textContent.includes(STATE.shipClasses[0].name) && row.textContent.includes("8"));
+  const x = row.querySelector(".npc-chip-x");
+  check("the row has a corner remove-X", !!x && x.textContent.trim() === "×");
+  check("clicking the X removes that NPC", (() => { x.click(); return STATE._draftNpcs.length === 0; })());
+}
+
+// An NPC drafted with no Class picked still works (auto-built, as before).
+{
+  setup();
+  render();
+  document.getElementById("npcName").value = "No Class Racer";
+  App.addDraftNpc();
+  check("an NPC with no Class picked stores classId null", STATE._draftNpcs[0].classId === null);
+  render();
+  check("its row reads (auto-built)", document.querySelector(".npc-row").textContent.includes("(auto-built)"));
+}
+
+// A race actually built from a classId-carrying NPC uses that Class's own stats.
+{
+  setup();
+  buildShip(0);
+  const cls = STATE.shipClasses[0]; cls.thrust = 7; cls.control = 9; cls.gunner = 4; cls.armor = 2; cls.damage = 1; cls.range = 2;
+  STATE._draftNpcs = [{ name: "Classed NPC", aggression: 5, classId: cls.id }];
+  App.beginRace();
+  const npc = STATE.race.participants.find(p => p.type === "npc");
+  check("the NPC's stats match the chosen Ship Class exactly", npc.thrust === 7 && npc.control === 9 && npc.gunner === 4 && npc.armor === 2 && npc.damage === 1 && npc.range === 2);
+}
+
+// Fill to 6 works even when the course was never explicitly chosen (the real bug).
+{
+  setupWithoutExplicitCourseSelection();
+  CURRENT_TAB = "race"; render(); // this alone must be enough to make Fill to 6 work
+  check("STATE._raceSetupCourse is set just by rendering the page", !!STATE._raceSetupCourse);
+  App.fillRandomNpcs();
+  check("Fill to 6 actually adds NPCs without the course ever being explicitly selected", STATE._draftNpcs.length === 6);
+  check("every filled NPC got a name, Aggression 1-10, and a classId field", STATE._draftNpcs.every(n => !!n.name && n.aggression >= 1 && n.aggression <= 10 && "classId" in n));
+}
+
+// Fill to 6 respects already-selected ships and existing NPCs (only fills the remainder).
+{
+  setup();
+  const ids = [buildShip(0), buildShip(1)];
+  STATE._raceSetupShips = ids;
+  STATE._draftNpcs = [{ name: "Already Here", aggression: 5, classId: null }];
+  App.fillRandomNpcs();
+  check("2 ships + 1 existing NPC -> fills exactly 3 more (6 total)", STATE._draftNpcs.length === 4);
+}
+
+// Fill to 6 is a no-op once already full.
+{
+  setup();
+  STATE._draftNpcs = Array.from({ length: 6 }, (_, i) => ({ name: "NPC " + i, aggression: 5, classId: null }));
+  App.fillRandomNpcs();
+  check("fillRandomNpcs does nothing once already at 6", STATE._draftNpcs.length === 6);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+const ids = [];
+[3, 6].forEach((th, i) => {
+  App.addShipClass(); const cls = STATE.shipClasses[i]; cls.thrust = th;
+  App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const s = STATE.ships[i]; App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id); ids.push(s.id);
+});
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = ids; STATE._draftNpcs = [];
+App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = [];
+const race = STATE.race;
+race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+const slow = race.participants.find(p => p.shipId === ids[0]), fast = race.participants.find(p => p.shipId === ids[1]);
+check("the highest-Thrust ship starts in lane 1", fast.lane === 1);
+check("the lowest-Thrust ship starts one lane further out (2)", slow.lane === 2);
+// Put the fast ship right behind the slow ship on the same lane so it passes within range.
+slow.lane = fast.lane; slow.hexPos = fast.hexPos + 1; fast.gear = 1;
+race.legState.order = [fast.id, slow.id];
+race.legState.cars[fast.id].turnDone = false; race.legState.cars[slow.id].turnDone = false;
+rollD = (s) => (s === 20 ? 10 : 6);
+race.legState.leg.finalTN = 99;
+App.setTurn(fast.id, "gearChange", "0");
+App.takeTurn(fast.id);
+const t = race.legState.cars[fast.id].turn;
+check("passing a ship in range pauses the turn and asks", !!t && Array.isArray(t.awaiting) && t.awaiting.indexOf(slow.id) !== -1);
+const hexBefore = fast.hexPos;
+App.takeTurn(fast.id);
+check("taking the turn again while paused does nothing", race.legState.cars[fast.id].turn === t && fast.hexPos === hexBefore);
+App.decideAttack(fast.id, "");
+if (race.legState.cars[fast.id].turn && race.legState.cars[fast.id].turn.choice) App.encounterChoice(fast.id, "straight");
+check("declining the attack resumes the movement and ends the turn", race.legState.cars[fast.id].turn === null && race.legState.cars[fast.id].turnDone === true);
+check("declining leaves no attack log entry", !race.log.some(e => e.lines.some(l => l.startsWith("Gunner vs "))));
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

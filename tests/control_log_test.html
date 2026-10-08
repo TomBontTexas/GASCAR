@@ -1,0 +1,55 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+function build(sponsor) {
+  rollD = (s) => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3; cls.control = 8;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const s = STATE.ships[0];
+  App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id);
+  if (sponsor) s.sponsor = sponsor;
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [s.id]; STATE._draftNpcs = [];
+  App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = []; return STATE.race;
+}
+// Control 8 + Pilot 7 = 15. Gear 1 = AA (net +2); movement over the TN triggers
+// the check but adds no Disadvantage of its own (see RULE_CHANGES.md
+// 2026-10-07), so net stays +2: three dice (12, 19, 20), all three beat TN 5 ->
+// 2 Criticals.
+{
+  const race = build(null);
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 5;
+  let seq = [6, 12, 19, 20], i = 0; rollD = () => seq[i++];
+  p.gear = 0;
+  resolveTurn(race, p, { gearChange: 1 });
+  while (race.legState.cars[p.id].turn) { const t = race.legState.cars[p.id].turn; if (t.choice) decideEncounter(race, p, "straight"); else decideAttack(race, p, ""); }
+  const allLines = race.log[race.log.length - 1].lines;
+  const label = allLines.find(l => l.startsWith("Control Task Check"));
+  const formula = allLines.find(l => l.startsWith("Control="));
+  const result = allLines.find(l => l.startsWith("Control-"));
+  check("log lists Control and Pilot skill separately", formula && formula.indexOf("+C8+P7=") !== -1);
+  check("log opens with the fixed Control Task Check heading", !!label);
+  check("log shows the result line vs TN 5", result && result.indexOf("vs. TN (5)") !== -1);
+  check("log reads criticals as bonus hexes, not 'no bonus'", allLines.some(l => l.indexOf("2 Criticals (+2 bonus hexes)") !== -1) && !allLines.some(l => l.indexOf("no bonus") !== -1));
+}
+// Sponsor: a stat takes a bonus or a penalty, not both.
+{
+  const race = build(null);
+  const ship = STATE.ships[0];
+  App.setSponsor(ship.id, "bonus", "thrust", "2");
+  App.setSponsor(ship.id, "penalty", "thrust", "1");
+  check("setting a penalty on a stat with a bonus clears the bonus", !ship.sponsor.bonus.thrust && ship.sponsor.penalty.thrust === 1);
+  App.setSponsor(ship.id, "bonus", "thrust", "1");
+  check("setting a bonus on a stat with a penalty clears the penalty", ship.sponsor.bonus.thrust === 1 && !ship.sponsor.penalty.thrust);
+}
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

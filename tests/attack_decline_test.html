@@ -1,0 +1,128 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup(range) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3; cls.range = range || 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id); App.updateShip(sh.id, "name", "Hero");
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  const race = STATE.race;
+  race.legIndex = 1; // attacks allowed
+  return race;
+}
+
+// 1. Attack prompt shows a Gunner preview line.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const rival = { ...hero, id: "rv1", name: "Rival", type: "npc", out: false, lane: hero.lane, hexPos: hero.hexPos + 2, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  rollD = s => 4;
+  hero.gear = 1;
+  App.takeTurn(hero.id);
+  CURRENT_TAB = "race"; render();
+  const html = document.getElementById("view").innerHTML;
+  check("attack prompt shows a Gunner-N vs. TN line", /Gunner-\d+\w* vs\. TN \(\d+\)/.test(html));
+}
+
+// 2 & 3. Decline when R>0 and the path ahead is blocked lets the player see the move choice
+// (straight-into-occupied-hex), and re-offers the attack after moving if still in range.
+{
+  const race = setup(5); // big range so the rival stays in range after one hex of movement
+  const hero = race.participants[0];
+  const blocker = { ...hero, id: "bk", name: "Blocker", type: "npc", out: false, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(blocker);
+  race.legState.cars[blocker.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(blocker.id);
+  rollD = s => (s === 20 ? 1 : 6);
+  hero.gear = 2;
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  check("attack prompt is shown first (blocker in range)", t && t.awaiting && t.awaiting.length > 0);
+  App.decideAttack(hero.id, "");
+  t = race.legState.cars[hero.id].turn;
+  check("declining with R>0 does NOT end the turn", t !== null);
+  check("declining with R>0 shows the move choice instead", t && t.choice && !t.awaiting);
+  const straightOpt = t.choice.options.find(o => o.id === "straight");
+  check("the straight option into the occupied hex is offered", !!straightOpt && t.choice.occupantId === blocker.id);
+  App.encounterChoice(hero.id, "straight");
+  t = race.legState.cars[hero.id].turn;
+  check("choosing straight resolves an obstacle Control check and keeps going (or halts), not stuck", t === null || t.halt || t.awaiting || t.choice);
+}
+
+// 4. Move All stops once a racer comes into attack range.
+{
+  const race = setup(2);
+  const hero = race.participants[0];
+  const rival = { ...hero, id: "rv2", name: "Rival2", type: "npc", out: false, lane: hero.lane, hexPos: hero.hexPos + 5, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  rollD = s => (s === 20 ? 1 : 6);
+  hero.gear = 3;
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  moveAllStraight(race, hero); // exercise the loop directly, bypassing the UI guard
+  t = race.legState.cars[hero.id].turn;
+  check("Move All stops once the rival is in range, offering the attack", t && t.awaiting && t.awaiting.indexOf(rival.id) !== -1);
+}
+
+// 5. renderHeroTurnForm shows HP alongside the Damage Control checkbox.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  hero.hp = 6; hero.maxHp = 11;
+  CURRENT_TAB = "race"; render();
+  const html = document.getElementById("view").innerHTML;
+  check("hero turn form shows HP next to Dmg Ctrl", /Dmg Ctrl:[^<]*HP 6\/11/.test(html));
+}
+
+// 6. Lap report Dmg Ctrl line matches the requested format exactly, including negative stat.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  STATE.shipClasses[0].damageControl = 1;
+  hero.hp = 2; hero.maxHp = 11;
+  rollD = s => 3;
+  race.legState.leg.finalTN = 99;
+  hero.gear = 0;
+  App.setTurn(hero.id, "damageControl", true);
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  const logLines = t ? t.log : race.log[race.log.length - 1].lines;
+  check("Dmg Ctrl log line matches exact requested format", logLines.some(l => l === "Dmg Ctrl: 1d6 + 1 = 3 + 1 = 4 HP repaired. 6/11"));
+}
+{
+  const race = setup();
+  const hero = race.participants[0];
+  App.setSponsor(STATE.ships[0].id, "penalty", "damageControl", "1");
+  hero.hp = 2; hero.maxHp = 11;
+  rollD = s => 3;
+  race.legState.leg.finalTN = 99;
+  hero.gear = 0;
+  App.setTurn(hero.id, "damageControl", true);
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  const logLines = t ? t.log : race.log[race.log.length - 1].lines;
+  check("Dmg Ctrl log line formats a negative stat with no '+-' glitch", logLines.some(l => l === "Dmg Ctrl: 1d6 - 1 = 3 - 1 = 2 HP repaired. 4/11"));
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

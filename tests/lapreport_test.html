@@ -1,0 +1,73 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+const realRoll = s => 1 + Math.floor(Math.random() * s);
+rollD = realRoll;
+function build() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [{ name: "N", aggression: 5 }];
+  App.beginRace(); if (STATE.race) App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+// No report before any hero turn.
+{
+  const race = build();
+  check("no report before a hero turn finishes", TURN_REPORT === null);
+}
+// A completed hero turn pops a report with the right content.
+{
+  const race = build();
+  const hero = race.participants.find(p => p.type === "hero");
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 19 : 4);
+  App.takeTurn(hero.id);
+  for (let k = 0; k < 50 && race.legState.cars[hero.id].turn; k++) {
+    const t = race.legState.cars[hero.id].turn;
+    if (t.awaiting) App.decideAttack(hero.id, ""); else App.encounterChoice(hero.id, "straight");
+  }
+  check("a report is captured once the hero's turn ends", !!TURN_REPORT && TURN_REPORT.shipId === hero.shipId);
+  check("the report names the hero's ship", !!TURN_REPORT && TURN_REPORT.name === participantLabel(hero));
+  check("the report carries the turn's own log lines, including the roll", TURN_REPORT.lines.some(l => l.startsWith("Gear ") && l.indexOf("rolled") !== -1));
+  check("the report carries the movement summary line", TURN_REPORT.lines.some(l => l.startsWith("Moved ")));
+  CURRENT_TAB = "race"; render();
+  const html = document.getElementById("view").innerHTML;
+  check("the lap report modal is shown on screen", html.indexOf("Official Lap Report") !== -1 && html.indexOf("lapreport") !== -1);
+  check("the roll line is classified for styling", html.indexOf('lapreport-line roll') !== -1);
+  App.dismissTurnReport();
+  check("dismissing clears the module-level report", TURN_REPORT === null);
+  const html2 = document.getElementById("view").innerHTML;
+  check("dismissing removes the modal from the page", html2.indexOf("Official Lap Report") === -1);
+}
+// NPC turns never pop a report.
+{
+  rollD = realRoll;
+  const race = build();
+  const npc = race.participants.find(p => p.type === "npc");
+  TURN_REPORT = null;
+  resolveTurn(race, npc, npcChoices(race, npc));
+  check("an NPC's own turn does not pop a report", TURN_REPORT === null);
+}
+// classifyLogLine buckets the key line types.
+{
+  check("classifies the roll line", classifyLogLine("Move=[4]+[T3] = 7") === "roll");
+  check("classifies a passed Control result", classifyLogLine("Control-22 vs. TN (5) Success") === "good");
+  check("classifies a failed Control result", classifyLogLine("Control-10 vs. TN (20) Fail") === "bad");
+  check("classifies a Fumble Chart line", classifyLogLine("Fumble chart (18): Something critical buckles.") === "special");
+  check("classifies a stopped-short reason", classifyLogLine("Stops short of the obstacle.") === "bad");
+  check("classifies the movement summary", classifyLogLine("Moved 7 hexes; now lane 1, lap 0/9.") === "summary");
+}
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

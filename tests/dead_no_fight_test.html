@@ -1,0 +1,80 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup() {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass();
+  const cls = STATE.shipClasses[0]; cls.thrust = 30; cls.control = 0; cls.armor = 0; cls.range = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 0; c.gunner = 10;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id); App.updateShip(sh.id, "name", "Doomed");
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); if (STATE.race) STATE.race.asteroids = [];
+  STATE.race.started = true;
+  return STATE.race;
+}
+// gear 4 rolled as 6,6,6,6 (movement 24+thrust30=54) > TN 50 -> triggers the check.
+// Control check: net D (-1), 2 dice, score 0+0=0, both dice < TN 50 -> both fail -> 1 Fumble.
+// Fumble roll 5+6=11 -> FUMBLE_CHART roll 11: Tier x1 HP (Comet is Tier 2) -> exactly 2 damage.
+const seq = [6, 6, 6, 6, 10, 10, 5, 6];
+
+// A hero destroyed by its own pre-movement Fumble gets no attack offer this turn.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  hero.hp = 2; hero.gear = 3; // shifting to gear 4
+  race.legState.leg.finalTN = 50;
+  race.legIndex = 1; // attacks allowed
+  const rival = { ...hero, id: "rv", name: "Rival", type: "npc", out: false, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  let i = 0; rollD = () => seq[i++];
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  check("the hero is destroyed by its own pre-movement Fumble", hero.out === true && hero.hp === 0);
+  check("its turn ends immediately -- no attack prompt despite a rival in range", race.legState.cars[hero.id].turn === null);
+  check("it did not move", hero.hexPos === 0 || race.log[race.log.length - 1].lines.some(l => l.startsWith("Moved 0 hexes")));
+  check("no Gunner check line appears in its log (it never got to attack)", !race.log[race.log.length - 1].lines.some(l => l.startsWith("Gunner vs ")));
+}
+
+// Same scenario but the destroyed car is an NPC: it must not auto-attack either.
+{
+  const race = setup();
+  App.updateShip(STATE.ships[0].id, "name", "Doomed NPC");
+  const hero = race.participants[0];
+  // Remove the hero, replace with an NPC built from the same stats so the Fumble math is identical.
+  const npcStats = carStats(hero);
+  const npc = { id: "npc_doomed", type: "npc", name: "Doomed NPC", aggression: 10, division: "Comet", ...npcStats, cumulative: 0, history: [], out: false, gear: 3, hp: 2, maxHp: 11, lane: hero.lane, hexPos: hero.hexPos, laps: 0 };
+  race.participants = [npc];
+  race.legState.cars = {};
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, damageControl: false, pendingD: 0, turnDone: false, turn: null };
+  race.legState.order = [npc.id];
+  race.legState.leg.finalTN = 50;
+  race.legIndex = 1;
+  const rival = { ...npc, id: "rv2", name: "Rival2", type: "npc", out: false, lane: npc.lane, hexPos: npc.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  let i = 0; rollD = () => seq[i++];
+  resolveTurn(race, npc, { gearChange: 1 });
+  check("the NPC is destroyed by its own pre-movement Fumble", npc.out === true && npc.hp === 0);
+  check("its own log never resolved a Gunner attack despite a rival in range and aggression 10", !race.log[race.log.length - 1].lines.some(l => l.startsWith("Gunner vs ")));
+  check("the rival was not damaged", rival.hp === 10);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

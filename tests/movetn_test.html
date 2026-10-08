@@ -1,0 +1,82 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+
+// Movement over the TN at Gear 3 (no gear mod, "-") should check at net 0 (no D), not net -1.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  race.legState.leg.finalTN = 1; // any real roll will exceed this
+  rollD = (s) => (s === 20 ? 10 : 6);
+  hero.gear = 2; // shifting to Gear 3 (no gear modifier)
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  check("the check triggers (movement exceeded the TN)", t.log.some(l => l.startsWith("Control Task Check")));
+  check("the Control formula shows Max(), not Min() -- net is 0 or positive, no Disadvantage applied", t.log.some(l => l.startsWith("Control=Max(")));
+  check("net itself is 0 (gear 3 has no modifier, no pending hits)", t.net === 0);
+}
+
+// Gear 1 (AA) + movement over TN should still be net +2 (AA only), not +1 (AA minus the old D).
+{
+  const race = setup();
+  const hero = race.participants[0];
+  race.legState.leg.finalTN = 1;
+  rollD = (s) => (s === 20 ? 10 : 6);
+  hero.gear = 0;
+  App.setTurn(hero.id, "gearChange", "1"); // shift to Gear 1 (AA)
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  check("Gear 1 (AA) plus movement over TN nets +2, not +1", t.net === 2);
+}
+
+// Gear 5 (DD) + movement over TN should be net -2 (DD only, from gear), not -3.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  race.legState.leg.finalTN = 1;
+  rollD = (s) => (s === 20 ? 10 : 6);
+  hero.gear = 4;
+  App.setTurn(hero.id, "gearChange", "1"); // shift to Gear 5 (DD)
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  check("Gear 5 (DD) plus movement over TN nets -2 (gear only), not -3", t.net === -2);
+}
+
+// Movement under the TN never triggers a check at all (unrelated to this fix, sanity check).
+{
+  const race = setup();
+  const hero = race.participants[0];
+  race.legState.leg.finalTN = 99;
+  rollD = (s) => (s === 20 ? 10 : 6);
+  hero.gear = 2;
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  const t = race.legState.cars[hero.id].turn;
+  check("movement under the TN triggers no Control check", !t.log.some(l => l.startsWith("Control Task Check")));
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

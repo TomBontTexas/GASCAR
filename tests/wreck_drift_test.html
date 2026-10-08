@@ -1,0 +1,135 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup() {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+
+// wreckDriftOptions offers the 3 forward hexes, excluding occupied/out-of-bounds ones.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  wreck.lane = 3; wreck.hexPos = 10; wreck.out = true;
+  const opts = wreckDriftOptions(race, wreck, geom, course, { laneIdx0: 2, hexPos: 10 });
+  check("3 open hexes offered with nothing in the way", opts.length === 3);
+
+  const blocker = { id: "blk", lane: 3, hexPos: 11, out: false };
+  race.participants.push(blocker);
+  const opts2 = wreckDriftOptions(race, wreck, geom, course, { laneIdx0: 2, hexPos: 10 });
+  check("the straight-ahead hex drops out when occupied", opts2.length === 2 && !opts2.some(o => o.laneIdx0 === 2 && o.hexPos === 11));
+  race.participants.pop();
+}
+
+// Lane bounds: a wreck in the innermost lane can't drift inward; outermost lane can't drift outward.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  const innerOpts = wreckDriftOptions(race, wreck, geom, course, { laneIdx0: 0, hexPos: 10 });
+  check("innermost lane: no inward option crosses below lane 0", innerOpts.every(o => o.laneIdx0 >= 0));
+  const outerOpts = wreckDriftOptions(race, wreck, geom, course, { laneIdx0: course.lanes - 1, hexPos: 10 });
+  check("outermost lane: no outward option crosses past the last lane", outerOpts.every(o => o.laneIdx0 <= course.lanes - 1));
+}
+
+// A wreck boxed in on all three sides stays put (no crash).
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  wreck.lane = 3; wreck.hexPos = 10; wreck.out = true;
+  const circ = geom.laneHexLists[2].length;
+  const ahead = { laneIdx0: 2, hexPos: (10 + 1) % circ };
+  const sn = geom.slipNeighbors[2][10];
+  const blockers = [{ id: "b1", lane: ahead.laneIdx0 + 1, hexPos: ahead.hexPos, out: false }];
+  const aheadHex = geom.laneHexLists[ahead.laneIdx0][ahead.hexPos];
+  [[-1, sn.inward], [1, sn.outward]].forEach(([dir, cands]) => {
+    const lane0 = 2 + dir;
+    const h = cands.filter(h => hexDistance(geom.laneHexLists[lane0][h], aheadHex) === 1)[0];
+    if (h !== undefined) blockers.push({ id: "b" + dir, lane: lane0 + 1, hexPos: h, out: false });
+  });
+  blockers.forEach(b => race.participants.push(b));
+  const opts = wreckDriftOptions(race, wreck, geom, course, { laneIdx0: 2, hexPos: 10 });
+  check("boxed in on all sides: no drift options offered", opts.length === 0);
+  driftWrecks(race);
+  check("driftWrecks doesn't crash or move a boxed-in wreck", wreck.lane === 3 && wreck.hexPos === 10);
+}
+
+// driftWrecks moves 1 or 2 hexes, never touches a live racer, and a wreck never ends up on an occupied hex.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  race.participants[0].out = true;
+  race.participants[0].lane = 3; race.participants[0].hexPos = 10;
+  const npc = { id: "npc1", type: "npc", name: "Live One", out: false, lane: 3, hexPos: 20, laps: 0, gear: 0, hp: 10, maxHp: 10, cumulative: 0, history: [] };
+  race.participants.push(npc);
+  const wreck = race.participants[0];
+  const before = { lane: wreck.lane, hexPos: wreck.hexPos };
+  driftWrecks(race);
+  check("the wreck moved (or stayed, if boxed in -- here it's open)", wreck.lane !== before.lane || wreck.hexPos !== before.hexPos);
+  check("the live NPC's position is untouched by drift", npc.lane === 3 && npc.hexPos === 20);
+  check("the wreck never landed on the live NPC's hex", !(wreck.lane === npc.lane && wreck.hexPos === npc.hexPos));
+}
+
+// initLegState() drifts wrecks automatically when a new Leg starts; live racers are untouched.
+{
+  const race = setup();
+  race.participants[0].out = true;
+  race.participants[0].lane = 3; race.participants[0].hexPos = 10;
+  const npc = { id: "npc2", type: "npc", name: "Bystander", out: false, lane: 4, hexPos: 30, laps: 0, gear: 0, hp: 10, maxHp: 10, cumulative: 0, history: [] };
+  race.participants.push(npc);
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, damageControl: false, pendingD: 0, turnDone: true, turn: null };
+  race.legState.order.push(npc.id);
+  const before = { lane: race.participants[0].lane, hexPos: race.participants[0].hexPos };
+  race.legState.complete = true;
+  App.startNextLeg();
+  const wreck = race.participants.find(p => p.id === race.participants[0].id);
+  check("starting a new Leg drifts the wreck", wreck.lane !== before.lane || wreck.hexPos !== before.hexPos);
+  check("a live participant's position is untouched by the Leg-start drift", npc.lane === 4 && npc.hexPos === 30);
+}
+
+// Visual: a wreck's <g class="circracer"> gets the red wreck-ring; a live car does not.
+{
+  const race = setup();
+  race.participants[0].out = true;
+  CURRENT_TAB = "race";
+  render();
+  const html = document.getElementById("view").innerHTML;
+  check("the wreck-ring class appears in the rendered track (red outline on the wreck)", html.indexOf("wreck-ring") !== -1);
+}
+
+// A live (non-out) car never gets the wreck-ring.
+{
+  const race = setup();
+  race.participants[0].out = false;
+  CURRENT_TAB = "race";
+  render();
+  const html = document.getElementById("view").innerHTML;
+  check("a live car never gets the wreck-ring", html.indexOf("wreck-ring") === -1);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

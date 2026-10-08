@@ -1,0 +1,77 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+function buildShip(i) {
+  App.addShipClass(); const cls = STATE.shipClasses[i];
+  App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[i];
+  App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id); App.updateShip(sh.id, "name", "Ship " + i);
+  return sh.id;
+}
+function setup() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1";
+}
+
+// 7 ships selected, 0 NPCs: only the first 6 race.
+{
+  setup();
+  const ids = Array.from({ length: 7 }, (_, i) => buildShip(i));
+  STATE._raceSetupShips = ids.slice(); STATE._draftNpcs = [];
+  App.beginRace();
+  check("7 ships selected -> exactly 6 race", STATE.race.participants.length === 6);
+  check("the kept ships are the first 6 selected, in order", STATE.race.participants.every((p, i) => p.shipId === ids[i]));
+  check("every kept participant is a hero", STATE.race.participants.every(p => p.type === "hero"));
+}
+
+// 3 ships + 5 NPCs = 8 total: all 3 ships kept, only the first 3 NPCs fill the remaining 3 lanes.
+{
+  setup();
+  const ids = Array.from({ length: 3 }, (_, i) => buildShip(i));
+  STATE._raceSetupShips = ids.slice();
+  STATE._draftNpcs = Array.from({ length: 5 }, (_, i) => ({ name: "NPC " + i, aggression: 5 }));
+  App.beginRace();
+  check("3 ships + 5 NPCs -> exactly 6 race", STATE.race.participants.length === 6);
+  const heroes = STATE.race.participants.filter(p => p.type === "hero");
+  const npcs = STATE.race.participants.filter(p => p.type === "npc");
+  check("all 3 selected ships raced (ships take priority)", heroes.length === 3 && ids.every(id => heroes.some(h => h.shipId === id)));
+  check("only the first 3 of the 5 NPCs raced", npcs.length === 3 && npcs.every(n => ["NPC 0", "NPC 1", "NPC 2"].includes(n.name)));
+}
+
+// Exactly 6 total (3 ships + 3 NPCs): nothing dropped.
+{
+  setup();
+  const ids = Array.from({ length: 3 }, (_, i) => buildShip(i));
+  STATE._raceSetupShips = ids.slice();
+  STATE._draftNpcs = Array.from({ length: 3 }, (_, i) => ({ name: "NPC " + i, aggression: 5 }));
+  App.beginRace();
+  check("exactly 6 total: nothing dropped", STATE.race.participants.length === 6);
+}
+
+// 7 NPCs, 0 ships: only the first 6 race.
+{
+  setup();
+  STATE._raceSetupShips = [];
+  STATE._draftNpcs = Array.from({ length: 7 }, (_, i) => ({ name: "NPC " + i, aggression: 5 }));
+  App.beginRace();
+  check("7 NPCs, no ships -> exactly 6 race", STATE.race.participants.length === 6);
+  check("the kept NPCs are the first 6 in order", STATE.race.participants.every((p, i) => p.name === "NPC " + i));
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

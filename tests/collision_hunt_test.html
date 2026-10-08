@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+function collisions(race) {
+  const live = race.participants;
+  const bad = [];
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      if (live[i].lane === live[j].lane && live[i].hexPos === live[j].hexPos) {
+        bad.push(`${live[i].name || live[i].id} and ${live[j].name || live[j].id} both at lane ${live[i].lane} hex ${live[i].hexPos} (out:${live[i].out},${live[j].out})`);
+      }
+    }
+  }
+  return bad;
+}
+
+// Run many randomized races with several wrecks drifting alongside live racers,
+// checking after every single Leg for any two participants sharing a hex.
+let totalLegs = 0, totalBad = [];
+for (let trial = 0; trial < 8; trial++) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 30, laps: 50, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [];
+  STATE._draftNpcs = Array.from({ length: 6 }, (_, i) => ({ name: "NPC" + trial + "_" + i, aggression: 5 + (i % 5), classId: null }));
+  App.beginRace();
+  App.startRaceNow();
+  // Force a couple of racers into wrecks early so drift kicks in for the rest of the run.
+  const race = STATE.race;
+  if (race.participants[0]) { race.participants[0].out = true; race.participants[0].hp = 0; }
+  if (race.participants[1]) { race.participants[1].out = true; race.participants[1].hp = 0; }
+  for (let leg = 0; leg < 25 && !race.finished; leg++) {
+    totalLegs++;
+    const bad = collisions(race);
+    if (bad.length) totalBad.push(`trial ${trial} leg ${race.legIndex + 1}: ` + bad.join("; "));
+    if (race.legState.complete) App.startNextLeg();
+    else break; // shouldn't happen with no heroes, but guard against an infinite loop
+  }
+}
+check(`checked ${totalLegs} Leg-ends across 8 trials with wrecks drifting among live racers`, totalLegs > 50);
+check("no two participants ever shared a hex", totalBad.length === 0);
+if (totalBad.length) lines.push(...totalBad.slice(0, 10).map(b => "    " + b));
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS") || l.startsWith("    ")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

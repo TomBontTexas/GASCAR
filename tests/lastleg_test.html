@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = (s) => 1 + Math.floor(Math.random() * s);
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+const ids = [];
+[3, 4].forEach((th, i) => {
+  App.addShipClass(); const cls = STATE.shipClasses[i]; cls.thrust = th;
+  App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const s = STATE.ships[i]; App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id); ids.push(s.id);
+});
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 20, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = ids; STATE._draftNpcs = [{ name: "N", aggression: 5 }];
+App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+// Play one full leg, then take only the first turn of the next leg.
+while (!STATE.race.legState.complete && !STATE.race.finished) {
+  const nx = nextTurnParticipant(STATE.race);
+  if (nx.type === "hero") { App.takeTurn(nx.id); const t = STATE.race.legState.cars[nx.id].turn; if (t && t.awaiting) App.decideAttack(nx.id, ""); }
+  else { resolveTurn(STATE.race, nx, npcChoices(STATE.race, nx)); advanceRace(STATE.race); }
+}
+const r0 = STATE.race; let beforeNext = r0.legIndex;
+CURRENT_TAB = "race"; render(); const btnShown = document.getElementById("view").innerHTML.indexOf("Start Leg 2") !== -1;
+App.startNextLeg();
+const r = STATE.race;
+check("a completed leg shows a Start Leg button", btnShown);
+check("a leg has finished before the partial one", r.legIndex === 1);
+const inLeg0 = r.participants.filter(p => (p.history || []).some(h => h.leg === 1)).length;
+check("every ship has a turn in the completed leg", inLeg0 === r.participants.length);
+let threw = false; try { App.playRaceReplay(true); } catch (e) { threw = true; }
+check("Show Last Leg with a leg in progress doesn't throw", !threw);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

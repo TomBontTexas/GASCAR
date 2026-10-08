@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+App.beginRace(); const race = STATE.race; race.started = true; race.asteroids = [];
+const p = race.participants[0];
+race.legState.cars[p.id].pendingD = 1;
+CURRENT_TAB = "race"; render();
+const html = document.getElementById("view").innerHTML;
+check("a ship with pending Disadvantage shows a Hit tag", html.indexOf(">Hit</span>") !== -1);
+race.legState.cars[p.id].pendingD = 0; render();
+check("the Hit tag clears with the Disadvantage", document.getElementById("view").innerHTML.indexOf(">Hit</span>") === -1);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

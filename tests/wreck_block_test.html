@@ -1,0 +1,135 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup() {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3; cls.control = 20;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 20; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+
+// Per the written rule, entering a wreck's hex calls for a Control Task Check, same as passing a
+// live racer: a huge Control score and a trivially low TN should pass right through it.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const wreck = { ...hero, id: "wreck1", name: "Wreck", type: "npc", out: true, hp: 0, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0 };
+  race.participants.push(wreck);
+  race.legState.cars[wreck.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(wreck.id);
+  race.legState.leg.finalTN = 1; // trivially low -- a 20-Control hero should always pass
+  hero.gear = 0;
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  const lastLines = race.log[race.log.length - 1].lines;
+  check("a high-Control hero passes straight through a wreck's hex on a successful check", !lastLines.some(l => l.startsWith("Stops short")));
+  // Two checks expected: the pre-movement one, plus the obstacle check to pass the wreck.
+  const checkCount = lastLines.filter(l => l === "Control Task Check").length;
+  check("passing a wreck rolls an obstacle Control check, same as a live racer", checkCount === 2);
+  check("no HP is lost passing a wreck (unlike an asteroid)", hero.hp === hero.maxHp);
+}
+
+// A failed Control check against a wreck stops the ship short, same as failing against a live racer.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const cls = getShipClass(getShip(hero.shipId).classId);
+  cls.control = 0; getCrewman(getShip(hero.shipId).crewmanId).pilot = 0; // guaranteed failure
+  const wreck = { ...hero, id: "wreck2", name: "Wreck", type: "npc", out: true, hp: 0, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0 };
+  race.participants.push(wreck);
+  race.legState.cars[wreck.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(wreck.id);
+  race.legState.leg.finalTN = 99; // trivially high -- a 0-Control hero should always fail
+  hero.gear = 0;
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  check("the hero never lands on or passes through the wreck's hex on a failed check", !(hero.lane === wreck.lane && hero.hexPos === wreck.hexPos));
+  check("the turn halted at the wreck", t === null);
+  const lastLines = race.log[race.log.length - 1].lines;
+  check("the log reads 'Stops short of the obstacle'", lastLines.some(l => l.startsWith("Stops short of the obstacle")));
+}
+
+// A ship can still successfully Control-check past a LIVE racer (unchanged, regression check).
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const rival = { ...hero, id: "rival1", name: "Rival", type: "npc", out: false, hp: 10, maxHp: 10, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  race.legState.leg.finalTN = 1;
+  hero.gear = 0;
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  const lastLines = race.log[race.log.length - 1].lines;
+  // Two checks expected: the pre-movement one, plus the obstacle check to pass the live racer (unchanged).
+  const checkCount = lastLines.filter(l => l === "Control Task Check").length;
+  check("passing a live racer still rolls a second (obstacle) Control check", checkCount === 2);
+}
+
+// Successfully passing through a wreck but running out of movement exactly on its hex forces a
+// free Slip beside it (no cost, no extra check) -- the generic "ends on occupied hex" rule.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const wreck = { ...hero, id: "wreck3", name: "Wreck", type: "npc", out: true, hp: 0, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0 };
+  race.participants.push(wreck);
+  race.legState.cars[wreck.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(wreck.id);
+  race.legState.leg.finalTN = 1;
+  hero.gear = 1;
+  App.setTurn(hero.id, "gearChange", "0");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  t.R = 1; // force exactly enough movement left to land on the wreck's hex and no further
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  check("the hero never ends its turn co-located with the wreck", !(hero.lane === wreck.lane && hero.hexPos === wreck.hexPos));
+  const lastLines = race.log[race.log.length - 1].lines;
+  check("the log shows the free forced Slip beside the wreck", lastLines.some(l => l.indexOf("drifts to an open hex beside it") !== -1));
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS") || l.startsWith("    ")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

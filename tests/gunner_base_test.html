@@ -1,0 +1,44 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult"></pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const out = [];
+function check(name, cond) { out.push((cond ? "PASS" : "FAIL") + " - " + name); }
+
+check("fresh STAT_BASE.gunner is 5", GDATA.STAT_BASE.gunner === 5);
+
+// Fresh class at base gets gunner 5
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet"); App.addShipClass();
+const cls = STATE.shipClasses[0];
+check("new Ship Class defaults to Gunner 5", cls.gunner === 5);
+
+// Simulate a saved state from before this change (gunner base 3), bought 2 levels above base -> gunner=5
+const priorFlags = { _statBaseLowered: true, _circusMaximusConversion: true, _shipClassCrewmanSplit: true, _shipClassStatsRebuilt: true, _circusAstralisCrew: true };
+const old = Object.assign({ shipClasses: [{ id: "x", division: "Comet", gunner: 5, range: 1 }], crewmen: [], ships: [], courses: [], race: null }, priorFlags);
+migrateState(old);
+check("migration: old Gunner 5 (2 levels above old base 3) becomes 7 (2 levels above new base 5)", old.shipClasses[0].gunner === 7);
+check("migration: race cleared", old.race === null);
+check("migration flag set", old._gunnerBaseRaised === true);
+
+// A class saved at exactly the old base (3, 0 levels bought) becomes exactly the new base (5)
+const old2 = Object.assign({ shipClasses: [{ id: "y", division: "Comet", gunner: 3, range: 1 }], crewmen: [], ships: [], courses: [], race: null }, priorFlags);
+migrateState(old2);
+check("migration: class at old base (3) becomes new base (5)", old2.shipClasses[0].gunner === 5);
+
+// Running migration twice is a no-op (idempotent)
+migrateState(old2);
+check("migration: idempotent on second run", old2.shipClasses[0].gunner === 5);
+
+document.getElementById("testresult").textContent = out.join("\n") + "\n\n" + (out.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) {
+  document.getElementById("testresult").textContent = "ERROR: " + e.message + "\n" + e.stack;
+}
+</script>
+</body></html>

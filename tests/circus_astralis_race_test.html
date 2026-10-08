@@ -1,0 +1,147 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre>
+<div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = [];
+function check(name, cond) { lines.push((cond ? "PASS" : "FAIL") + " - " + name); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setupRace(npcCount, heroCount, laps) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  const heroes = [];
+  for (let i = 0; i < heroCount; i++) {
+    App.addShipClass();
+    const cls = STATE.shipClasses[STATE.shipClasses.length - 1];
+    cls.thrust = 3 + i; // distinct-ish thrust
+    App.addCrewman();
+    const crew = STATE.crewmen[STATE.crewmen.length - 1];
+    crew.pilot = 7; crew.gunner = 7;
+    App.addShip();
+    const ship = STATE.ships[STATE.ships.length - 1];
+    App.updateShip(ship.id, "classId", cls.id);
+    App.updateShip(ship.id, "crewmanId", crew.id);
+    heroes.push(ship.id);
+  }
+  STATE.courses.push({ id: "c1", name: "Test", division: "Comet", lanes: 6, innerHexes: 40, laps, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1";
+  STATE._raceSetupShips = heroes;
+  STATE._draftNpcs = [];
+  for (let i = 0; i < npcCount; i++) STATE._draftNpcs.push({ name: "NPC " + i, aggression: 5 });
+  App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+
+// Each hero: shift up a gear, slip if it can, attack anyone within 2 hexes.
+function answerAttack(race, p, pick) { const t = race.legState.cars[p.id].turn; if (t && t.awaiting) App.decideAttack(p.id, pick === undefined ? t.awaiting[0] : pick); }
+function answerAll(pid) { for (let k = 0; k < 20; k++) { const t = STATE.race.legState.cars[pid].turn; if (!t) return; if (t.choice) App.encounterChoice(pid, "straight"); else if (t.awaiting) App.decideAttack(pid, ""); else return; } }
+function playToEnd(maxTurns) {
+  let turns = 0;
+  while (STATE.race && !STATE.race.finished && turns < maxTurns) {
+    const race = STATE.race;
+    const next = nextTurnParticipant(race);
+    if (!next) { advanceRace(race); if (race.legState.complete) App.startNextLeg(); turns++; continue; }
+    if (next.type === "hero") {
+      App.setTurn(next.id, "gearChange", "1");
+      const targets = race.participants.filter(x => x.id !== next.id && !x.out && hexesWithinManeuverRange(circTrackGeometry(getCourse(race.courseId)), next, x));
+      App.takeTurn(next.id);
+      answerAll(next.id);
+    } else {
+      resolveTurn(race, next, npcChoices(race, next));
+      advanceRace(race);
+    }
+    turns++;
+  }
+  return turns;
+}
+
+let allOk = true;
+for (let trial = 0; trial < 12; trial++) {
+  const race = setupRace(1 + (trial % 2), 2, 2);
+  const turns = playToEnd(400);
+  const finished = race.finished;
+  const bad = race.participants.some(p => [p.cumulative, p.lane, p.hexPos, p.hp, p.laps].some(v => v === undefined || Number.isNaN(v)));
+  const gearOk = race.participants.every(p => p.gear >= 0 && p.gear <= GDATA.MAX_GEAR);
+  if (!finished || bad || !gearOk) { allOk = false; lines.push(`trial ${trial}: finished=${finished} turns=${turns} nan=${bad} gearOk=${gearOk}`); }
+}
+check("12 randomized 2-Hero + 1/2-NPC races finish cleanly under sequential turns (no NaN, gear in bounds)", allOk);
+
+// Turn order: lowest Thrust acts first.
+{
+  const race = setupRace(1, 2, 2);
+  const order = race.legState.order.map(id => race.participants.find(p => p.id === id));
+  const thrusts = order.map(p => carStats(p).thrust);
+  check("initiative lists ships lowest Thrust first", thrusts.every((t, i) => i === 0 || thrusts[i - 1] <= t));
+}
+
+// Gear table: gear 1 rolls 1D6 + Thrust; gear 0 moves nothing.
+{
+  const race = setupRace(0, 1, 9);
+  const p = race.participants[0];
+  p.gear = 0;
+  rollD = (sides) => 3;
+  const car = race.legState.cars[p.id];
+  car.gearChange = 1; // -> gear 1: 1D6 (3) + Thrust
+  const thrust = carStats(p).thrust;
+  resolveTurn(race, p, { gearChange: 1 }); answerAll(p.id);
+  const gearLine = race.log[race.log.length - 1].lines[0];
+  check("gear 1 rolls 1D6 + Thrust (3 + " + thrust + " = " + (3 + thrust) + ")", gearLine.indexOf("rolled 3 + Thrust " + thrust + " = " + (3 + thrust) + " movement points") !== -1);
+}
+
+// Gear 0 stays put.
+{
+  const race = setupRace(0, 1, 9);
+  const p = race.participants[0];
+  const startHex = p.hexPos;
+  resolveTurn(race, p, { gearChange: 0 }); answerAll(p.id);
+  check("gear 0 means no movement", p.history[0].movement === 0 && p.hexPos === startHex);
+}
+
+// Control check is triggered only at 5+ hexes of movement or 2+ Slips (flat D).
+{
+  const race = setupRace(0, 1, 9);
+  const p = race.participants[0];
+  p.gear = 1;
+  rollD = (sides) => 1; // gear 1 movement = 1 + Thrust (small)
+  const thrust = carStats(p).thrust;
+  resolveTurn(race, p, { gearChange: 0 }); answerAll(p.id);
+  check("a short move (under 5 hexes, no Slips) makes no Control check", !race.log.some(e => e.lines.some(l => l.startsWith("Control Task Check"))));
+}
+
+
+// Starting a race doesn't move NPCs by itself; NPCs keep up with the pack.
+{
+  rollD = (s) => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [{ name: "A", aggression: 5 }, { name: "B", aggression: 5 }];
+  App.beginRace(); if (STATE.race) STATE.race.asteroids = [];
+  const r = STATE.race;
+  check("beginRace leaves the race unstarted with no turns taken", r.started === false && r.log.length === 0);
+  App.startRaceNow();
+  let npcTurns = 0, npcMoves = 0;
+  for (let k = 0; k < 60 && !STATE.race.finished; k++) {
+    const nx = nextTurnParticipant(STATE.race);
+    if (!nx) { advanceRace(STATE.race); if (STATE.race.legState.complete) App.startNextLeg(); continue; }
+    if (nx.type === "hero") { App.takeTurn(nx.id); answerAll(nx.id); }
+    else { resolveTurn(STATE.race, nx, npcChoices(STATE.race, nx)); advanceRace(STATE.race); }
+  }
+  STATE.race.participants.filter(p => p.type === "npc").forEach(p => (p.history || []).forEach(h => { npcTurns++; if (h.movement > 0) npcMoves++; }));
+  check("NPCs actually move (most of their turns cover ground)", npcTurns > 0 && npcMoves / npcTurns > 0.5);
+}
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l=>l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) {
+  document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack;
+}
+</script>
+</body></html>

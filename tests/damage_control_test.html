@@ -1,0 +1,137 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+check("SHIP_STATS has damageControl between gunner and damage", SHIP_STATS.indexOf("gunner") + 1 === SHIP_STATS.indexOf("damageControl") && SHIP_STATS.indexOf("damageControl") + 1 === SHIP_STATS.indexOf("damage"));
+check("STAT_BASE.damageControl is 0", GDATA.STAT_BASE.damageControl === 0);
+check("STAT_LABEL.damageControl is 'Damage Control'", STAT_LABEL.damageControl === "Damage Control");
+
+function setup() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return { race: STATE.race, cls };
+}
+
+// Fresh class defaults to 0, formats as "1D6"
+{
+  const { cls } = setup();
+  check("new Ship Class defaults to damageControl 0", cls.damageControl === 0);
+  check("formatStatValue shows '1D6' at 0 bonus", formatStatValue(cls, "damageControl") === "1D6");
+  cls.damageControl = 2;
+  check("formatStatValue shows '1D6+2' at bonus 2", formatStatValue(cls, "damageControl") === "1D62".replace("2", "+2"));
+  const before = classBuildPointsSpent(cls);
+  cls.damageControl = 0;
+  const afterZero = classBuildPointsSpent(cls);
+  cls.damageControl = 2;
+  check("raising damageControl by 2 levels costs the same triangular cost as other stats", classBuildPointsSpent(cls) - afterZero === mkCumulativeCost(2));
+}
+
+// carStats does NOT floor at 0 (like Damage, a penalty can push it negative) and reads sponsor bonus
+{
+  const { race, cls } = setup();
+  const p = race.participants[0];
+  cls.damageControl = 0;
+  App.setSponsor(STATE.ships[0].id, "penalty", "damageControl", "2");
+  check("a sponsor penalty can push damageControl negative, like Damage", carStats(p).damageControl === -2);
+  check("formatStatValue shows the negative total as '1D6-2'", formatStatValue(carStats(p), "damageControl") === "1D6-2");
+  App.setSponsor(STATE.ships[0].id, "penalty", "damageControl", "0");
+  App.setSponsor(STATE.ships[0].id, "bonus", "damageControl", "2");
+  check("a sponsor bonus raises carStats damageControl", carStats(p).damageControl === 2);
+  App.setSponsor(STATE.ships[0].id, "bonus", "damageControl", "0");
+}
+
+// A negative Damage Control stat can't make the heal roll subtract HP
+{
+  const { race } = setup();
+  const hero = race.participants[0];
+  STATE.shipClasses[0].damageControl = 0;
+  App.setSponsor(STATE.ships[0].id, "penalty", "damageControl", "2");
+  hero.hp = 5;
+  race.legIndex = 1;
+  rollD = (s) => 1; // 1D6 roll = 1, + (-2) damageControl = -1, should floor at 0
+  App.setTurn(hero.id, "damageControl", true);
+  App.takeTurn(hero.id);
+  check("a negative Damage Control floors the heal at 0 HP, never subtracting", hero.hp === 5);
+  App.setSponsor(STATE.ships[0].id, "penalty", "damageControl", "0");
+}
+
+// resolveTurn: Damage Control heals, caps at maxHp, blocks the attack
+{
+  const { race } = setup();
+  const hero = race.participants[0];
+  STATE.shipClasses[0].damageControl = 2;
+  hero.hp = 5; // maxHp from points base 10
+  check("hero starts damaged (5/%d)".replace("%d", hero.maxHp), hero.hp === 5 && hero.maxHp > 5);
+  race.legIndex = 1; // so an attack would otherwise be available
+  const rival = { ...hero, id: "rv", name: "Rival", type: "npc", out: false, lane: hero.lane, hexPos: hero.hexPos + 1, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, hp: 10, maxHp: 10 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  rollD = (s) => 4; // 1D6 roll = 4
+  race.legState.cars[hero.id].gearChange = 0;
+  App.setTurn(hero.id, "damageControl", true);
+  App.takeTurn(hero.id);
+  check("Damage Control heals 1D6 + stat (4+2=6), capped at maxHp", hero.hp === Math.min(hero.maxHp, 5 + 6));
+  check("Damage Control logs the repair line", race.legState.cars[hero.id].turn ? race.legState.cars[hero.id].turn.log.some(l => l.startsWith("Dmg Ctrl:")) : race.log[race.log.length - 1].lines.some(l => l.startsWith("Dmg Ctrl:")));
+  let t = race.legState.cars[hero.id].turn;
+  check("no attack is offered even though a rival is in range (Damage Control forgoes it)", !t || !t.awaiting || t.awaiting.length === 0);
+  check("attackedThisLeg is set", race.legState.cars[hero.id].attackedThisLeg === true);
+}
+
+// Heal cannot exceed maxHp
+{
+  const { race } = setup();
+  const hero = race.participants[0];
+  STATE.shipClasses[0].damageControl = 0;
+  hero.hp = hero.maxHp - 2;
+  race.legIndex = 1;
+  rollD = (s) => 6;
+  App.setTurn(hero.id, "damageControl", true);
+  App.takeTurn(hero.id);
+  check("healing never exceeds max HP", hero.hp === hero.maxHp);
+}
+
+// npcChoices: damaged NPC takes Damage Control; full-HP NPC does not
+{
+  const { race } = setup();
+  const npc = { id: "npcTest", type: "npc", name: "Tester", division: "Comet", thrust: 3, points: 10, control: 5, gunner: 5, damageControl: 1, damage: 0, armor: 0, range: 1, hp: 4, maxHp: 10, out: false, lane: 1, hexPos: 0, laps: 0, gear: 0, cumulative: 0, history: [] };
+  race.participants.push(npc);
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, damageControl: false, pendingD: 0, turnDone: false, turn: null };
+  const choicesDamaged = npcChoices(race, npc);
+  check("a damaged NPC's choices include damageControl=true", choicesDamaged.damageControl === true);
+  npc.hp = npc.maxHp;
+  const choicesFull = npcChoices(race, npc);
+  check("a full-HP NPC's choices include damageControl=false", choicesFull.damageControl === false);
+}
+
+// Migration: an old saved class without damageControl gets the base value
+{
+  const old = {
+    shipClasses: [{ id: "c", name: "Old", division: "Comet", thrust: 1, points: 10, control: 5, gunner: 5, damage: 0, armor: 0, range: 1 }],
+    crewmen: [], ships: [], courses: [], race: null,
+    _builtinShipClassesRemoved: true, _circularTrackHexed: true, _circusMaximusConversion: true,
+    _shipClassCrewmanSplit: true, _shipClassStatsRebuilt: true, _circusAstralisCrew: true,
+    _statBaseLowered: true, _gunnerBaseRaised: true
+  };
+  migrateState(old);
+  check("an older saved class gets damageControl 0 on load", old.shipClasses[0].damageControl === 0);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

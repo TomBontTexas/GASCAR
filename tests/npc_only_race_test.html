@@ -1,0 +1,106 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+let alerted = null;
+window.alert = (m) => { alerted = m; };
+window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+function setupCourseOnly(laps) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  STATE._raceSetupShips = []; STATE._draftNpcs = [];
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: laps || 50, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1";
+}
+
+// Race Setup page renders (with its NPC controls and Start Race button) even with zero ships ever built.
+{
+  setupCourseOnly();
+  CURRENT_TAB = "race";
+  render();
+  const html = document.getElementById("view").innerHTML;
+  check("Race Setup still shows with zero ships built (no hard block)", html.indexOf("Build at least one ship first") === -1);
+  check("the NPC Racers section is present", html.indexOf("NPC Racers") !== -1);
+  check("the Start Race button is present", html.indexOf("Start Race") !== -1);
+}
+
+// Starting a race with zero hero ships and zero NPCs is still rejected.
+{
+  setupCourseOnly();
+  alerted = null;
+  App.beginRace();
+  check("starting with nothing selected is still rejected", !!alerted && !STATE.race);
+}
+
+// Starting a race with just one NPC (no hero ships) works.
+{
+  setupCourseOnly(50);
+  STATE._draftNpcs = [{ name: "Solo Tester", aggression: 5 }];
+  alerted = null;
+  App.beginRace();
+  check("one NPC alone is enough to start a race", !alerted && !!STATE.race);
+  check("the race has exactly one participant, an NPC", STATE.race.participants.length === 1 && STATE.race.participants[0].type === "npc");
+  App.startRaceNow();
+  check("the race does not instantly finish just because there's no hero", STATE.race.finished === false);
+  check("the Leg completes after the lone NPC's turn (nothing left to do)", STATE.race.legState.complete === true);
+  check("Leg 2 can be started (leg-by-leg pacing works)", (() => { App.startNextLeg(); return STATE.race.legIndex === 1; })());
+}
+
+// Starting a race with six NPCs (no hero ships at all) works and proceeds Leg by Leg.
+{
+  setupCourseOnly(50);
+  STATE._draftNpcs = Array.from({ length: 6 }, (_, i) => ({ name: "NPC " + i, aggression: 5 }));
+  alerted = null;
+  App.beginRace();
+  check("six NPCs alone is enough to start a race", !alerted && !!STATE.race);
+  check("the race has exactly six NPC participants, no heroes", STATE.race.participants.length === 6 && STATE.race.participants.every(p => p.type === "npc"));
+  App.startRaceNow();
+  check("the all-NPC race does not instantly finish", STATE.race.finished === false);
+  check("every NPC took its Leg-1 turn", STATE.race.participants.every(p => STATE.race.legState.cars[p.id].turnDone));
+  check("Leg 1 completed, offering Leg 2 (leg-by-leg pacing)", STATE.race.legState.complete === true);
+  App.startNextLeg();
+  // With no hero to pause on, Leg 2's NPCs all resolve automatically and the
+  // Leg completes right away -- that's the expected "leg by leg" pacing: the
+  // user reviews each auto-resolved Leg, then clicks Start Leg N+1 again.
+  check("Leg 2 starts and auto-resolves cleanly (no hero to pause on)", STATE.race.legIndex === 1 && STATE.race.legState.complete === true);
+}
+
+// An all-NPC race still finishes correctly when a racer actually crosses the line.
+{
+  setupCourseOnly(1); // 1 lap, so someone should win quickly
+  STATE._draftNpcs = [{ name: "Racer A", aggression: 10 }, { name: "Racer B", aggression: 10 }];
+  App.beginRace();
+  App.startRaceNow();
+  for (let leg = 0; leg < 30 && !STATE.race.finished; leg++) {
+    if (STATE.race.legState.complete) App.startNextLeg();
+  }
+  check("an all-NPC race can still finish with a winner", STATE.race.finished === true && !!STATE.race.winnerId);
+}
+
+// A hero race still ends immediately once every hero is destroyed, even with NPCs still active (unchanged behavior).
+{
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c2", name: "T2", division: "Comet", lanes: 6, innerHexes: 50, laps: 50, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c2"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [{ name: "Bystander", aggression: 5 }];
+  App.beginRace(); App.startRaceNow();
+  const hero = STATE.race.participants.find(p => p.type === "hero");
+  hero.hp = 0; hero.out = true;
+  advanceRace(STATE.race);
+  check("a hero race still ends once every hero is out, regardless of surviving NPCs", STATE.race.finished === true && !STATE.race.winnerId);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+const expected = { Flash: 10, Spark: 20, Comet: 30, Meteor: 40, Nova: 50 };
+Object.keys(expected).forEach(d => {
+  check(`divisionBuildPoints(${d}) is ${expected[d]}`, divisionBuildPoints(d) === expected[d]);
+});
+
+// Tier is unchanged (still drives crew size), even though Flash/Spark share Tier 1 but not a budget.
+check("Flash and Spark still share Tier 1", carTier("Flash") === 1 && carTier("Spark") === 1);
+check("but their budgets now differ", divisionBuildPoints("Flash") !== divisionBuildPoints("Spark"));
+
+// A fresh Ship Class's remaining points match its Division's budget.
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = [];
+["Flash", "Spark", "Comet", "Meteor", "Nova"].forEach(d => {
+  App.setShipyardAddDivision(d);
+  App.addShipClass();
+  const cls = STATE.shipClasses[STATE.shipClasses.length - 1];
+  check(`a fresh ${d} class starts with ${expected[d]} points remaining`, classBuildPointsRemaining(cls) === expected[d]);
+});
+
+// An NPC auto-built from each Division spends up to that Division's budget, not more.
+["Flash", "Spark", "Comet", "Meteor", "Nova"].forEach(d => {
+  const stats = freshNpcStats(d);
+  const spent = SHIP_STATS.reduce((sum, s) => sum + mkCumulativeCost(Math.max(0, (stats[s] || 0) - shipStatBase(s))), 0);
+  check(`an NPC from ${d} spends no more than ${expected[d]} points (spent ${spent})`, spent <= expected[d]);
+});
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

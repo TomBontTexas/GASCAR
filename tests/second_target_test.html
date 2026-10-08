@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+const ids = [];
+[3, 4].forEach((th, i) => { App.addShipClass(); const c0 = STATE.shipClasses[i]; c0.thrust = th; App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 7; App.addShip(); const s = STATE.ships[i]; App.updateShip(s.id, "classId", c0.id); App.updateShip(s.id, "crewmanId", c.id); ids.push(s.id); });
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 20, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = ids; STATE._draftNpcs = [];
+App.beginRace(); App.startRaceNow();
+const race = STATE.race;
+race.asteroids = []; // this test places racers manually on specific hexes -- keep the path clear
+race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+const hero = race.participants.find(p => p.shipId === ids[0]), other = race.participants.find(p => p.shipId === ids[1]);
+// Hero at lane 1 hex 10 moving 7 hexes; the other ship sits ahead on the same lane (hex 16), so the
+// hero passes within range of it later, after having declined the first ship (in lane 2, beside it).
+hero.lane = 1; hero.hexPos = 10; hero.gear = 0; hero.laps = 0;
+other.lane = 1; other.hexPos = 16; other.out = false;
+const first = { ...other, id: "firstFoe" };
+race.participants.push(first);
+first.lane = 2; first.hexPos = 10; first.hp = 50; first.maxHp = 50; first.type = "npc"; first.out = false;
+race.legState.cars[first.id] = { gearChange: 0, slip: "", slipCount: 0, pendingD: 0, turnDone: true };
+race.legState.cars[other.id].turnDone = true;
+race.legState.order = [hero.id];
+race.legState.leg.finalTN = 5;
+rollD = (s) => (s === 20 ? 19 : (s === 6 ? 4 : 4));
+hero.gear = 1;
+App.setTurn(hero.id, "gearChange", "0");
+App.takeTurn(hero.id);
+let t = race.legState.cars[hero.id].turn;
+check("the first racer in range prompts the hero", t && t.awaiting && t.awaiting.indexOf(first.id) !== -1);
+App.decideAttack(hero.id, "");
+for (let k = 0; k < 20; k++) { t = race.legState.cars[hero.id].turn; if (!t || (t.awaiting && t.awaiting.indexOf(other.id) !== -1)) break; App.encounterChoice(hero.id, "straight"); }
+t = race.legState.cars[hero.id].turn;
+check("the second racer is offered once it comes into range while the hero keeps moving", t && t.awaiting && t.awaiting.indexOf(other.id) !== -1);
+App.decideAttack(hero.id, "");
+for (let k = 0; k < 200 && race.legState.cars[hero.id].turn; k++) { const u = race.legState.cars[hero.id].turn; if (u.choice) App.encounterChoice(hero.id, "straight"); else App.decideAttack(hero.id, ""); }
+check("after declining the second racer too, the turn finishes", race.legState.cars[hero.id].turn === null);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+let okAll = true, bad = "";
+for (let trial = 0; trial < 40; trial++) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 6; cls.icon = "02";
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const s = STATE.ships[0]; App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 3, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [s.id]; STATE._draftNpcs = [{ name: "A", aggression: 5 }, { name: "B", aggression: 5 }, { name: "C", aggression: 5 }];
+  App.beginRace(); if (STATE.race) STATE.race.asteroids = [];
+  const r = STATE.race;
+  // The lane a racer starts in must match its place in the first Leg's turn order:
+  // the last to move is in lane 1, the first to move is the outermost.
+  const order = r.legState.order.map(id => r.participants.find(p => p.id === id));
+  const n = order.length;
+  const consistent = order.every((p, i) => p.lane === (n - i));
+  if (!consistent) { okAll = false; bad = order.map(p => `${participantLabel(p)} lane ${p.lane}`).join(", "); break; }
+}
+check("with tied Thrust, lanes and first-Leg turn order agree every time", okAll);
+if (!okAll) lines.push("  " + bad);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

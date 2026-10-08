@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+function setup() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3; cls.icon = "02";
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const s = STATE.ships[0]; App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 30, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [s.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  const race = STATE.race; const p = race.participants[0];
+  const rival = { id: "rival", type: "npc", name: "Rival", out: false, lane: 3, hexPos: 0, hp: 50, maxHp: 50, thrust: 0, points: 50, control: 5, gunner: 5, damage: 0, armor: 0, crewPilot: 5, crewGunner: 5, cumulative: 0, history: [], gear: 0, laps: 0, division: "Comet" };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.leg.finalTN = 99;
+  p.lane = 3; p.hexPos = 10;
+  rival.lane = 3; rival.hexPos = 11;   // directly in front of the hero
+  return { race, p, rival };
+}
+// 1. Entering an occupied hex pauses for a choice.
+{
+  rollD = (s) => (s === 20 ? 19 : 4);
+  const { race, p } = setup();
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;   // gear 1: 1 die of 4 + Thrust 3 = 7 points
+  App.takeTurn(p.id); if (race.legState.cars[p.id].turn && race.legState.cars[p.id].turn.awaiting) App.decideAttack(p.id, "");
+  const t = race.legState.cars[p.id].turn;
+  check("a racer in the next hex pauses the turn for a choice", !!t && !!t.choice);
+  check("the choice offers straight on, left and right", t && t.choice.options.map(o => o.id).join(",") === "straight,left,right");
+  check("the first Slip of the Leg costs 1 movement point", t && t.choice.options.find(o => o.id === "left").cost === 1);
+}
+// 2. The second Slip of the Leg costs 2; a Slip the ship can't afford is blocked.
+{
+  rollD = (s) => (s === 20 ? 19 : 4);
+  const { race, p } = setup();
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  race.legState.cars[p.id].slipsThisLeg = 1;   // one Slip already made this Leg
+  App.takeTurn(p.id); if (race.legState.cars[p.id].turn && race.legState.cars[p.id].turn.awaiting) App.decideAttack(p.id, "");
+  const t = race.legState.cars[p.id].turn;
+  check("the second Slip of the Leg costs 2 movement points", t && t.choice && t.choice.options.find(o => o.id === "left") && t.choice.options.find(o => o.id === "left").cost === 2);
+  t.R = 1;
+  const { id } = { id: "x" };
+  check("a Slip costing more than the movement left is not offered", (() => { const o = encounterOptions(race, p, race.legState.cars[p.id], t.cur, 1, circTrackGeometry(getCourse(race.courseId)), getCourse(race.courseId)); return o.every(x => x.id === "straight"); })());
+}
+// 3. Slipping around the racer ahead spends the Slip cost and moves past it.
+{
+  rollD = (s) => (s === 20 ? 19 : 4);
+  const { race, p } = setup();
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  App.takeTurn(p.id); if (race.legState.cars[p.id].turn && race.legState.cars[p.id].turn.awaiting) App.decideAttack(p.id, "");
+  const before = race.legState.cars[p.id].turn.R;
+  App.encounterChoice(p.id, "left");
+  for (let k = 0; k < 200 && race.legState.cars[p.id].turn; k++) { const u = race.legState.cars[p.id].turn; if (u.choice) App.encounterChoice(p.id, "straight"); else App.decideAttack(p.id, ""); }
+  const car = race.legState.cars[p.id];
+  check("a Slip around the racer costs its movement point and the ship keeps moving", car.slipsThisLeg === 1 && p.lane === 2 && p.cumulative >= 1);
+  check("the racer ahead is not entered (the ship is past it, in lane 2)", p.lane === 2);
+}
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

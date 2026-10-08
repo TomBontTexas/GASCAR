@@ -1,0 +1,131 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function reset() {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+}
+
+check("skill order is Pilot, Gunner, Engineer", JSON.stringify(GDATA.CREWMAN_SKILLS) === JSON.stringify(["pilot", "gunner", "engineer"]));
+check("the split pool is 6 points", GDATA.CREWMAN_SPLIT_POINTS === 6);
+
+// A fresh crewman starts at 0 in all three skills, with all 6 points unspent.
+{
+  reset();
+  App.addCrewman();
+  const c = STATE.crewmen[0];
+  check("fresh crewman: pilot starts at 0", c.pilot === 0);
+  check("fresh crewman: gunner starts at 0", c.gunner === 0);
+  check("fresh crewman: engineer starts at 0", c.engineer === 0);
+  check("fresh crewman: 6 split points remaining", crewmanSplitRemaining(c) === 6);
+}
+
+// The three skills share one 6-point pool -- raising one leaves less room for the others.
+{
+  reset();
+  App.addCrewman();
+  const c = STATE.crewmen[0];
+  App.updateCrewmanSkill(c.id, "engineer", "4");
+  check("engineer takes the value asked, within the pool", c.engineer === 4);
+  check("2 points remain after spending 4 on engineer", crewmanSplitRemaining(c) === 2);
+  App.updateCrewmanSkill(c.id, "pilot", "5"); // only 2 left after engineer's 4
+  check("pilot is clamped to what's left in the shared pool (2), not the raw request (5)", c.pilot === 2);
+  App.updateCrewmanSkill(c.id, "gunner", "1");
+  check("gunner can't take any more -- the pool is fully spent", c.gunner === 0);
+  check("all 6 points are accounted for", crewmanSplitSpent(c) === 6);
+}
+
+// carStats() reads a Hero's crewEngineer from its assigned crewman, same as crewPilot/crewGunner.
+{
+  reset();
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
+  App.addCrewman(); const crew = STATE.crewmen[0];
+  App.updateCrewmanSkill(crew.id, "engineer", "3");
+  App.addShip(); const ship = STATE.ships[0];
+  App.updateShip(ship.id, "classId", cls.id); App.updateShip(ship.id, "crewmanId", crew.id);
+  const stats = carStats({ type: "hero", shipId: ship.id });
+  check("a hero's carStats carries its crewman's engineer value", stats.crewEngineer === 3);
+  check("an unassigned ship's crewEngineer is 0", carStats({ type: "hero", shipId: "nope" }).crewEngineer === 0);
+}
+
+// NPC stat builders (no crewman) default crewEngineer to the crew baseline (0).
+{
+  reset();
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
+  const fromClass = npcStatsFromClass(cls);
+  check("npcStatsFromClass: crewEngineer at baseline", fromClass.crewEngineer === GDATA.CREWMAN_BASE);
+  const fromDivision = npcStatsFromDivision("Comet");
+  check("npcStatsFromDivision: crewEngineer is a number (baseline or copied from a ship)", typeof fromDivision.crewEngineer === "number");
+  const fresh = freshNpcStats("Comet");
+  check("freshNpcStats: crewEngineer at baseline", fresh.crewEngineer === GDATA.CREWMAN_BASE);
+}
+
+// Damage Control heals 1D6 + ship Damage Control + crew Engineer.
+{
+  reset();
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
+  cls.damageControl = 2; cls.thrust = 3;
+  App.addCrewman(); const crew = STATE.crewmen[0];
+  App.updateCrewmanSkill(crew.id, "engineer", "4");
+  App.addShip(); const sh = STATE.ships[0];
+  App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", crew.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  const race = STATE.race, hero = race.participants[0];
+  hero.hp = 1; // plenty of room to heal, so the full roll+bonus always applies
+  race.legState.cars[hero.id].damageControl = true;
+  rollD = s => (s === 6 ? 3 : 1 + Math.floor(Math.random() * s)); // force the Dmg Ctrl die to 3
+  App.takeTurn(hero.id);
+  // Expected heal: 1D6(3) + Damage Control(2) + crew Engineer(4) = 9 HP.
+  check("healed HP includes ship Damage Control and crew Engineer (3+2+4=9)", hero.hp === 1 + 9);
+  const lastLines = race.log[race.log.length - 1].lines;
+  check("the Dmg Ctrl log line reflects the combined +6 bonus (ship 2 + crew engineer 4)", lastLines.some(l => l.startsWith("Dmg Ctrl: 1d6 + 6")));
+}
+
+// Migration: a crewman saved before Engineer existed gets it added at the baseline.
+{
+  const old = {
+    ships: [], shipClasses: [], crewmen: [{ id: "k", name: "K", pilot: 2, gunner: 3 }], courses: [], race: null,
+    _builtinShipClassesRemoved: true, _circularTrackHexed: true, _circusMaximusConversion: true, _shipClassCrewmanSplit: true,
+    _shipClassStatsRebuilt: true, _circusAstralisCrew: true, _statBaseLowered: true, _gunnerBaseRaised: true
+  };
+  migrateState(old);
+  check("migration adds engineer at the crew baseline to an old-shape crewman", old.crewmen[0].engineer === GDATA.CREWMAN_BASE);
+  check("migration leaves the crewman's existing pilot/gunner untouched", old.crewmen[0].pilot === 2 && old.crewmen[0].gunner === 3);
+}
+
+// UI: the Cantina crew table and the Hangar Bay crew picker both show Engineer.
+{
+  reset();
+  App.addCrewman(); const crew = STATE.crewmen[0];
+  App.updateCrewmanSkill(crew.id, "engineer", "2");
+  CURRENT_TAB = "cantina";
+  render();
+  const cantinaHtml = document.getElementById("view").innerHTML;
+  check("the Cantina table has an Engineer column header", cantinaHtml.indexOf("<th>Engineer</th>") !== -1);
+  check("the Cantina table has an input bound to this crewman's engineer skill", cantinaHtml.indexOf(`'${crew.id}','engineer'`) !== -1);
+
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
+  App.addShip(); const sh = STATE.ships[0];
+  App.updateShip(sh.id, "classId", cls.id);
+  CURRENT_TAB = "hangar";
+  render();
+  const hangarHtml = document.getElementById("view").innerHTML;
+  check("the Hangar Bay crew picker mentions Engineer skill", hangarHtml.indexOf("Engineer skill 2") !== -1);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

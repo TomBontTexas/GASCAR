@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+function build() {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+const race = build();
+const p = race.participants[0];
+const cls = getShipClass(STATE.ships[0].classId);
+check("a new class defaults to Range 1", cls.range === 1);
+check("the hero's Range is 1 by default", carStats(p).range === 1);
+check("Range shows in the class stat list", SHIP_STATS.indexOf("range") !== -1 && STAT_LABEL.range === "Range");
+const before = classBuildPointsSpent(cls);
+cls.range = 3;
+check("two levels of Range above the base cost 3 build points (1 + 2)", classBuildPointsSpent(cls) - before === mkCumulativeCost(2));
+cls.range = 1;
+App.setSponsor(STATE.ships[0].id, "bonus", "range", "2");
+check("a sponsor Range bonus raises the hero's Range", carStats(p).range === 3);
+App.setSponsor(STATE.ships[0].id, "bonus", "range", "0");
+App.setSponsor(STATE.ships[0].id, "penalty", "range", "3");
+check("a sponsor Range penalty can't take Range below 1", carStats(p).range === 1);
+App.setSponsor(STATE.ships[0].id, "penalty", "range", "0");
+
+const geom = circTrackGeometry(getCourse(race.courseId));
+const at = (lane, hexPos) => ({ lane, hexPos });
+check("one hex range reaches the adjacent hex only", hexesWithinManeuverRange(geom, at(3, 10), at(3, 11), 1) && !hexesWithinManeuverRange(geom, at(3, 10), at(3, 12), 1));
+check("two hex range reaches two hexes away", hexesWithinManeuverRange(geom, at(3, 10), at(3, 12), 2));
+
+const rival = { ...p, id: "rv", name: "Rival", type: "npc", out: false, lane: 3, hexPos: 12, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0, range: undefined };
+race.participants.push(rival);
+race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+p.lane = 3; p.hexPos = 10;
+check("with Range 1, a racer two hexes away is not a target", attackTargetsFrom(race, p, geom, { laneIdx0: 2, hexPos: 10 }).length === 0);
+App.setSponsor(STATE.ships[0].id, "bonus", "range", "1");
+check("with Range 2 (bonus 1), that racer is a target", attackTargetsFrom(race, p, geom, { laneIdx0: 2, hexPos: 10 }).length === 1);
+App.setSponsor(STATE.ships[0].id, "bonus", "range", "0");
+
+const old = { ships: [], shipClasses: [{ id: "x", name: "Old", division: "Comet", thrust: 3, points: 10, control: 5, gunner: 5, damage: 0, armor: 1 }], crewmen: [], courses: [], race: null, _builtinShipClassesRemoved: true, _circularTrackHexed: true, _circusMaximusConversion: true, _shipClassCrewmanSplit: true, _shipClassStatsRebuilt: true, _circusAstralisCrew: true };
+migrateState(old);
+check("an older saved class gets Range 1 on load", old.shipClasses[0].range === 1);
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

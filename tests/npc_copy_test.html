@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 5; cls.points = 12; cls.icon = "03";
+App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 8; c.gunner = 6;
+App.addShip(); const s = STATE.ships[0]; App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id); App.updateShipIcon(s.id, "Red");
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 3, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [s.id]; STATE._draftNpcs = [{ name: "A", aggression: 5 }, { name: "B", aggression: 5 }];
+App.beginRace(); if (STATE.race) STATE.race.asteroids = [];
+const r = STATE.race;
+const npcs = r.participants.filter(p => p.type === "npc");
+check("with one Comet ship, every NPC matches that ship's stats", npcs.every(n => n.thrust === 5 && n.points === 12 && n.crewPilot === 8 && n.crewGunner === 6));
+check("the NPC icons are not the ship's own icon", npcs.every(n => !(n.iconColor === "Red" && n.iconNumber === "03")));
+check("the NPC icon number isn't a class number in the division", npcs.every(n => n.iconNumber !== "03"));
+check("the two NPCs have different icons", npcs[0].iconColor + npcs[0].iconNumber !== npcs[1].iconColor + npcs[1].iconNumber);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

@@ -1,0 +1,274 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre>
+<div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = [];
+function check(name, cond) { lines.push((cond ? "PASS" : "FAIL") + " - " + name); }
+window.alert = () => {}; window.confirm = () => true;
+function build(thrust, pilot, gunner) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  App.addShipClass();
+  const cls = STATE.shipClasses[0]; cls.thrust = thrust;
+  App.addCrewman();
+  const crew = STATE.crewmen[0]; crew.pilot = pilot; crew.gunner = gunner;
+  App.addShip();
+  const ship = STATE.ships[0];
+  App.updateShip(ship.id, "classId", cls.id);
+  App.updateShip(ship.id, "crewmanId", crew.id);
+  STATE.courses.push({ id: "c1", name: "Test", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [ship.id]; STATE._draftNpcs = [];
+  App.beginRace(); if (STATE.race) STATE.race.started = true;
+  // This file tests ship-movement mechanics on an otherwise-empty track;
+  // asteroids are real obstacles now, so clear them to keep these deterministic.
+  if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+CURRENT_TAB = "race";
+const dotCount = () => document.querySelectorAll("circle.turndot").length;
+const stepCount = () => document.querySelectorAll("polygon.circstep").length;
+
+// Straight ahead, one click per hex; dots mark each hex left until the turn ends.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 1 : 4);
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  const startLane = p.lane, startHex = p.hexPos;
+  App.takeTurn(p.id);
+  let t = race.legState.cars[p.id].turn;
+  check("the turn pauses before the first hex with a choice (straight, plus a Slip where the lane allows)", !!t && !!t.choice && t.choice.options[0].id === "straight" && t.choice.options.length === (startLane > 1 ? 3 : 2) || startLane === race.legState.cars[p.id].turn.cur.laneIdx0 + 1 && !!t.choice);
+  check("the movement counter starts at the roll (4 + Thrust 3 = 7)", t.R === 7);
+  render();
+  check("each option is a clickable hex", stepCount() === t.choice.options.length);
+  App.encounterChoice(p.id, "straight");
+  t = race.legState.cars[p.id].turn;
+  check("one click spends one movement point", t.R === 6);
+  render();
+  check("the hex left gets a dot", dotCount() === 1 && t.left[0].laneIdx0 === startLane - 1 && t.left[0].hexPos === startHex);
+  for (let k = 0; k < 50 && race.legState.cars[p.id].turn; k++) {
+    const u = race.legState.cars[p.id].turn;
+    if (u.choice) App.encounterChoice(p.id, "straight"); else App.decideAttack(p.id, "");
+  }
+  check("the turn ends when the movement points run out", race.legState.cars[p.id].turn === null && p.hexPos === startHex + 7);
+  render();
+  check("dots clear when the turn ends", dotCount() === 0 && stepCount() === 0);
+  check("the log records 7 hexes moved", race.log[race.log.length - 1].lines.some(l => l.indexOf("Moved 7 hexes") !== -1));
+}
+
+// A Slip is one click: lateral shift, costs one point, and leaves a dot behind.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 1 : 4);
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  const startLane = p.lane, startHex = p.hexPos;
+  App.takeTurn(p.id);
+  const pick = startLane > 1 ? "left" : "right";
+  App.encounterChoice(p.id, pick);
+  const t = race.legState.cars[p.id].turn;
+  check("a Slip spends one movement point", t.R === 6);
+  check("a Slip moves one lane over", t.cur.laneIdx0 === startLane - 1 + (pick === "left" ? -1 : 1));
+  check("the Slip leaves a dot in the hex it came from", t.left.length === 1 && t.left[0].laneIdx0 === startLane - 1 && t.left[0].hexPos === startHex);
+  check("the Slip is counted for the Leg", race.legState.cars[p.id].slipsThisLeg === 1);
+}
+// Every offered Slip lands on a forward-diagonal hex: one lane over, adjacent to the hex straight ahead.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const car = race.legState.cars[p.id];
+  let bad = 0, slipsSeen = 0;
+  geom.laneHexLists.forEach((ring, lane) => ring.forEach((hex, hexPos) => {
+    const opts = encounterOptions(race, p, car, { laneIdx0: lane, hexPos }, 99, geom, course);
+    const ahead = geom.laneHexLists[lane][(hexPos + 1) % ring.length];
+    opts.filter(o => o.id !== "straight").forEach(o => {
+      slipsSeen++;
+      const d = o.dest;
+      if (Math.abs(d.laneIdx0 - lane) !== 1 || hexDistance(geom.laneHexLists[d.laneIdx0][d.hexPos], ahead) !== 1) bad++;
+    });
+  }));
+  check("every Slip option is a forward diagonal (adjacent lane, next to the straight-ahead hex)", slipsSeen > 0 && bad === 0);
+}
+// A racer two hexes ahead: the attack prompt highlights it red, and yellow hexes keep moving.
+function rivalRace(rivalLane, rivalHex) {
+  const race = build(3, 7, 5);
+  race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+  STATE.shipClasses[0].range = 2;
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 19 : 4);
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  p.lane = rivalLane; p.hexPos = 10;
+  const rival = { ...p, id: "rv", name: "Rival", type: "npc", out: false, lane: rivalLane, hexPos: rivalHex, history: [], cumulative: 0, laps: 0, gear: 0, pendingD: 0 };
+  race.participants.push(rival);
+  race.legState.cars[rival.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(rival.id);
+  return { race, p, rival };
+}
+{
+  const { race, p, rival } = rivalRace(3, 12);
+  App.takeTurn(p.id);
+  let t = race.legState.cars[p.id].turn;
+  check("a racer in range pauses the hero for an attack choice", !!t && t.awaiting && t.awaiting.indexOf(rival.id) !== -1);
+  check("the attack pause alone does not also show move hexes", !t.choice);
+  render();
+  check("the racer in range is highlighted red", document.querySelectorAll("polygon.circattack").length === 1);
+  check("no yellow move hexes show until Decline is clicked", stepCount() === 0);
+  App.decideAttack(p.id, "");
+  t = race.legState.cars[p.id].turn;
+  check("declining the attack (R>0) reveals the move choice instead of ending the turn", !!t && !!t.choice && t.choice.options.length >= 1);
+  render();
+  check("the keep-moving hexes are highlighted yellow after declining", stepCount() === t.choice.options.length);
+  App.encounterChoice(p.id, "straight");
+  t = race.legState.cars[p.id].turn;
+  check("clicking yellow keeps moving; the racer still in range stays offered", !!t && !!t.awaiting && t.awaiting.indexOf(rival.id) !== -1 && t.R === 6);
+  render(); check("the racer stays red while the hero keeps moving in range", document.querySelectorAll("polygon.circattack").length === 1);
+}
+{
+  const { race, p, rival } = rivalRace(3, 12);
+  App.takeTurn(p.id);
+  App.decideAttack(p.id, rival.id);
+  const t = race.legState.cars[p.id].turn;
+  check("clicking red attacks that racer", t && race.legState.cars[p.id].attackedThisLeg && t.log.some(l => l.indexOf("Gunner vs ") !== -1));
+  check("after the attack the hero still chooses how to move", !!t && t.awaiting === null && !!t.choice);
+}
+// A Slip never lands on an occupied hex.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const car = race.legState.cars[p.id];
+  p.lane = 3; p.hexPos = 10;
+  const cur = { laneIdx0: 2, hexPos: 10 };
+  const before = encounterOptions(race, p, car, cur, 99, geom, course).filter(o => o.dest && o.id !== "straight");
+  const target = before[0];
+  const blocker = { id: "bk", type: "npc", name: "B", out: false, lane: target.dest.laneIdx0 + 1, hexPos: target.dest.hexPos };
+  race.participants.push(blocker);
+  const after = encounterOptions(race, p, car, cur, 99, geom, course);
+  check("a Slip into an occupied hex is not offered", after.every(o => !(o.dest && o.dest.laneIdx0 === blocker.lane - 1 && o.dest.hexPos === blocker.hexPos)));
+  check("the other Slip stays available", after.some(o => o.id !== "straight"));
+}
+// One attack per Leg: after attacking, the rest of the Leg offers no attack.
+{
+  const { race, p, rival } = rivalRace(3, 12);
+  App.takeTurn(p.id);
+  App.decideAttack(p.id, rival.id);
+  const car = race.legState.cars[p.id];
+  check("an attack marks the shooter as having attacked this Leg", car.attackedThisLeg === true);
+  for (let k = 0; k < 50 && car.turn; k++) App.encounterChoice(p.id, "straight");
+  p.lane = 3; p.hexPos = 10; p.gear = 1;
+  resolveTurn(race, p, { gearChange: 0 });
+  const t2 = car.turn;
+  check("the next turn in the same Leg offers no attack", !!t2 && !t2.awaiting && !!t2.choice);
+  render();
+  check("no target is red once the Leg's attack is used", document.querySelectorAll("polygon.circattack").length === 0);
+}
+// Every target in range is red while the shooter can still attack.
+{
+  const { race, p, rival } = rivalRace(3, 12);
+  const second = { ...rival, id: "rv2", name: "Second", lane: 2, hexPos: 11 };
+  race.participants.push(second);
+  race.legState.cars[second.id] = { gearChange: 0, slipsThisLeg: 0, pendingD: 0, turn: null, turnDone: true };
+  race.legState.order.push(second.id);
+  App.takeTurn(p.id);
+  const t = race.legState.cars[p.id].turn;
+  render();
+  const red = document.querySelectorAll("polygon.circattack").length;
+  check("every racer in range is red", !!t && t.awaiting && red === t.awaiting.length && red >= 1);
+}
+// NPCs head for the inner lanes and slip around racers ahead, whatever their aggression.
+function npcAt(id, lane, hexPos, aggression) {
+  return { id, type: "npc", name: id, aggression, division: "Comet", thrust: 3, points: 10, control: 5, gunner: 5, damage: 0, armor: 1, crewPilot: 5, crewGunner: 5, cumulative: 0, history: [], out: false, gear: 1, maxHp: 10, hp: 10, lane, hexPos, laps: 0 };
+}
+{
+  const race = build(3, 7, 5);
+  const hero = race.participants[0];
+  hero.lane = 1; hero.hexPos = 0;
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 19 : 4);
+  const npc = npcAt("nc", 6, 10, 1);
+  race.participants.push(npc);
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, pendingD: 0, turn: null, turnDone: false };
+  resolveTurn(race, npc, { gearChange: 0 });
+  check("an outer-lane NPC on open track slips inward (even at aggression 1)", npc.lane < 6);
+  check("the NPC's turn completes", race.legState.cars[npc.id].turn === null);
+}
+{
+  const race = build(3, 7, 5);
+  const hero = race.participants[0];
+  hero.lane = 1; hero.hexPos = 0;
+  // A TN this far out of reach (99) is a guaranteed-failure Control check, so the
+  // NPC always detours around the blocker regardless of Aggression -- the die
+  // roll here only decides which WAY it leans (see RULE_CHANGES.md 2026-10-10),
+  // so a low roll (big margin) is stubbed to keep this test's original inward intent.
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 1 : 4);
+  const npc = npcAt("nc", 3, 10, 1);
+  const blocker = npcAt("bk", 3, 11, 1);
+  race.participants.push(npc, blocker);
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, pendingD: 0, turn: null, turnDone: false };
+  race.legState.cars[blocker.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: true, pendingD: 0, turn: null, turnDone: true };
+  resolveTurn(race, npc, { gearChange: 0 });
+  const lines = race.log[race.log.length - 1].lines;
+  check("an NPC with a racer ahead slips around it, inward first", npc.lane < 3 && lines.some(l => l.startsWith("Total Slips")));
+}
+// With no movement points left, a racer in range can be passed on with Finish turn.
+{
+  const { race, p, rival } = rivalRace(3, 11);
+  p.gear = 0; race.legState.cars[p.id].gearChange = 0;
+  App.takeTurn(p.id);
+  const t = race.legState.cars[p.id].turn;
+  check("with no movement left, an in-range racer is still offered", !!t && !!t.awaiting && t.awaiting.indexOf(rival.id) !== -1 && t.R === 0);
+  App.decideAttack(p.id, "");
+  check("Finish turn ends the turn without an attack", race.legState.cars[p.id].turn === null && !race.legState.cars[p.id].attackedThisLeg);
+}
+// Move All: shown when the straight run is clear, and walks the full remaining movement.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 99; rollD = (s) => (s === 20 ? 1 : 4);
+  p.gear = 0; race.legState.cars[p.id].gearChange = 1;
+  const startHex = p.hexPos;
+  App.takeTurn(p.id);
+  render();
+  check("Move All appears when the straight run is clear", document.getElementById("view").innerHTML.indexOf("Move All") !== -1);
+  check("no Slip or Straight buttons are shown", [...document.querySelectorAll("#view button")].every(b => !/Slip|Straight/.test(b.textContent)));
+  App.moveAll(p.id);
+  check("Move All walks the full remaining movement and ends the turn", race.legState.cars[p.id].turn === null && p.hexPos === startHex + 7);
+}
+{
+  const { race, p } = rivalRace(3, 12);
+  App.takeTurn(p.id);
+  render();
+  check("Move All is hidden when a racer is in the straight run", document.getElementById("view").innerHTML.indexOf("Move All") === -1);
+}
+// Tooltips: a red or yellow overlay over a racer shows that racer's normal tooltip.
+{
+  const { race, p, rival } = rivalRace(3, 12);
+  race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+  App.takeTurn(p.id);
+  render();
+  const attack = document.querySelector("polygon.circattack");
+  check("a red racer's overlay is tied to that racer for the hover card", !!attack && attack.getAttribute("data-racer") === rival.id);
+  const card = racerTipHtml(race, rival);
+  check("the hover card names the racer and shows lap, gear and HP", card.indexOf("Rival") !== -1 && card.indexOf("HP ") !== -1 && card.indexOf("Gear</small>") !== -1 && card.indexOf("tvtip-lap") !== -1);
+}
+// The move prompt previews the Control check needed to pass an occupied hex ahead.
+{
+  const { race, p, rival } = rivalRace(3, 11);
+  App.takeTurn(p.id);
+  App.decideAttack(p.id, ""); // the rival ahead is also an attack target; decline to see the move choice
+  const t = race.legState.cars[p.id].turn;
+  check("the ahead hex is reported occupied", t && t.choice && t.choice.occupantId === rival.id);
+  const html = renderMovePrompt(race, p, t);
+  check("shows a To Pass line", html.indexOf("To Pass") !== -1);
+  check("shows the Control check needed to pass, matching the engine's own obstacle check", html.indexOf("Control-12AA vs. TN (99)") !== -1);
+}
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

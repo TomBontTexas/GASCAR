@@ -1,0 +1,411 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup(asteroidCount) {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3; cls.control = 20; cls.armor = 20;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 20; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false, asteroidCount: asteroidCount == null ? 0 : asteroidCount });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow();
+  return STATE.race;
+}
+
+// Racecourse builder: the random-die button rolls 2D10 (range 2-20) into the Asteroids field.
+{
+  document.body.insertAdjacentHTML("beforeend", '<input id="cAsteroids" type="number" style="display:none">');
+  const rolls = [];
+  for (let i = 0; i < 30; i++) { App.rollAsteroidCount(); rolls.push(parseInt(document.getElementById("cAsteroids").value, 10)); }
+  check("rollAsteroidCount always lands in 2D10's 2-20 range", rolls.every(r => r >= 2 && r <= 20));
+  check("rollAsteroidCount isn't just always the same number", new Set(rolls).size > 1);
+  document.getElementById("cAsteroids").remove();
+}
+
+// generateCourse() reads the Asteroids field into course.asteroidCount.
+{
+  STATE.courses = [];
+  document.body.insertAdjacentHTML("beforeend", `
+    <input id="cName" value="Asteroid Alley"><select id="cDiv"><option value="Comet" selected>Comet</option></select>
+    <input id="cInnerHexes" value="50"><input id="cLaps" value="3"><input id="cFlatDamage" type="checkbox">
+    <select id="cMode"><option value="tier" selected>tier</option></select><input id="cAsteroids" value="14">`);
+  App.generateCourse();
+  check("the generated course carries the chosen asteroid count", STATE.courses[0].asteroidCount === 14);
+  ["cName", "cDiv", "cInnerHexes", "cLaps", "cFlatDamage", "cMode", "cAsteroids"].forEach(id => document.getElementById(id).remove());
+}
+
+// Migration: a course saved before this feature existed defaults to 0 asteroids.
+{
+  const old = {
+    ships: [], shipClasses: [], crewmen: [], courses: [{ id: "oldc", name: "Old", division: "Comet", lanes: 6, innerHexes: 40, laps: 3 }], race: null,
+    _builtinShipClassesRemoved: true, _circularTrackHexed: true, _circusMaximusConversion: true, _shipClassCrewmanSplit: true,
+    _shipClassStatsRebuilt: true, _circusAstralisCrew: true, _statBaseLowered: true, _gunnerBaseRaised: true
+  };
+  migrateState(old);
+  check("an old-shape course defaults to 0 asteroids", old.courses[0].asteroidCount === 0);
+}
+
+// Placement at race start: exactly N asteroids, none on a ship's starting hex, each unique and tagged.
+{
+  const race = setup(18);
+  check("race.asteroids exists", Array.isArray(race.asteroids));
+  check("exactly the chosen count of asteroids were placed", race.asteroids.length === 18);
+  const onShip = race.asteroids.some(a => race.participants.some(p => p.lane === a.lane && p.hexPos === a.hexPos));
+  check("no asteroid starts on a ship's starting hex", !onShip);
+  check("every asteroid has a distinct id", new Set(race.asteroids.map(a => a.id)).size === 18);
+  check("every asteroid is tagged kind:'asteroid'", race.asteroids.every(a => a.kind === "asteroid"));
+  check("a race with 0 requested asteroids starts with none", setup(0).asteroids.length === 0);
+}
+
+// Placement keeps clear of the WHOLE starting cluster by real hex distance, not just a
+// per-lane hexPos range (which left a gap: a hex just past such a range in one lane can
+// still sit hex-adjacent to a ship starting in the lane next to it, since the starting
+// line is a staggered diagonal across lanes, not a straight hexPos band) -- checked right
+// after placement, before Leg 1's drift has a chance to move anything.
+{
+  const race = setup(0); // an empty-asteroid race, so we control placement timing ourselves
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const startHexes = race.participants.map(p => geom.laneHexLists[p.lane - 1][p.hexPos]);
+  race.asteroids = [];
+  placeAsteroids(race, 40); // a large batch to stress-test the exclusion zone
+  const tooClose = race.asteroids.filter(a => {
+    const hex = geom.laneHexLists[a.lane - 1][a.hexPos];
+    return startHexes.some(sh => hexDistance(hex, sh) < 3);
+  });
+  check("a large placement batch keeps every asteroid at least 3 real hexes from every ship's start, across lanes", tooClose.length === 0);
+}
+
+// The specific bug this guards against: a hex just past the OLD per-lane hexPos cutoff,
+// in a DIFFERENT lane than a ship's start, that's still hex-adjacent to it.
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const shipHex = geom.laneHexLists[race.participants[0].lane - 1][race.participants[0].hexPos];
+  // Find a hex in a DIFFERENT lane that's within 2 real hexes of this ship's start --
+  // exactly the kind of spot the old hexPos-range check could still hand out.
+  let nearbyOtherLane = null;
+  for (let lane0 = 0; lane0 < course.lanes && !nearbyOtherLane; lane0++) {
+    if (lane0 === race.participants[0].lane - 1) continue;
+    for (let hexPos = 0; hexPos < geom.laneHexLists[lane0].length; hexPos++) {
+      const hex = geom.laneHexLists[lane0][hexPos];
+      if (hexDistance(hex, shipHex) <= 2) { nearbyOtherLane = { lane: lane0 + 1, hexPos }; break; }
+    }
+  }
+  check("this course geometry actually has a cross-lane hex within 2 of a ship's start (otherwise this test proves nothing)", !!nearbyOtherLane);
+  if (nearbyOtherLane) {
+    race.asteroids = [];
+    placeAsteroids(race, 200); // flood the track -- if the exclusion has any gap, this finds it
+    const hit = race.asteroids.find(a => a.lane === nearbyOtherLane.lane && a.hexPos === nearbyOtherLane.hexPos);
+    check("that specific cross-lane, near-start hex is never handed out to an asteroid", !hit);
+  }
+}
+
+// Lane lock: across many drift rolls on an open track, an asteroid's lane never changes.
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId);
+  race.asteroids = [{ id: "lanelock", kind: "asteroid", lane: 3, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  let laneChanged = false;
+  for (let i = 0; i < 50; i++) {
+    const before = race.asteroids[0].lane;
+    race._legStartEvents = [];
+    driftAsteroids(race);
+    if (race.asteroids[0].lane !== before) laneChanged = true;
+  }
+  check("an asteroid never changes lanes while drifting, even across many legs", !laneChanged);
+}
+
+// An unobstructed asteroid moves 1-2 hexes forward in its lane and records a _legStartEvents entry.
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "move1", kind: "asteroid", lane: 2, hexPos: 5, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  const a = race.asteroids[0];
+  check("the asteroid advanced (stayed in lane 2)", a.lane === 2 && a.hexPos !== 5);
+  check("it moved 1 or 2 hexes", a.hexPos === 6 || a.hexPos === 7);
+  const ev = race._legStartEvents.find(e => e.kind === "asteroid" && e.id === "move1");
+  check("a _legStartEvents entry records the asteroid's from/path", !!ev && ev.from.hexPos === 5 && ev.path[ev.path.length - 1].hexPos === a.hexPos);
+}
+
+// Blocked by a wreck: the asteroid does not move onto or past it.
+{
+  const race = setup(0);
+  const hero = race.participants[0];
+  const wreck = { id: "wreckB", type: "npc", name: "W", out: true, hp: 0, lane: 2, hexPos: 11, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(wreck);
+  race.asteroids = [{ id: "blockedByWreck", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  check("an asteroid blocked by a wreck stays put", race.asteroids[0].lane === 2 && race.asteroids[0].hexPos === 10);
+}
+
+// Blocked by another asteroid: same -- it stays put rather than passing through.
+{
+  const race = setup(0);
+  race.asteroids = [
+    { id: "mover", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" },
+    { id: "blocker", kind: "asteroid", lane: 2, hexPos: 11, design: "b", spinDur: 3, spinDir: "normal" }
+  ];
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  const mover = race.asteroids.find(a => a.id === "mover");
+  check("an asteroid blocked by another asteroid stays put", mover.lane === 2 && mover.hexPos === 10);
+}
+
+// Push mechanic: an active ship directly ahead gets shoved to one of the three forward hexes, takes 1 HP ignoring Armor.
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const hero = race.participants[0];
+  hero.lane = 2; hero.hexPos = 11; hero.hp = 20; hero.maxHp = 20; hero.out = false;
+  race.asteroids = [{ id: "pusher1", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  rollD = s => (s === 2 ? 1 : 1 + Math.floor(Math.random() * s)); // force this Leg's drift distance to exactly 1 hex
+  driftAsteroids(race);
+  const ast = race.asteroids[0];
+  check("the asteroid moved into the ship's old hex", ast.lane === 2 && ast.hexPos === 11);
+  check("the ship is no longer at its old hex", !(hero.lane === 2 && hero.hexPos === 11));
+  const candidates = threeForwardHexes(geom, course, { laneIdx0: 1, hexPos: 11 }).map(h => ({ lane: h.laneIdx0 + 1, hexPos: h.hexPos }));
+  check("the ship landed on one of its three forward hexes", candidates.some(c => c.lane === hero.lane && c.hexPos === hero.hexPos));
+  check("the ship took exactly 1 HP of damage despite 20 Armor (ignores Armor)", hero.hp === 19);
+  const shipEv = race._legStartEvents.find(e => e.kind === "ship" && e.id === hero.id);
+  check("a _legStartEvents entry records the push", !!shipEv && shipEv.from.lane === 2 && shipEv.from.hexPos === 11 && shipEv.path[0].lane === hero.lane && shipEv.path[0].hexPos === hero.hexPos);
+  check("the push is logged under an Asteroid Field entry this Leg", race.log.some(e => e.legIndex === race.legIndex && e.name === "Asteroid Field" && e.lines.some(l => l.indexOf("shoved") !== -1)));
+}
+
+// Boxed-in case: if all three forward hexes are blocked, the ship rolls the Fumble Chart instead of
+// being pushed, and its turn for this Leg is forfeited (per the written rule).
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const hero = race.participants[0];
+  hero.lane = 2; hero.hexPos = 11; hero.hp = 20; hero.maxHp = 20; hero.out = false;
+  const car = race.legState.cars[hero.id];
+  car.turnDone = false;
+  const candidates = threeForwardHexes(geom, course, { laneIdx0: 1, hexPos: 11 });
+  check("the ship has 3 forward candidates to block for this test", candidates.length === 3);
+  candidates.forEach((h, i) => {
+    race.participants.push({ id: "blk" + i, type: "npc", name: "Blocker" + i, out: false, hp: 10, maxHp: 10, lane: h.laneIdx0 + 1, hexPos: h.hexPos, history: [], cumulative: 0, laps: 0, gear: 0 });
+  });
+  race.asteroids = [{ id: "pusher2", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  // Force this Leg's drift distance to exactly 1 hex, and the Fumble roll to a fixed 2
+  // (both d10s = 1 -> "Gain 5 bonus hexes", a movement-only effect with no HP/lane change).
+  rollD = s => (s === 2 ? 1 : (s === 10 ? 1 : 1 + Math.floor(Math.random() * s)));
+  driftAsteroids(race);
+  check("boxed in on all 3 sides, the ship is NOT pushed or swapped -- it stays put", hero.lane === 2 && hero.hexPos === 11);
+  check("the asteroid can't advance into the still-occupied hex -- it stays put too", race.asteroids[0].lane === 2 && race.asteroids[0].hexPos === 10);
+  check("a boxed-in push is logged as rolling the Fumble Chart, not a push", race.log.some(e => e.legIndex === race.legIndex && e.name === "Asteroid Field" && e.lines.some(l => l.indexOf("rolls the Fumble Chart") !== -1)));
+  check("the Fumble roll itself is logged", race.log.some(e => e.name === "Asteroid Field" && e.lines.some(l => l.indexOf("Fumble chart (2)") !== -1)));
+  check("the ship's turn for this Leg is forfeited", car.turnDone === true);
+}
+
+// A ship pushed to 0 HP is destroyed, same as any other HP loss.
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const hero = race.participants[0];
+  hero.lane = 2; hero.hexPos = 11; hero.hp = 1; hero.maxHp = 20; hero.out = false;
+  race.asteroids = [{ id: "pusher3", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  check("a ship pushed to 0 HP is marked out (a wreck)", hero.hp === 0 && hero.out === true);
+}
+
+// No collision this Leg -> no "Asteroid Field" log entry (quiet legs aren't logged).
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "quiet1", kind: "asteroid", lane: 2, hexPos: 5, design: "a", spinDur: 3, spinDir: "normal" }];
+  race._legStartEvents = [];
+  const before = race.log.length;
+  driftAsteroids(race);
+  check("a quiet Leg (no pushes) adds no Asteroid Field log entry", race.log.length === before);
+}
+
+// A ship's OWN deliberate movement into an asteroid's hex is still a hard stop (unchanged from before this rework),
+// and now also deals 2 HP of damage, ignoring Armor (per the written rule).
+{
+  const race = setup(0);
+  const hero = race.participants[0];
+  hero.hp = 20; hero.maxHp = 20; // cls.armor = 20 from setup() -- confirms the damage ignores it
+  race.asteroids = [{ id: "hardstop1", kind: "asteroid", lane: hero.lane, hexPos: hero.hexPos + 1, design: "c", spinDur: 3, spinDir: "normal" }];
+  race.legState.leg.finalTN = 1;
+  hero.gear = 0;
+  App.setTurn(hero.id, "gearChange", "1");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  const ast = race.asteroids[0];
+  check("the hero never lands on or passes through the asteroid's hex on its own turn", !(hero.lane === ast.lane && hero.hexPos === ast.hexPos));
+  check("the turn halted at the asteroid", t === null);
+  check("stopping short of an asteroid deals exactly 2 HP despite 20 Armor (ignores Armor)", hero.hp === 18);
+}
+
+// Rendering: an asteroid's <g> has a stable id and a translate transform (so the Leg-start animation can retarget it), still no ring.
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "vis1", kind: "asteroid", lane: 2, hexPos: 5, design: "a", spinDur: 3, spinDir: "normal" }];
+  CURRENT_TAB = "race";
+  render();
+  const html = document.getElementById("view").innerHTML;
+  check("the asteroid's <g> has a stable id", html.indexOf('id="asteroid-vis1"') !== -1);
+  check("the asteroid's <g> is positioned with a translate transform", /id="asteroid-vis1" transform="translate\(/.test(html));
+  check("the asteroid-rock polygon class still appears", html.indexOf("asteroid-rock") !== -1);
+  const astBlock = html.slice(html.indexOf('id="asteroid-vis1"'), html.indexOf('id="asteroid-vis1"') + 300);
+  check("asteroids still never get a ring around them", astBlock.indexOf("ring") === -1);
+}
+
+// The Leg-start animation retargets the real rendered <g> elements: immediately after it's
+// kicked off, each moved element's transform is walked back to where it started (the first
+// animation frame runs synchronously; the rest ticks in via setTimeout).
+{
+  const race = setup(0);
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  const hero = race.participants[0];
+  hero.lane = 2; hero.hexPos = 11; hero.hp = 20; hero.maxHp = 20; hero.out = false;
+  race.asteroids = [{ id: "animAst", kind: "asteroid", lane: 2, hexPos: 10, design: "a", spinDur: 3, spinDir: "normal" }];
+  CURRENT_TAB = "race";
+  render(); // initial render, before drift
+  race._legStartEvents = [];
+  driftAsteroids(race); // pushes the hero and records both events
+  render(); // re-render so the DOM reflects the FINAL (post-drift) positions, same as the real flow
+  const astG = document.getElementById("asteroid-animAst");
+  const heroG = document.getElementById(`circracer-${hero.id}`);
+  const astFinal = astG.getAttribute("transform");
+  const heroFinalLane = hero.lane, heroFinalHexPos = hero.hexPos;
+  let threw = false;
+  try { playLegStartAnimation(race); } catch (e) { threw = true; }
+  check("playLegStartAnimation doesn't throw", !threw);
+  check("playLegStartAnimation consumes (clears) _legStartEvents", race._legStartEvents.length === 0);
+  check("the asteroid's <g> is walked back to its start hex for frame 1 (not left at its final hex)", astG.getAttribute("transform") !== astFinal);
+  check("the pushed ship's <g> is walked back to its start hex for frame 1", heroG.getAttribute("transform").indexOf("rotate") !== -1);
+  check("the game-state position itself is untouched by the animation (still the final, already-resolved spot)", hero.lane === heroFinalLane && hero.hexPos === heroFinalHexPos);
+}
+
+// Starting a Leg (and the first race start) runs the drift + auto-animation without throwing.
+{
+  const race = setup(10);
+  let threw = false;
+  race.legState.complete = true;
+  try { App.startNextLeg(); } catch (e) { threw = true; }
+  check("starting the next Leg (drift + auto-animation) doesn't throw", !threw);
+}
+
+// placeAsteroids() gives every asteroid a startLane/startHexPos and an empty history, same shape a ship starts with
+// (checked right after placement, before Leg 1's drift has had a chance to move them).
+{
+  const race = setup(0); // an empty-asteroid race, so we control placement timing ourselves
+  race.asteroids = [];
+  placeAsteroids(race, 5);
+  check("placeAsteroids placed the requested count", race.asteroids.length === 5);
+  check("every asteroid has a startLane/startHexPos matching its just-placed lane/hexPos", race.asteroids.every(a => a.startLane === a.lane && a.startHexPos === a.hexPos));
+  check("every asteroid starts with an empty history array", race.asteroids.every(a => Array.isArray(a.history) && a.history.length === 0));
+}
+
+// driftAsteroids() records a history entry shaped like a wreck's drift entry, for replay to pick up.
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "histAst", kind: "asteroid", lane: 3, hexPos: 10, startLane: 3, startHexPos: 10, history: [], design: "a", spinDur: 3, spinDir: "normal" }];
+  const beforeSeq = race.turnSeq || 0;
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  const a = race.asteroids[0];
+  check("a history entry was recorded for the drift", a.history.length === 1);
+  const rec = a.history[0];
+  check("the entry is flagged as a drift", rec.drift === true);
+  check("the entry's Leg matches the current Leg", rec.leg === race.legIndex + 1);
+  check("the entry's lane/hexPos match where the asteroid ended up", rec.lane === a.lane && rec.hexPos === a.hexPos);
+  check("the entry's path ends at the asteroid's final hex", rec.path.length > 0 && rec.path[rec.path.length - 1].lane === a.lane && rec.path[rec.path.length - 1].hexPos === a.hexPos);
+  check("race.turnSeq advanced for the drift", (race.turnSeq || 0) > beforeSeq);
+}
+
+// buildCircularLegWaypoints() turns an asteroid's drift entry into real waypoints, same as for a wreck.
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "wpAst", kind: "asteroid", lane: 3, hexPos: 10, startLane: 3, startHexPos: 10, history: [], design: "a", spinDur: 3, spinDir: "normal" }];
+  const course = getCourse(race.courseId), geom = circTrackGeometry(course);
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  const a = race.asteroids[0];
+  const perLeg = buildCircularLegWaypoints(a, geom);
+  check("buildCircularLegWaypoints produces one Leg of waypoints for the drift", perLeg.length === 1);
+  check("those waypoints are non-empty and match the recorded path", perLeg[0].length === a.history[0].path.length && perLeg[0].length > 0);
+}
+
+// Multiple Legs of drifting accumulate multiple, correctly-numbered history entries -- same pattern as a wreck.
+{
+  const race = setup(1);
+  const a = race.asteroids[0];
+  race.legState.complete = true;
+  App.startNextLeg();
+  race.legState.complete = true;
+  App.startNextLeg();
+  const driftEntries = a.history.filter(h => h.drift);
+  check("multiple Legs of drifting add multiple drift entries", driftEntries.length >= 2);
+  check("the drift entries' Leg numbers are strictly increasing", driftEntries.every((h, i) => i === 0 || h.leg > driftEntries[i - 1].leg));
+}
+
+// App.playRaceReplay() animates asteroid movement too: it runs cleanly and retargets the asteroid's own <g>.
+{
+  const race = setup(0);
+  race.asteroids = [{ id: "replayAst", kind: "asteroid", lane: 3, hexPos: 10, startLane: 3, startHexPos: 10, history: [], design: "a", spinDur: 3, spinDir: "normal" }];
+  CURRENT_TAB = "race";
+  render();
+  race._legStartEvents = [];
+  driftAsteroids(race);
+  render(); // reflect the drifted position before replay starts, same as the real flow
+  const g = document.getElementById("asteroid-replayAst");
+  const beforeReplay = g.getAttribute("transform");
+  let threw = false;
+  try { App.playRaceReplay(false); } catch (e) { threw = true; }
+  check("playRaceReplay runs cleanly with asteroid drift history present", !threw);
+  check("playRaceReplay walks the asteroid's <g> back to its start hex to begin the replay", g.getAttribute("transform") !== beforeReplay);
+}
+
+// Fix: a ship that successfully Control-checks past a live racer, then immediately
+// hard-stops on an asteroid one hex later, must not end its turn co-located with
+// that racer -- the "ends on an occupied hex" correction has to run even when the
+// turn ended via a hard stop, not just a normal finish (see RULE_CHANGES.md 2026-10-10).
+{
+  const race = setup(0);
+  const hero = race.participants[0];
+  hero.lane = 1; hero.hexPos = 0; hero.gear = 1;
+  const rival = { id: "rival5", type: "npc", name: "Rival", out: false, lane: 1, hexPos: 1, hp: 10, maxHp: 10, history: [], cumulative: 0, laps: 0, gear: 0 };
+  race.participants.push(rival);
+  race.asteroids = [{ id: "pileupAst", kind: "asteroid", lane: 1, hexPos: 2, design: "a", spinDur: 3, spinDir: "normal" }];
+  race.legState.leg.finalTN = 1; // trivially low -- the pass-the-rival check always succeeds (hero's Control is 20)
+  App.setTurn(hero.id, "gearChange", "0");
+  App.takeTurn(hero.id);
+  let t = race.legState.cars[hero.id].turn;
+  for (let k = 0; k < 50 && t; k++) {
+    if (t.choice) App.encounterChoice(hero.id, "straight");
+    else if (t.awaiting) App.decideAttack(hero.id, "");
+    else break;
+    t = race.legState.cars[hero.id].turn;
+  }
+  check("hard-stopping on the asteroid right after does NOT leave the hero on the rival's hex", !(hero.lane === rival.lane && hero.hexPos === rival.hexPos));
+  const lastLines = race.log[race.log.length - 1].lines;
+  check("the log shows the free drift off the rival's hex", lastLines.some(l => l.indexOf("drifts to an open hex beside it") !== -1));
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

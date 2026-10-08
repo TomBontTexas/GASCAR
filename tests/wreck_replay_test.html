@@ -1,0 +1,117 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+
+function setup() {
+  rollD = s => 1 + Math.floor(Math.random() * s);
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+  App.addCrewman(); const c = STATE.crewmen[0]; c.pilot = 7; c.gunner = 5;
+  App.addShip(); const sh = STATE.ships[0]; App.updateShip(sh.id, "classId", cls.id); App.updateShip(sh.id, "crewmanId", c.id);
+  STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh.id]; STATE._draftNpcs = [];
+  App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+
+// driftWrecks records a history entry shaped like a real turn.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  wreck.out = true; wreck.lane = 3; wreck.hexPos = 10; wreck.history = [];
+  const beforeSeq = race.turnSeq || 0;
+  driftWrecks(race);
+  check("a history entry was recorded for the drift", wreck.history.length === 1);
+  const rec = wreck.history[0];
+  check("the entry is flagged as a drift", rec.drift === true);
+  check("the entry's Leg matches the current Leg", rec.leg === race.legIndex + 1);
+  check("the entry's lane/hexPos match where the wreck ended up", rec.lane === wreck.lane && rec.hexPos === wreck.hexPos);
+  check("the entry's path ends at the wreck's final hex", rec.path.length > 0 && rec.path[rec.path.length - 1].lane === wreck.lane && rec.path[rec.path.length - 1].hexPos === wreck.hexPos);
+  check("race.turnSeq advanced for the drift", (race.turnSeq || 0) > beforeSeq);
+}
+
+// A boxed-in wreck still gets a history entry, with an empty path and 0 movement.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  wreck.out = true; wreck.lane = 3; wreck.hexPos = 10; wreck.history = [];
+  const circ = geom.laneHexLists[2].length;
+  const ahead = { laneIdx0: 2, hexPos: (10 + 1) % circ };
+  const sn = geom.slipNeighbors[2][10];
+  const blockers = [{ id: "b1", lane: ahead.laneIdx0 + 1, hexPos: ahead.hexPos, out: false }];
+  const aheadHex = geom.laneHexLists[ahead.laneIdx0][ahead.hexPos];
+  [[-1, sn.inward], [1, sn.outward]].forEach(([dir, cands]) => {
+    const lane0 = 2 + dir;
+    const h = cands.filter(h => hexDistance(geom.laneHexLists[lane0][h], aheadHex) === 1)[0];
+    if (h !== undefined) blockers.push({ id: "b" + dir, lane: lane0 + 1, hexPos: h, out: false });
+  });
+  blockers.forEach(b => race.participants.push(b));
+  driftWrecks(race);
+  check("a boxed-in wreck still gets a history entry", wreck.history.length === 1);
+  check("its path is empty and movement is 0", wreck.history[0].path.length === 0 && wreck.history[0].movement === 0);
+  check("its lane/hexPos are unchanged", wreck.lane === 3 && wreck.hexPos === 10);
+}
+
+// buildCircularLegWaypoints turns a drift entry into real waypoints for replay to animate.
+{
+  const race = setup();
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const wreck = race.participants[0];
+  wreck.out = true; wreck.lane = 3; wreck.hexPos = 10; wreck.history = [];
+  driftWrecks(race);
+  const perLeg = buildCircularLegWaypoints(wreck, geom);
+  check("buildCircularLegWaypoints produces one Leg of waypoints for the drift", perLeg.length === 1);
+  check("those waypoints are non-empty and match the recorded path", perLeg[0].length === wreck.history[0].path.length && perLeg[0].length > 0);
+}
+
+// Multiple Legs of drifting accumulate multiple, correctly-numbered history entries.
+{
+  const race = setup();
+  race.participants[0].out = true;
+  race.participants[0].lane = 3; race.participants[0].hexPos = 10;
+  const wreck = race.participants[0];
+  race.legState.complete = true;
+  App.startNextLeg();
+  race.legState.complete = true;
+  App.startNextLeg();
+  const driftEntries = wreck.history.filter(h => h.drift);
+  check("two more Legs of drifting add two more drift entries", driftEntries.length >= 2);
+  check("the drift entries' Leg numbers are strictly increasing", driftEntries.every((h, i) => i === 0 || h.leg > driftEntries[i - 1].leg));
+}
+
+// playRaceReplay doesn't throw with a wreck's drift history mixed into the race.
+{
+  const race = setup();
+  const hero = race.participants[0];
+  const npc = { id: "npc1", type: "npc", name: "Rival", out: false, lane: 2, hexPos: 5, laps: 0, gear: 1, hp: 10, maxHp: 10, cumulative: 0, history: [], startLane: 2, startHexPos: 5 };
+  race.participants.push(npc);
+  race.legState.cars[npc.id] = { gearChange: 0, slipsThisLeg: 0, attackedThisLeg: false, damageControl: false, pendingD: 0, turnDone: true, turn: null };
+  race.legState.order.push(npc.id);
+  hero.out = true; hero.lane = 3; hero.hexPos = 10;
+  race.legState.complete = true;
+  App.startNextLeg();
+  CURRENT_TAB = "race";
+  render();
+  let threw = false;
+  try { App.playRaceReplay(false); } catch (e) { threw = true; }
+  check("playRaceReplay runs cleanly with a wreck's drift history present", !threw);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

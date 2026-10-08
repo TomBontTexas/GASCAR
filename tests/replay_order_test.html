@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<pre id="testresult">pending</pre><div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+const ids = [];
+for (let i = 0; i < 2; i++) {
+  App.addShipClass(); const cls = STATE.shipClasses[i]; cls.thrust = 3 + i;
+  App.addCrewman(); const c = STATE.crewmen[i]; c.pilot = 7; c.gunner = 7;
+  App.addShip(); const s = STATE.ships[i];
+  App.updateShip(s.id, "classId", cls.id); App.updateShip(s.id, "crewmanId", c.id); ids.push(s.id);
+}
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 40, laps: 2, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = ids; STATE._draftNpcs = [{ name: "N", aggression: 5 }];
+App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = [];
+let guard = 0;
+while (!STATE.race.finished && guard++ < 300) {
+  const race = STATE.race, next = nextTurnParticipant(race); if (!next) { App.startNextLeg(); continue; }
+  if (next.type === "hero") { App.setTurn(next.id, "gearChange", "1"); App.takeTurn(next.id); for (let k = 0; k < 20; k++) { const t = STATE.race.legState.cars[next.id].turn; if (!t) break; if (t.choice) App.encounterChoice(next.id, "straight"); else if (t.awaiting) App.decideAttack(next.id, ""); else break; } }
+  else { resolveTurn(race, next, npcChoices(race, next)); advanceRace(race); }
+}
+const seqs = [];
+STATE.race.participants.forEach(p => (p.history || []).forEach(h => seqs.push(h.seq)));
+check("every turn has a sequence number", seqs.every(s => typeof s === "number"));
+check("sequence numbers are unique", new Set(seqs).size === seqs.length);
+check("the race played to a finish", STATE.race.finished === true);
+let threw = false;
+try { App.playRaceReplay(false); App.playRaceReplay(true); } catch (e) { threw = true; }
+check("starting the full and last-leg replay doesn't throw", !threw);
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script></body></html>

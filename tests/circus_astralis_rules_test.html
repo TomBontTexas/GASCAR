@@ -1,0 +1,196 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<pre id="testresult">pending</pre>
+<div id="view"></div>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = [];
+function check(name, cond) { lines.push((cond ? "PASS" : "FAIL") + " - " + name); }
+window.alert = () => {}; window.confirm = () => true;
+
+function build(thrust, pilot, gunner, extra) {
+  STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+  App.setShipyardAddDivision("Comet");
+  App.addShipClass();
+  const cls = STATE.shipClasses[0];
+  cls.thrust = thrust;
+  App.addCrewman();
+  const crew = STATE.crewmen[0]; crew.pilot = pilot; crew.gunner = gunner;
+  App.addShip();
+  const ship = STATE.ships[0];
+  App.updateShip(ship.id, "classId", cls.id);
+  App.updateShip(ship.id, "crewmanId", crew.id);
+  if (extra) extra(ship, cls);
+  STATE.courses.push({ id: "c1", name: "Test", division: "Comet", lanes: 6, innerHexes: 40, laps: 9, legMode: "tier", flatDamage: false });
+  STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [ship.id]; STATE._draftNpcs = [];
+  App.beginRace(); if (STATE.race) STATE.race.started = true; if (STATE.race) STATE.race.asteroids = [];
+  return STATE.race;
+}
+const drive = (race, p) => { for (let k = 0; k < 200; k++) { const t = race.legState.cars[p.id].turn; if (!t) return; if (t.choice) decideEncounter(race, p, "straight"); else decideAttack(race, p, ""); } };
+const turn = (race, p, gc, slip, n, target) => { resolveTurn(race, p, { gearChange: gc || 0 }); const t = race.legState.cars[p.id].turn; if (t && t.awaiting) decideAttack(race, p, target || ""); drive(race, p); };
+const lastLines = (race) => race.log[race.log.length - 1].lines;
+
+// 1. Failed Control check: movement halves, Slips cancel, stays in lane.
+{
+  let race = build(3, 0, 5);           // pilot 0, control 5 -> score 5, TN high so it fails
+  race.legState.leg.finalTN = 10;
+  const p = race.participants[0];
+  p.gear = 3; rollD = (s) => (s === 20 ? 1 : s === 10 ? 1 : 4);   // 3D6 = 12 +3 thrust = 15 intended
+  const laneBefore = p.lane;
+  turn(race, p, 0, "right", 2);
+  const ls = lastLines(race).join(" | ");
+  check("failed Control check moves half of 15 (7)", ls.indexOf("moves half its intended distance (7)") !== -1);
+  check("the failed check moves only the remaining distance (lane unchanged)", p.lane === laneBefore);
+}
+
+// 2. Slips never trigger a Control check on their own.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  p.gear = 1; rollD = (s) => (s === 20 ? 15 : 1);
+  race.legState.leg.finalTN = 99;
+  turn(race, p, 0, "right", 2);
+  check("two Slips alone do not trigger a Control check", !lastLines(race).some(l => l.startsWith("Control Task Check")));
+}
+// 3. Gear 1 gives AA (2 Advantage levels). Movement over the TN triggers the
+// check but adds no Disadvantage of its own (see RULE_CHANGES.md 2026-10-07),
+// so the net stays AA: three dice rolled (1 base + 2 Advantage).
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  p.gear = 0;
+  rollD = (s) => (s === 20 ? 10 : 6);
+  race.legState.leg.finalTN = 5; // the roll of 9 exceeds the TN, so the check happens
+  turn(race, p, 1, "", 0);
+  check("gear 1 Control check stays AA (movement over the TN adds no Disadvantage): three dice rolled", lastLines(race).some(l => l.startsWith("Control=") && l.indexOf("10,10,10") !== -1));
+}
+
+// 4. Hit from an attack: victim gets one Disadvantage on its next check, not before its turn.
+{
+  const race = build(3, 7, 5);
+  race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+  const p = race.participants[0];
+  const wreck = { id: "npcX", type: "npc", name: "Dummy", out: false, lane: 1, hexPos: 0, hp: 5, maxHp: 5, armor: 0, thrust: 0, points: 5, control: 5, gunner: 5, damage: 0, armorStat: 0, crewPilot: 5, crewGunner: 5, cumulative: 0, history: [], gear: 0, laps: 0, division: "Comet" };
+  race.participants.push(wreck);
+  race.legState.cars[wreck.id] = { gearChange: 0, slip: "", slipCount: 0, pendingD: 0, turnDone: true };
+  race.legState.order.push(wreck.id);
+  p.lane = 2; p.hexPos = 10; wreck.lane = 2; wreck.hexPos = 11;
+  race.legState.leg.finalTN = 5; rollD = (s) => (s === 20 ? 19 : 4);
+  p.gear = 0;
+  turn(race, p, 0, "", 0, wreck.id);
+  check("a successful attack leaves the target carrying one Disadvantage", race.legState.cars[wreck.id].pendingD === 1);
+}
+
+// 5. Fumble 18 leaves DD pending for the next check.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  race.legState.leg.finalTN = 999; p.gear = 3;
+  const car = race.legState.cars[p.id];
+  rollFumble(race, p, { movement: 0, stopped: false }, []);       // consume the random path first (no-op safety)
+  const T = { movement: 5, stopped: false }; const log = [];
+  GDATA.FUMBLE_CHART[16].affects.forEach(a => applyFumbleAffect(race, p, a, T, log));
+  check("fumble 18 sets DD (2 levels) pending for the next check", car.pendingD === 2);
+  check("fumble 18 drops the ship to Gear-1", p.gear === 1);
+}
+
+// 6. Fumble 20 stops the ship and drops it to Gear-0.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  const T = { movement: 9, stopped: false }; const log = [];
+  p.gear = 4;
+  GDATA.FUMBLE_CHART[18].affects.forEach(a => applyFumbleAffect(race, p, a, T, log));
+  check("fumble 20 stops the movement", T.movement === 0 && T.stopped === true);
+  check("fumble 20 drops the ship to Gear-0", p.gear === 0);
+}
+
+// 7. Forced lane shift off the track: 3 HP, Gear-1, turn ends. Optional shift does nothing.
+{
+  const race = build(3, 7, 5);
+  const p = race.participants[0];
+  p.lane = 1; p.gear = 4; const hpBefore = p.hp;
+  const T = { movement: 6, stopped: false }; const log = [];
+  applyFumbleAffect(race, p, { type: "laneShift", dir: "in", forced: true }, T, log);
+  check("forced shift off lane 1 costs 3 HP", p.hp === hpBefore - 3);
+  check("falling off drops the ship to Gear-1 and ends its movement", p.gear === 1 && T.stopped === true);
+  const q = build(3, 7, 5).participants[0];
+  q.lane = 1; const T2 = { movement: 6, stopped: false }; const log2 = [];
+  applyFumbleAffect(race, q, { type: "laneShift", dir: "in", forced: false }, T2, log2);
+  check("an optional shift at the edge does nothing", q.lane === 1 && q.hp === q.maxHp && T2.stopped === false);
+}
+
+// 8. Sponsor: bonus and penalty spread across stats, each capped at its total.
+{
+  const race = build(3, 7, 5, (ship) => { ship.sponsor = { bonus: { thrust: 2, armor: 1 }, penalty: { thrust: 3 } }; });
+  const p = race.participants[0];
+  const s = carStats(p);
+  check("sponsor bonus adds to the class stat (thrust 3 +2 -3 penalty = 2)", s.thrust === 2);
+  check("sponsor armor bonus adds to the class stat (armor base 0 +1 = 1)", s.armor === 1);
+}
+{
+  const race = build(3, 7, 5, (ship) => { ship.sponsor = { bonus: {}, penalty: { thrust: 1, control: 2 } }; });
+  const s = carStats(race.participants[0]);
+  check("a penalty spread over two stats applies to each (thrust 3-1=2, control 5-2=3)", s.thrust === 2 && s.control === 3);
+}
+{
+  const race = build(1, 7, 5, (ship) => { ship.sponsor = { bonus: {}, penalty: { thrust: 3 } }; });
+  check("a penalty can't drive thrust below 0", carStats(race.participants[0]).thrust === 0);
+}
+{
+  const race = build(3, 7, 5, (ship) => { ship.sponsor = { bonus: {}, penalty: "thrust" }; });
+  check("an old single-stat penalty save reads as no penalty (no crash)", carStats(race.participants[0]).thrust === 3);
+}
+{
+  const race = build(3, 7, 5);
+  const ship = STATE.ships[0];
+  App.setSponsor(ship.id, "penalty", "thrust", "1");
+  App.setSponsor(ship.id, "penalty", "control", "5");
+  check("setting penalties stops at the 2-point total (thrust 1 + control 1)", ship.sponsor.penalty.thrust === 1 && ship.sponsor.penalty.control === 1);
+}
+
+// 9. Crew split: 5 points total, each stat starts at 5.
+{
+  build(3, 0, 0);
+  const crew = STATE.crewmen[0];
+  check("a new crewman starts at Pilot-0 Gunner-0 Engineer-0 with 6 split points left", crewmanSplitRemaining(crew) === 6);
+  App.updateCrewmanSkill(crew.id, "pilot", "4");
+  check("raising Pilot to 4 spends 4 split points", crew.pilot === 4 && crewmanSplitRemaining(crew) === 2);
+  App.updateCrewmanSkill(crew.id, "gunner", "9");
+  check("gunner can only rise by the 2 points left (ends at 2)", crew.gunner === 2 && crewmanSplitRemaining(crew) === 0);
+}
+
+// 10. Flat-damage option: an attack hit uses 4 instead of 1D6.
+{
+  const race = build(3, 7, 5);
+  race.legIndex = 1; // attacks aren't allowed on Leg 1 (see RULE_CHANGES.md)
+  const p = race.participants[0];
+  STATE.courses[0].flatDamage = true;
+  race.legState.leg.finalTN = 5;
+  rollD = (s) => (s === 20 ? 19 : 6);
+  const wreck = { id: "npcY", type: "npc", name: "Target", out: false, lane: 2, hexPos: 11, hp: 20, maxHp: 20, armor: 0, thrust: 0, points: 20, control: 5, gunner: 5, damage: 0, crewPilot: 5, crewGunner: 5, cumulative: 0, history: [], gear: 0, laps: 0, division: "Comet" };
+  race.participants.push(wreck);
+  race.legState.cars[wreck.id] = { gearChange: 0, slip: "", slipCount: 0, pendingD: 0, turnDone: true };
+  race.legState.order.push(wreck.id);
+  p.lane = 2; p.hexPos = 10; p.gear = 0;
+  turn(race, p, 0, "", 0, wreck.id);
+  check("flat damage: a hit deals exactly 4 minus armor (4)", wreck.hp === 20 - 4);
+}
+
+// 11. Every tab renders during a live race turn, including the hero turn form.
+{
+  const race = build(3, 7, 5);
+  ["introduction","shipyard","cantina","hangar","course","race","reference","instructions"].forEach(t => { CURRENT_TAB = t; render(); });
+  check("every tab renders with a live race and a hero turn form", true);
+}
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l=>l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) {
+  document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack;
+}
+</script>
+</body></html>
