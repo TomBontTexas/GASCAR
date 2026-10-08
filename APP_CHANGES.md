@@ -15,6 +15,11 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — A race no longer requires a hero ship
+- Race Setup no longer blocks on "build a ship first" -- it's usable with zero Ships built, so an all-NPC race can be set up. Starting a race now only requires at least one racer total (a Ship or an NPC), not specifically a Ship.
+- Fixed a bug where a race with no hero ships would instantly mark itself finished (the "all heroes are out" shortcut fired immediately, since there were never any heroes to begin with). A hero-less race now only ends when a racer actually crosses the finish line, so a 1-NPC or 6-NPC race can be stepped through Leg by Leg via Start Leg N+1, same as a hero race.
+- **Where:** `renderRaceSetup()`, `App.beginRace()`, `advanceRace()` in `app.js`.
+
 ### 2026-10-07 — Attack prompt fixes: Decline button, Gunner preview, Move All stops in range
 - **Bug:** with movement left and the straight-ahead hex occupied by the same racer offering an attack, there was no way to decline the attack and still move -- only Attack was shown. A Decline button now always shows next to Attack (labeled Finish once no movement is left, same as before); declining reveals the normal move choice (straight/Slip) for that hex. The attack is offered again if the racer is still in Range after moving, per the existing one-offer-per-hex rule.
 - **Bug:** Move All walked straight through a racer's attack Range without pausing. It now stops as soon as a racer comes into Range, the same as a manual hex-by-hex walk would.

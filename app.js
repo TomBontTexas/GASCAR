@@ -1481,10 +1481,14 @@ function afterHeroStep(race, p) {
 }
 
 // After a turn: finish the race if it's over, or roll over to the next Leg
-// once every car has acted.
+// once every car has acted. A race with at least one hero ends once every
+// hero is out (no point continuing for its own sake); an all-NPC race (see
+// RULE_CHANGES.md 2026-10-08) has no such shortcut -- it only ends when a
+// racer actually crosses the finish line (finishTurn()).
 function advanceRace(race) {
   if (race.finished) return;
-  if (!race.participants.some(x => x.type === "hero" && !x.out)) { race.finished = true; return; }
+  const hasHero = race.participants.some(x => x.type === "hero");
+  if (hasHero && !race.participants.some(x => x.type === "hero" && !x.out)) { race.finished = true; return; }
   if (!nextTurnParticipant(race)) race.legState.complete = true; // the next Leg waits for Start Leg
 }
 // Runs every consecutive NPC turn until a Hero's turn comes up (or the race ends).
@@ -1821,7 +1825,6 @@ function renderCourse() {
 function renderRaceSetup() {
   let html = `<section class="card"><h2>Set Up a Race</h2>`;
   if (!STATE.courses.length) { html += `<p class="muted">Create a racecourse first (Racecourse tab).</p></section>`; return html; }
-  if (!STATE.ships.length) { html += `<p class="muted">Build at least one ship first (Hangar Bay tab).</p></section>`; return html; }
   let courseId = STATE._raceSetupCourse;
   if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses[0].id;
   const course = getCourse(courseId);
@@ -2453,8 +2456,10 @@ const App = {
     if (!courseId) { alert("Create a racecourse first."); return; }
     const division = getCourse(courseId).division;
     const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
-    if (!shipIds.length) { alert(`Select at least one ${division} Division ship with a Crewman assigned.`); return; }
-    startRace(courseId, shipIds, STATE._draftNpcs || []);
+    const npcs = STATE._draftNpcs || [];
+    // At least one racer total -- a hero isn't required, so an all-NPC race can be watched Leg by Leg.
+    if (!shipIds.length && !npcs.length) { alert(`Select at least one ${division} Division ship, or add at least one NPC.`); return; }
+    startRace(courseId, shipIds, npcs);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
     saveState(); render();
