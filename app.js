@@ -1108,8 +1108,10 @@ function driftWrecks(race) {
 // asteroid shoves it forward instead of stopping: pushShip() moves the ship
 // and the asteroid takes the ship's old hex. A wreck or another asteroid in
 // the way simply blocks the rest of this Leg's drift, same as before. Each
-// asteroid's (and any pushed ship's) movement is recorded into
-// race._legStartEvents so the Leg-start animation can show it happening.
+// asteroid's (and any pushed ship's) movement is recorded into both
+// race._legStartEvents (for the one-shot Leg-start animation) and its own
+// history, in the same shape a wreck's drift uses, so Show Last Leg / Show
+// Entire Race replay asteroid movement too (see RULE_CHANGES.md 2026-10-09).
 function driftAsteroids(race) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
@@ -1127,7 +1129,12 @@ function driftAsteroids(race) {
       a.hexPos = nextHexPos;
       path.push({ lane: a.lane, hexPos: a.hexPos });
     }
-    if (path.length) race._legStartEvents.push({ kind: "asteroid", id: a.id, from, path });
+    if (path.length) {
+      race._legStartEvents.push({ kind: "asteroid", id: a.id, from, path });
+      race.turnSeq = (race.turnSeq || 0) + 1;
+      a.history = a.history || [];
+      a.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: path.length, path, lane: a.lane, laps: 0, hexPos: a.hexPos, slipHexes: 0, gear: 0, drift: true });
+    }
   });
   if (lines.length) race.log.push({ legIndex: race.legIndex, name: "Asteroid Field", lines });
 }
@@ -1167,6 +1174,7 @@ function placeAsteroids(race, count) {
     const spot = open.splice(rollD(open.length) - 1, 1)[0];
     race.asteroids.push({
       id: uid("ast"), kind: "asteroid", lane: spot.lane, hexPos: spot.hexPos,
+      startLane: spot.lane, startHexPos: spot.hexPos, history: [],
       design: ASTEROID_DESIGNS[rollD(ASTEROID_DESIGNS.length) - 1],
       // Cosmetic only (spin speed/direction) -- Math.random() rather than
       // rollD so it never shifts any dice-stubbed test's roll sequence.
@@ -2479,7 +2487,7 @@ function renderInstructions() {
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
     <p>A Racecourse can also scatter a fixed number of asteroids among the lanes (chosen when the course is built), shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. Each Leg, every asteroid drifts 1-2 hexes forward, staying in its own lane. A ship's own deliberate movement into an asteroid's hex is a hard stop, same as a wreck: no check, no passing through it. But if a drifting asteroid moves into an active ship's hex, it shoves that ship into one of the three hexes ahead of it (or swaps places with it if all three are blocked) and deals 1 HP of damage, ignoring Armor. Starting a Leg plays a short animation of that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.</p>
 
-    <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
+    <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through -- wreck and asteroid drift animate too. Click anywhere to clear the trail.</p>
 
     <p class="muted">The <b>Reference</b> tab has the Division table, the Gear table, the Task Check modifiers, the Fumble Chart, and Export/Import for your save data. Everything is saved automatically to this browser (localStorage) — use Export JSON on Reference for a backup file you control.</p>
   </section>`;
@@ -2886,15 +2894,21 @@ const App = {
     // the leg before the one in progress, or the final leg once the race is over.
     const lastLeg = Math.max(0, race.finished || race.legState.complete ? race.legIndex : race.legIndex - 1);
     const fromLeg = lastLegOnly ? lastLeg : 0;
-    if (!race.participants.some(p => (p.history || []).length)) return;
+    // Ships and asteroids both replay through the same machinery (see
+    // RULE_CHANGES.md 2026-10-09: asteroid drift is tracked the same way a
+    // wreck's is) -- each tagged with its kind so the two differ only in
+    // which DOM element/transform function they use.
+    const movers = race.participants.map(p => ({ obj: p, kind: "ship" }))
+      .concat((race.asteroids || []).map(a => ({ obj: a, kind: "asteroid" })));
+    if (!movers.some(m => (m.obj.history || []).length)) return;
     const btnAll = document.getElementById("raceReplayBtn");
     const btnLast = document.getElementById("raceReplayLastLegBtn");
     if (btnAll) btnAll.disabled = true;
     if (btnLast) btnLast.disabled = true;
     ensureReplayTrailClickListener();
-    const pickPosition = (p) => {
-      let pos = { lane: p.startLane || 1, hexPos: p.startHexPos || 0, laps: 0 };
-      (p.history || []).forEach(h => { if (h.leg - 1 < fromLeg) pos = h; });
+    const pickPosition = (obj) => {
+      let pos = { lane: obj.startLane || 1, hexPos: obj.startHexPos || 0, laps: 0 };
+      (obj.history || []).forEach(h => { if (h.leg - 1 < fromLeg) pos = h; });
       return pos;
     };
     const setBar = (p, pos) => {
@@ -2904,22 +2918,24 @@ const App = {
       if (fill) fill.style.width = pct + "%";
       if (icon) icon.style.left = pct + "%";
     };
+    const elIdFor = m => m.kind === "asteroid" ? `asteroid-${m.obj.id}` : `circracer-${m.obj.id}`;
+    const placeAt = (m, pos, prevRotDeg) => m.kind === "asteroid" ? asteroidTransform(geom, pos.lane, pos.hexPos) : circRacerTransform(geom, pos, prevRotDeg).transform;
     // Every turn in the replay range, in the order the turns actually happened.
     const events = [];
-    race.participants.forEach((p, pi) => {
-      const perTurn = buildCircularLegWaypoints(p, geom);
-      (p.history || []).forEach((rec, hi) => {
+    movers.forEach((m, mi) => {
+      const perTurn = buildCircularLegWaypoints(m.obj, geom);
+      (m.obj.history || []).forEach((rec, hi) => {
         if (rec.leg - 1 < fromLeg) return;
         if (lastLegOnly && rec.leg - 1 !== fromLeg) return;
-        events.push({ p, pi, rec, wp: perTurn[hi] || [], seq: rec.seq || 0 });
+        events.push({ m, mi, rec, wp: perTurn[hi] || [], seq: rec.seq || 0 });
       });
     });
     events.sort((a, b) => a.seq - b.seq);
-    race.participants.forEach(p => {
-      const pos = pickPosition(p);
-      const g = document.getElementById(`circracer-${p.id}`);
-      if (g) g.setAttribute("transform", circRacerTransform(geom, pos).transform);
-      setBar(p, pos);
+    movers.forEach(m => {
+      const pos = pickPosition(m.obj);
+      const g = document.getElementById(elIdFor(m));
+      if (g) g.setAttribute("transform", placeAt(m, pos));
+      if (m.kind === "ship") setBar(m.obj, pos);
     });
     const hexStepDelay = 200, turnPause = 400;
     let idx = 0;
@@ -2927,15 +2943,15 @@ const App = {
       let i = 0;
       function tick() {
         if (STATE.race !== race) return;
-        if (i >= ev.wp.length) { setBar(ev.p, ev.rec); done(); return; }
+        if (i >= ev.wp.length) { if (ev.m.kind === "ship") setBar(ev.m.obj, ev.rec); done(); return; }
         const point = ev.wp[i++];
-        const g = document.getElementById(`circracer-${ev.p.id}`);
+        const g = document.getElementById(elIdFor(ev.m));
         if (g) {
-          const m = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
-          const prevRotDeg = m ? parseFloat(m[1]) : null;
-          g.setAttribute("transform", circRacerTransform(geom, point, prevRotDeg).transform);
+          const rotMatch = /rotate\(([-\d.]+)\)/.exec(g.getAttribute("transform") || "");
+          const prevRotDeg = rotMatch ? parseFloat(rotMatch[1]) : null;
+          g.setAttribute("transform", placeAt(ev.m, point, prevRotDeg));
         }
-        paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(ev.pi));
+        paintReplayTrailDot(geom, (point.lane || 1) - 1, point.hexPos || 0, replayTrailColorFor(ev.mi));
         setTimeout(tick, hexStepDelay);
       }
       tick();

@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-09 — Asteroid drift is tracked for replay
+- A drifting asteroid's movement each Leg (and any ship it pushes along the way) is now recorded into its own history, the same shape a wreck's drift is, so Show Last Leg / Show Entire Race animate the asteroid field moving instead of jumping straight to its final spot.
+- **Where:** `driftAsteroids()` / `App.playRaceReplay()` in `app.js`.
+
 ### 2026-10-08 — Wrecks' drift is tracked for replay
 - A drifting wreck's movement each Leg is now recorded into its own history, the same shape a live turn's movement is, so Show Last Leg / Show Entire Race animate it drifting instead of jumping straight to its final spot.
 - **Where:** `driftWrecks()` in `app.js`.
