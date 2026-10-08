@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-10 — Fix: asteroid placement could still land right next to the starting formation
+- **Bug:** the 2026-10-09 fix for this same problem excluded a hexPos *range* per lane, but the starting line is a staggered diagonal across lanes (each lane's start hex is only 1 hex further along than the one inside it), not a straight hexPos band. A hex just past that range in one lane could still be hex-adjacent to a ship starting in the lane right next to it, so an asteroid could still spawn touching the formation.
+- **Current value:** placement now keeps every asteroid at least 3 real hexes (true cube-coordinate distance, not a per-lane hexPos range) from every ship's actual starting hex, across every lane.
+- **Where:** `placeAsteroids()` in `app.js`.
+
 ### 2026-10-10 — Fix: a ship could end its turn stacked on another ship's hex
 - **Bug:** the "ends on an occupied hex -> drifts to an open hex beside it, or Fumbles if boxed in" correction only ran when a turn finished normally. A ship that successfully Control-checks past a live racer (landing on its hex mid-walk, same as always) and then immediately hard-stops one hex later -- on an asteroid, or a failed check against something else -- ended its turn exactly on that racer's hex with nothing to nudge it off, since a hard stop skipped the correction entirely. Three ships piled up this way across consecutive Legs of asteroid stops in one submitted race file. This is also the likely cause of an earlier-reported rare live-racer-vs-live-racer collision this same session that was left as an unexplained edge case at the time.
 - **Current value:** the "ends on an occupied hex" correction now runs regardless of how the turn ended, hard stop or not.

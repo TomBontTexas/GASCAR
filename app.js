@@ -1209,14 +1209,20 @@ function pushShip(race, ship, asteroid, geom, course, lines) {
 function placeAsteroids(race, count) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
-  // Every lane's start hex falls within [0, (lanes-1)*STAGGER_PER_LANE]; add
-  // a few extra hexes of buffer so the nearest asteroid reads as clearly
-  // separate from the cluster, not just technically unoccupied.
-  const startZoneEnd = (course.lanes - 1) * STAGGER_PER_LANE + 4;
+  // Keep every asteroid at least this many real hexes from every ship's
+  // starting hex. A per-lane hexPos range isn't enough -- the staggered
+  // starting diagonal cuts across lanes, so a hex just past such a range in
+  // one lane can still sit hex-adjacent to a ship starting in the lane next
+  // to it (see RULE_CHANGES.md 2026-10-10). True hex distance (cube
+  // coordinates) doesn't have that gap.
+  const MIN_START_DISTANCE = 3;
+  const startHexes = race.participants.map(p => geom.laneHexLists[p.lane - 1][p.hexPos]);
   const open = [];
   for (let lane0 = 0; lane0 < course.lanes; lane0++) {
     const circ = geom.laneHexLists[lane0].length;
-    for (let hexPos = startZoneEnd + 1; hexPos < circ; hexPos++) {
+    for (let hexPos = 0; hexPos < circ; hexPos++) {
+      const hex = geom.laneHexLists[lane0][hexPos];
+      if (startHexes.some(sh => hexDistance(hex, sh) < MIN_START_DISTANCE)) continue;
       if (!occupantAt(race, lane0 + 1, hexPos, null)) open.push({ lane: lane0 + 1, hexPos });
     }
   }
