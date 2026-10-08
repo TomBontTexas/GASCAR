@@ -1166,16 +1166,23 @@ function pushShip(race, ship, asteroid, geom, course, lines) {
   }
   race._legStartEvents.push({ kind: "ship", id: ship.id, from, path: [{ lane: ship.lane, hexPos: ship.hexPos }] });
 }
-// Scatters `count` asteroids around the track at random, avoiding any hex a
-// ship already occupies (see RULE_CHANGES.md 2026-10-09). Placement itself
-// isn't lane-restricted -- only their later drift is.
+// Scatters `count` asteroids around the track at random, keeping clear of
+// the whole starting cluster, not just the exact hexes ships occupy (see
+// RULE_CHANGES.md 2026-10-09) -- lanes are staggered only 1 hex apart
+// (STAGGER_PER_LANE), so a hex nobody's standing on can still sit right in
+// the middle of the starting formation. Placement itself isn't
+// lane-restricted -- only their later drift is.
 function placeAsteroids(race, count) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
+  // Every lane's start hex falls within [0, (lanes-1)*STAGGER_PER_LANE]; add
+  // a few extra hexes of buffer so the nearest asteroid reads as clearly
+  // separate from the cluster, not just technically unoccupied.
+  const startZoneEnd = (course.lanes - 1) * STAGGER_PER_LANE + 4;
   const open = [];
   for (let lane0 = 0; lane0 < course.lanes; lane0++) {
     const circ = geom.laneHexLists[lane0].length;
-    for (let hexPos = 0; hexPos < circ; hexPos++) {
+    for (let hexPos = startZoneEnd + 1; hexPos < circ; hexPos++) {
       if (!occupantAt(race, lane0 + 1, hexPos, null)) open.push({ lane: lane0 + 1, hexPos });
     }
   }

@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-09 — Fix: an asteroid could be placed right inside the starting formation
+- **Bug:** asteroid placement only avoided the exact hex a ship starts on. Since lanes are staggered only 1 hex apart (`STAGGER_PER_LANE`), a hex nobody was standing on could still land in the middle of the tightly-packed starting cluster, reading as "right there with the ships" even though it technically wasn't on top of one.
+- **Current value:** asteroid placement keeps clear of every lane's starting hex, plus a few extra hexes of buffer, across the whole track width -- not just hexes a ship happens to occupy.
+- **Where:** `placeAsteroids()` in `app.js`.
+
 ### 2026-10-09 — Fix: a wreck was a hard stop instead of a Control Task Check
 - **Bug:** per the written rule, entering a hex occupied by another ship -- Active or Out of Commission -- always calls for a Control Task Check, success passing through, failure stopping short at the hex before it. The app had made a wreck an unconditional hard stop instead (no roll, ever), a deliberate fix earlier in development that turned out not to match the written rule.
 - **Current value:** a wreck is Control-checkable again, exactly like a live racer: success passes through, failure stops short. If the check succeeds but the ship's movement happens to run out exactly on the wreck's hex, it instead makes a free forced Slip to an open hex beside it (no cost, no extra check); if every adjacent hex is also blocked, it rolls the Fumble Chart and the turn ends. An asteroid is unaffected -- still an unconditional hard stop (see the asteroid entries below).
