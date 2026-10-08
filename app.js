@@ -652,6 +652,7 @@ function renderCircularTrackSvg(race, course) {
     const isReady = p.type === "hero" && readyHero && p.id === readyHero.id && !t;
     svg += `<g class="circracer${p.out ? " dead" : ""}${isReady ? " active-turn" : ""}" id="circracer-${p.id}" data-racer="${p.id}" transform="${transform}">
       ${isReady ? `<circle r="${(iconSize / 2 * 1.3).toFixed(1)}" class="circracer-ring"/>` : ""}
+      ${p.out ? `<circle r="${(iconSize / 2 * 1.3).toFixed(1)}" class="circracer-ring wreck-ring"/>` : ""}
       ${imgHref
         ? `<image href="${imgHref}" x="${(-iconSize / 2).toFixed(1)}" y="${(-iconSize / 2).toFixed(1)}" width="${iconSize.toFixed(1)}" height="${iconSize.toFixed(1)}"/>`
         : `<circle r="${(iconSize / 2).toFixed(1)}" class="circdot"/>`}
@@ -954,6 +955,45 @@ function breakInitiativeTie(group) {
   }
   return out;
 }
+// The open drift destinations from `cur`: forward (straight), or a forward
+// diagonal into the next lane in or out -- the same three hexes a live car's
+// own move choice offers, minus the cost/obstacle-check machinery a wreck
+// doesn't need. Only an open, in-bounds hex counts.
+function wreckDriftOptions(race, p, geom, course, cur) {
+  const circ = geom.laneHexLists[cur.laneIdx0].length;
+  const ahead = { laneIdx0: cur.laneIdx0, hexPos: (cur.hexPos + 1) % circ };
+  const opts = [];
+  if (!occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id)) opts.push(ahead);
+  const sn = geom.slipNeighbors[cur.laneIdx0][cur.hexPos];
+  const aheadHex = geom.laneHexLists[ahead.laneIdx0][ahead.hexPos];
+  [-1, 1].forEach(dir => {
+    const lane0 = cur.laneIdx0 + dir;
+    if (lane0 < 0 || lane0 >= course.lanes) return; // can't drift past the edge of the track
+    const cands = (dir < 0 ? sn.inward : sn.outward).filter(h => hexDistance(geom.laneHexLists[lane0][h], aheadHex) === 1);
+    const hexPos = cands.find(h => !occupantAt(race, lane0 + 1, h, p.id));
+    if (hexPos !== undefined) opts.push({ laneIdx0: lane0, hexPos });
+  });
+  return opts;
+}
+// Derelict wrecks drift forward 1-2 hexes every Leg, simulating loose
+// wreckage (see RULE_CHANGES.md 2026-10-08) -- one hex at a time, each hex a
+// random pick among the three hexes ahead of it, landing only on an open,
+// in-bounds hex. Boxed in on all three sides, it simply stays put.
+function driftWrecks(race) {
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  race.participants.forEach(p => {
+    if (!p.out) return;
+    const dist = rollD(2); // 1 or 2 hexes
+    for (let i = 0; i < dist; i++) {
+      const opts = wreckDriftOptions(race, p, geom, course, { laneIdx0: p.lane - 1, hexPos: p.hexPos });
+      if (!opts.length) break;
+      const dest = opts[rollD(opts.length) - 1];
+      p.lane = dest.laneIdx0 + 1;
+      p.hexPos = dest.hexPos;
+    }
+  });
+}
 function initLegState(race) {
   const course = getCourse(race.courseId);
   const leg = rollCircularLeg(course);
@@ -975,6 +1015,7 @@ function initLegState(race) {
   const order = race.initiative.filter(id => { const p = race.participants.find(x => x.id === id); return p && !p.out; });
   race.legState = { leg, cars, complete: false, order };
   STATE._openDeclFor = null;
+  driftWrecks(race);
 }
 function nextTurnParticipant(race) {
   const ls = race.legState;
@@ -2173,7 +2214,7 @@ function renderInstructions() {
       <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
       <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
-    <p>A ship that drops to 0 HP is destroyed and leaves a wreck in its hex that other ships must navigate around. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
+    <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
 
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 

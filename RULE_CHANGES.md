@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-08 — Wrecks drift
+- **Earlier value:** a destroyed car's wreck stayed exactly where it died for the rest of the race.
+- **Current value:** at the start of every Leg, each wreck drifts 1-2 hexes (random) in the direction of travel -- one hex at a time, each hex a random pick among the three hexes ahead of it (straight, or a forward diagonal into the next lane in or out), simulating loose debris. It can't drift past the edge of the track or onto an occupied hex; boxed in on all three sides, it just stays put. On the track, a wreck now shows a red ring (the same ring style used to highlight the hero ready to act, in red instead of green).
+- **Where:** `driftWrecks()` / `wreckDriftOptions()`, called from `initLegState()`, in `app.js`; `.wreck-ring` in `style.css`.
+
 ### 2026-10-07 — Movement over the TN no longer adds its own Disadvantage
 - **Earlier value:** when this Leg's movement roll exceeded the Leg's TN, it both triggered the Control Task Check AND added +1 Disadvantage to that same check.
 - **Current value:** movement over the TN still triggers the Control check (made before moving, so a failure halves the whole move), but adds no Disadvantage of its own. Only the gear's own Advantage/Disadvantage (and any pending Disadvantage from earlier hits/fumbles) apply -- triggering the check and penalizing it was double jeopardy.

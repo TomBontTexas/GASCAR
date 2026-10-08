@@ -342,6 +342,7 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
    (see APP_CHANGES.md). */
 .circracer { transition: transform 0.2s ease-out; }
 .circracer-ring { fill: none; stroke: #2fbf71; stroke-width: 2.5; }
+.circracer-ring.wreck-ring { stroke: var(--danger); }
 
 .winner { border-color: var(--gold); box-shadow: 0 0 20px rgba(245,197,24,0.15); }
 .finallist { font-size: 1.05rem; line-height: 1.9; }
