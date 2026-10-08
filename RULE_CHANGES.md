@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-07 — Movement over the TN no longer adds its own Disadvantage
+- **Earlier value:** when this Leg's movement roll exceeded the Leg's TN, it both triggered the Control Task Check AND added +1 Disadvantage to that same check.
+- **Current value:** movement over the TN still triggers the Control check (made before moving, so a failure halves the whole move), but adds no Disadvantage of its own. Only the gear's own Advantage/Disadvantage (and any pending Disadvantage from earlier hits/fumbles) apply -- triggering the check and penalizing it was double jeopardy.
+- **Where:** `resolveTurn()` in `app.js`.
+
 ### 2026-10-07 — Construction points set per Division, not Tier x 10
 - **Earlier value:** a Ship Class's construction-point budget was its Division's Tier x 10 -- Flash 10, Spark 10, Comet 20, Meteor 30, Nova 40 (Flash and Spark share Tier 1, so they shared a budget).
 - **Current value:** each Division has its own budget: Flash 10, Spark 20, Comet 30, Meteor 40, Nova 50. Tier itself is unchanged and still sets flavor crew size and TN/obstacle-damage scaling.

@@ -1209,10 +1209,13 @@ function resolveTurn(race, p, choices) {
   log.push(`Gear ${p.gear}: rolled ${rolled.length ? rolled.join(" + ") : "nothing (Gear-0)"} + Thrust ${stats.thrust} = ${intended} movement points.`);
 
   // 2. Control modifiers. Pending Disadvantage from earlier hits/fumbles is
-  // consumed by this turn's checks.
+  // consumed by this turn's checks. Movement over the TN triggers the Control
+  // check below but adds no Disadvantage of its own -- only the gear does
+  // (see RULE_CHANGES.md 2026-10-07; otherwise it's double jeopardy, forcing
+  // both a check and a Disadvantage on it).
   const pendingNow = car.pendingD;
   car.pendingD = 0;
-  const net = gearNet(p.gear) - (intended > tn ? 1 : 0) - pendingNow;
+  const net = gearNet(p.gear) - pendingNow;
   const checkSources = [];
   if (gearNet(p.gear)) checkSources.push(`Gear ${p.gear}`);
   if (intended > tn) checkSources.push("movement over the TN");
