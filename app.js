@@ -642,10 +642,12 @@ function renderCircularTrackSvg(race, course) {
   (race.asteroids || []).concat(race._asteroidsFadingOut || []).forEach(a => {
     const hex = geom.laneHexLists[a.lane - 1][a.hexPos];
     const { x, y } = hexToPixel(geom, hex.q, hex.r);
-    const pts = asteroidPoints(a.design, x, y, geom.hexSize / 11);
+    // Scaled well inside the hex's own inscribed circle so it never pokes
+    // past the hex edge at any point in its continuous spin.
+    const rock = asteroidFacets(a.design, x, y, geom.hexSize / 18);
     const fadeCls = a.isNew ? " asteroid-fade-in" : ((race._asteroidsFadingOut || []).includes(a) ? " asteroid-fade-out" : "");
     svg += `<g class="asteroid${fadeCls}">
-      <polygon class="asteroid-rock" style="animation-duration:${a.spinDur.toFixed(2)}s;animation-direction:${a.spinDir}" points="${pts}"/>
+      <g class="asteroid-rock" style="animation-duration:${a.spinDur.toFixed(2)}s;animation-direction:${a.spinDir}">${rock}</g>
     </g>`;
   });
   const turnOf = p => race.legState && race.legState.cars[p.id] ? race.legState.cars[p.id].turn : null;
@@ -1049,17 +1051,44 @@ function driftAsteroids(race) {
   (race.asteroids || []).forEach(a => driftOne(race, geom, course, a));
 }
 const ASTEROID_DESIGNS = ["a", "b", "c", "d"];
-// Four distinct irregular-rock outlines (small point sets around a radius-11
-// origin), so asteroids read as rocks, not circles (per the user's request).
+// Builds a jagged N-point rock outline (radii alternating far/near, plus a
+// little per-point jitter) around the origin, so it reads as a crinkly rock
+// silhouette rather than a smooth polygon.
+function buildRockShape(n, farR, nearR, phaseDeg, jitter) {
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const angle = (phaseDeg + k * (360 / n)) * Math.PI / 180;
+    const r = (k % 2 === 0 ? farR : nearR) + jitter[k % jitter.length];
+    pts.push([+(r * Math.cos(angle)).toFixed(1), +(r * Math.sin(angle)).toFixed(1)]);
+  }
+  return pts;
+}
+// Four distinct outlines, all sized to a ~10-11 unit max radius -- scaled
+// down to fit well inside a hex's inscribed circle when drawn (see the
+// `scale` passed into asteroidFacets, below).
 const ASTEROID_SHAPES = {
-  a: [[0, -11], [8, -7], [11, 2], [5, 10], [-6, 9], [-11, 1], [-7, -8]],
-  b: [[1, -10], [7, -10], [12, -1], [7, 9], [-3, 12], [-11, 4], [-9, -6]],
-  c: [[-2, -12], [8, -8], [11, 3], [2, 10], [-9, 11], [-12, -2], [-5, -10]],
-  d: [[2, -11], [10, -4], [9, 7], [0, 11], [-10, 6], [-11, -5], [-2, -10]],
+  a: buildRockShape(10, 10, 6.5, -90, [0, -0.6, 0.4, -0.3, 0.5, -0.4, 0.3, -0.5, 0.6, -0.3]),
+  b: buildRockShape(9, 9.5, 6, -70, [0.4, -0.5, 0.3, -0.4, 0.6, -0.3, 0.5, -0.6, 0.3]),
+  c: buildRockShape(11, 10.5, 6.8, -100, [-0.3, 0.5, -0.4, 0.3, -0.6, 0.4, -0.3, 0.5, -0.4, 0.3, -0.5]),
+  d: buildRockShape(8, 9, 6.2, -45, [0.5, -0.4, 0.3, -0.6, 0.4, -0.3, 0.5, -0.4]),
 };
-function asteroidPoints(design, cx, cy, scale) {
+const ASTEROID_TONES = ["#5c594f", "#716d60", "#847f6f", "#45433a"];
+// A faceted fill (fan-triangulated from an off-center point, each facet a
+// different gray) plus a crisp dark outline -- reads as a crinkly, lit rock
+// rather than a flat-filled blob.
+function asteroidFacets(design, cx, cy, scale) {
   const shape = ASTEROID_SHAPES[design] || ASTEROID_SHAPES.a;
-  return shape.map(([dx, dy]) => `${(cx + dx * scale).toFixed(1)},${(cy + dy * scale).toFixed(1)}`).join(" ");
+  const n = shape.length;
+  const avgX = shape.reduce((s, p) => s + p[0], 0) / n, avgY = shape.reduce((s, p) => s + p[1], 0) / n;
+  const center = [avgX * 0.3, avgY * 0.3 - 1.5];
+  const toPt = ([dx, dy]) => `${(cx + dx * scale).toFixed(1)},${(cy + dy * scale).toFixed(1)}`;
+  let facets = "";
+  for (let i = 0; i < n; i++) {
+    const pts = [center, shape[i], shape[(i + 1) % n]].map(toPt).join(" ");
+    facets += `<polygon class="asteroid-facet" fill="${ASTEROID_TONES[i % ASTEROID_TONES.length]}" points="${pts}"/>`;
+  }
+  const outline = shape.map(toPt).join(" ");
+  return `${facets}<polygon class="asteroid-outline" points="${outline}"/>`;
 }
 // At the start of each Leg, the number of active asteroids is set to match
 // the Leg's TN (see RULE_CHANGES.md 2026-10-08): extra ones fade out (kept
