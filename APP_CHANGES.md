@@ -15,6 +15,13 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Race Setup reorganized
+- Ships now list one per line, stacked and aligned on their checkboxes, instead of wrapping inline.
+- The NPC draft's die-roll buttons sit to the left of what they roll (name, then Aggression), the two rows stacked and aligned on the die column.
+- A new "Fill to N" button tops the NPC draft up to the course's lane count with randomly named/Aggression NPCs (it already accounts for selected Ships and existing NPCs, and is disabled once full).
+- A drafted NPC's remove control is now a small red X badge in the corner of its chip, instead of an inline "×" link after the name.
+- **Where:** `renderRaceSetup()`, `App.fillRandomNpcs()` in `app.js`; `.ship-pick-list` / `.npc-draft-grid` / `.npc-chip` in `style.css`.
+
 ### 2026-10-08 — Fix: a car destroyed by its own pre-movement Fumble could still move and attack
 - A Fumble Chart result that dealt enough HP damage to destroy the acting car itself (e.g. "Tier × N HP" on the movement-over-TN Control check, before the walk even starts) correctly marked it `out`, but the rest of that turn kept running anyway -- it could still be offered (hero) or auto-resolve (NPC) an attack against another racer. A wreck now gets no further movement or attack for the rest of that turn.
 - **Where:** `walkTurn()` in `app.js`.

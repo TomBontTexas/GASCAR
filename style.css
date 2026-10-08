@@ -209,6 +209,20 @@ details { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8
 details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding: 4px 0; }
 
 .chkline { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem; margin-right: 10px; }
+/* Race Setup: ships listed one per line, every row's checkbox at the same x. */
+.ship-pick-list { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+/* Race Setup: the die-roll button sits left of what it rolls, name above
+   Aggression, both rows' dice in the same column. */
+.npc-draft-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; margin-bottom: 8px; }
+.npc-draft-grid input[type="text"], .npc-draft-grid input:not([type]) { width: 100%; }
+/* A drafted NPC chip with its remove-X as a corner badge, cut out of the card background. */
+.npc-chip { position: relative; display: inline-block; background: #0d1526; border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; font-size: 0.78rem; color: var(--muted); margin: 8px 10px 0 0; }
+.npc-chip-x {
+  position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; line-height: 16px;
+  text-align: center; border-radius: 50%; background: var(--danger); color: #fff; font-size: 13px;
+  text-decoration: none; border: 2px solid var(--panel);
+}
+.npc-chip-x:hover { background: #ff6b66; }
 /* Per-crewman condition checkboxes (Phase I) wrap within the table cell. */
 .condgrid { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .condgrid .chkline { margin-right: 0; }
