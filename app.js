@@ -995,20 +995,27 @@ function wreckDriftOptions(race, p, geom, course, cur) {
 // Derelict wrecks drift forward 1-2 hexes every Leg, simulating loose
 // wreckage (see RULE_CHANGES.md 2026-10-08) -- one hex at a time, each hex a
 // random pick among the three hexes ahead of it, landing only on an open,
-// in-bounds hex. Boxed in on all three sides, it simply stays put.
+// in-bounds hex. Boxed in on all three sides, it simply stays put. Each
+// wreck's drift is recorded into its own history, in the same shape a live
+// turn uses, so Show Last Leg / Show Entire Race animate the drift too.
 function driftWrecks(race) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
   race.participants.forEach(p => {
     if (!p.out) return;
     const dist = rollD(2); // 1 or 2 hexes
+    const path = [];
     for (let i = 0; i < dist; i++) {
       const opts = wreckDriftOptions(race, p, geom, course, { laneIdx0: p.lane - 1, hexPos: p.hexPos });
       if (!opts.length) break;
       const dest = opts[rollD(opts.length) - 1];
       p.lane = dest.laneIdx0 + 1;
       p.hexPos = dest.hexPos;
+      path.push({ lane: p.lane, hexPos: p.hexPos });
     }
+    race.turnSeq = (race.turnSeq || 0) + 1;
+    p.history = p.history || [];
+    p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: path.length, path, lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: 0, gear: p.gear, drift: true });
   });
 }
 function initLegState(race) {

@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Wrecks' drift is tracked for replay
+- A drifting wreck's movement each Leg is now recorded into its own history, the same shape a live turn's movement is, so Show Last Leg / Show Entire Race animate it drifting instead of jumping straight to its final spot.
+- **Where:** `driftWrecks()` in `app.js`.
+
 ### 2026-10-08 — Race Setup: NPC Ship Class picker, budget notes, alignment fixes
 - **Fix:** "Fill to N" silently did nothing unless the Racecourse dropdown had actually been touched -- `STATE._raceSetupCourse` was only ever read, never set from the page's own fallback course, so `App.fillRandomNpcs()` found no course and quietly returned. Opening Race Setup now persists the course it's actually showing.
 - Each listed ship now shows its Ship Class's construction-point budget note next to it: "spent/budget", or "Illegal spent/budget" in red if it's over.
