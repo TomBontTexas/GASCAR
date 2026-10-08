@@ -15,6 +15,15 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Race Setup: NPC Ship Class picker, budget notes, alignment fixes
+- **Fix:** "Fill to N" silently did nothing unless the Racecourse dropdown had actually been touched -- `STATE._raceSetupCourse` was only ever read, never set from the page's own fallback course, so `App.fillRandomNpcs()` found no course and quietly returned. Opening Race Setup now persists the course it's actually showing.
+- Each listed ship now shows its Ship Class's construction-point budget note next to it: "spent/budget", or "Illegal spent/budget" in red if it's over.
+- NPC drafting gets a Ship Class dropdown (every Class in the course's Division, each with the same budget note) with its own Random button, stacked under Aggression and aligned with the other die buttons. Picking a Class builds that NPC from the Class's own stats instead of copying a random ship or auto-building; leaving it on "(auto-built)" keeps the old behavior.
+- Drafted NPCs now list one per line (Name, Ship Class, Aggression) instead of wrapping as inline tags.
+- Removed "race-legal only" from the Ships list label.
+- **Fix:** in the Racecourse design form, the Inner Lane Hexes/Laps to Finish spinners, the Damage checkbox, and the Leg Modifier dropdown now line up on the same left edge -- the longest label (`Inner Lane Hexes (approx.)`) was pushing its own row's control further right than the shorter-labeled rows.
+- **Where:** `renderRaceSetup()`, `renderCourse()`, `App.fillRandomNpcs()` / `randomizeDraftNpcClass()` / `addDraftNpc()`, `npcStatsFromClass()`, `classBudgetNote()` in `app.js`; `.formrow > label:first-child`, `.npc-list` / `.npc-row`, `.budget-note` in `style.css`.
+
 ### 2026-10-08 — Race Setup reorganized
 - Ships now list one per line, stacked and aligned on their checkboxes, instead of wrapping inline.
 - The NPC draft's die-roll buttons sit to the left of what they roll (name, then Aggression), the two rows stacked and aligned on the die column.

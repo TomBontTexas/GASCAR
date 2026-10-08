@@ -237,6 +237,13 @@ function classBuildPointsSpent(cls) {
   return SHIP_STATS.reduce((sum, stat) => sum + mkCumulativeCost(shipStatLevel(cls, stat)), 0);
 }
 function classBuildPointsRemaining(cls) { return divisionBuildPoints(cls.division) - classBuildPointsSpent(cls); }
+// A compact budget-compliance note for a Ship Class, shown wherever a Class
+// is picked outside the Shipyard (Race Setup, NPC drafting) so an over-budget
+// Class doesn't quietly slip into a race: "39/40", or "Illegal 41/40" over budget.
+function classBudgetNote(cls) {
+  const spent = classBuildPointsSpent(cls), budget = divisionBuildPoints(cls.division);
+  return spent > budget ? `Illegal ${spent}/${budget}` : `${spent}/${budget}`;
+}
 function freshClassStats() {
   const out = {};
   SHIP_STATS.forEach(stat => { out[stat] = shipStatBase(stat); });
@@ -820,6 +827,16 @@ function npcStatsFromDivision(division) {
   const pick = pool[Math.floor(Math.random() * pool.length)];
   return { ...carStats({ type: "hero", shipId: pick.id }) };
 }
+// An NPC drafted from a specific Ship Class (Race Setup's NPC Class picker):
+// the Class's own stats directly, no sponsor adjustment, Pilot/Gunner at the
+// crew baseline (an NPC has no assigned crewman).
+function npcStatsFromClass(cls) {
+  const out = {};
+  SHIP_STATS.forEach(s => { out[s] = cls[s] || 0; });
+  out.crewPilot = GDATA.CREWMAN_BASE;
+  out.crewGunner = GDATA.CREWMAN_BASE;
+  return out;
+}
 // An NPC icon no class or ship in the Division uses, and no other racer in
 // this race has. Class numbers are preferred to be left alone, since every
 // ship built from a class shares its number.
@@ -1046,7 +1063,8 @@ function startRace(courseId, shipIds, npcs) {
   npcs.forEach(n => {
     const pick = pickNpcIcon(course.division, usedIcons);
     if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
-    const stats = n.stats || npcStatsFromDivision(course.division);
+    const npcClass = n.classId ? getShipClass(n.classId) : null;
+    const stats = n.stats || (npcClass ? npcStatsFromClass(npcClass) : npcStatsFromDivision(course.division));
     participants.push({
       id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
@@ -1871,6 +1889,7 @@ function renderRaceSetup() {
   if (!STATE.courses.length) { html += `<p class="muted">Create a racecourse first (Racecourse tab).</p></section>`; return html; }
   let courseId = STATE._raceSetupCourse;
   if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses[0].id;
+  STATE._raceSetupCourse = courseId; // keep in sync with what's displayed -- App.fillRandomNpcs() etc. read it directly
   const course = getCourse(courseId);
   const division = course.division;
   STATE._raceSetupShips = STATE._raceSetupShips || [];
@@ -1879,25 +1898,34 @@ function renderRaceSetup() {
   </select></div>`;
   html += `<p class="muted">${course.lanes} lanes, inner lane ~${course.innerHexes} hexes around, ${course.laps} laps to finish. Ships are assigned a starting lane automatically; may Slip a lane during the race.</p>`;
   const eligible = STATE.ships.filter(s => { const cls = getShipClass(s.classId); return cls && cls.division === division && getCrewman(s.crewmanId); });
-  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division, race-legal only)</span></label><div>
-    ${eligible.length ? `<div class="ship-pick-list">${eligible.map(s => `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)}</label>`).join("")}</div>`
+  html += `<div class="formrow" style="align-items:flex-start"><label>Ships <span class="muted">(${division} Division)</span></label><div>
+    ${eligible.length ? `<div class="ship-pick-list">${eligible.map(s => { const cls = getShipClass(s.classId); const note = classBudgetNote(cls); return `<label class="chkline"><input type="checkbox" value="${s.id}" ${STATE._raceSetupShips.includes(s.id) ? "checked" : ""} onchange="App.toggleRaceShip('${s.id}',this.checked)"> ${iconThumbImg(s)} ${esc(s.name)} <span class="muted budget-note${note.startsWith("Illegal") ? " danger-text" : ""}">${note}</span></label>`; }).join("")}</div>`
       : `<span class="muted">No ${division} Division ships ready yet — build a ${division} Ship Class in the Shipyard, then assemble a Ship with an assigned Crewman in the Hangar Bay.</span>`}
   </div></div>`;
   const draftNpcs = STATE._draftNpcs || [];
   const room = Math.max(0, course.lanes - STATE._raceSetupShips.length - draftNpcs.length);
+  const divisionClasses = STATE.shipClasses.filter(c => c.division === division);
   html += `<div class="formrow" style="align-items:flex-start"><label>NPC Racers</label><div>
     <div class="npc-draft-grid">
       <button class="ghost" title="Random ship name" onclick="App.rollNpcName()">🎲</button>
       <input id="npcName" placeholder="NPC name">
       <button class="ghost" title="Randomize Aggression" onclick="App.randomizeDraftNpcAggression()">🎲</button>
       <label>Aggression ${numStepper(`<input id="npcAggression" type="number" min="1" max="10" value="${STATE._draftNpcAggression || 5}" style="width:48px">`)}</label>
+      <button class="ghost" title="Randomize Ship Class" ${divisionClasses.length ? "" : "disabled"} onclick="App.randomizeDraftNpcClass()">🎲</button>
+      <select id="npcClass" title="Which Ship Class this NPC is built from">
+        <option value="">(auto-built, no specific Class)</option>
+        ${divisionClasses.map(c => `<option value="${c.id}">${esc(c.name)} (${classBudgetNote(c)})</option>`).join("")}
+      </select>
     </div>
     <div class="row">
       <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
       <button class="ghost" ${room ? "" : "disabled"} onclick="App.fillRandomNpcs()">🎲 Fill to ${course.lanes}${room ? ` (+${room})` : ""}</button>
     </div>
-    <p class="muted" style="margin:0 0 6px">NPCs are copies of your ships in this Division, drawn at random (with only one ship, every NPC matches it). Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
-    <div id="npcList">${draftNpcs.map((n, i) => `<span class="npc-chip">${esc(n.name)} <span class="muted">(Aggr ${n.aggression})</span><a href="#" class="npc-chip-x" title="Remove" onclick="App.removeDraftNpc(${i});return false;">×</a></span>`).join("")}</div>
+    <p class="muted" style="margin:0 0 6px">An NPC can be built from a specific Ship Class in this Division (its stats, not your sponsor adjustments), or left auto-built. Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
+    <div id="npcList" class="npc-list">${draftNpcs.map((n, i) => { const cls = n.classId ? getShipClass(n.classId) : null; return `<div class="npc-row">
+      <a href="#" class="npc-chip-x" title="Remove" onclick="App.removeDraftNpc(${i});return false;">×</a>
+      <b>${esc(n.name)}</b> <span class="muted">${cls ? esc(cls.name) : "(auto-built)"}</span> <span class="muted">Aggr ${n.aggression}</span>
+    </div>`; }).join("")}</div>
   </div></div>`;
   html += `<button onclick="App.beginRace()">Start Race</button></section>`;
   return html;
@@ -2475,13 +2503,20 @@ const App = {
 
   /* Race setup */
   rollNpcName() { document.getElementById("npcName").value = rollShipName(); },
+  randomizeDraftNpcClass() {
+    const course = getCourse(STATE._raceSetupCourse);
+    const classes = course ? STATE.shipClasses.filter(c => c.division === course.division) : [];
+    const sel = document.getElementById("npcClass");
+    sel.value = classes.length ? classes[rollD(classes.length) - 1].id : "";
+  },
   addDraftNpc() {
     const input = document.getElementById("npcName");
     const v = input.value.trim();
     if (!v) return;
     const aggression = clampInt(document.getElementById("npcAggression").value, 1, 10, 5);
+    const classId = document.getElementById("npcClass").value || null;
     STATE._draftNpcs = STATE._draftNpcs || [];
-    STATE._draftNpcs.push({ name: v, aggression });
+    STATE._draftNpcs.push({ name: v, aggression, classId });
     STATE._draftNpcAggression = aggression;
     input.value = "";
     render();
@@ -2489,13 +2524,18 @@ const App = {
   randomizeDraftNpcAggression() { document.getElementById("npcAggression").value = rollD(10); },
   removeDraftNpc(i) { STATE._draftNpcs.splice(i, 1); render(); },
   // Tops the draft up to the course's lane count (selected Ships count against
-  // the same cap, see RULE_CHANGES.md 2026-10-08) with randomly named/aggression NPCs.
+  // the same cap, see RULE_CHANGES.md 2026-10-08) with randomly named/aggression/
+  // Ship Class NPCs (auto-built if the Division has no Ship Classes yet).
   fillRandomNpcs() {
     const course = getCourse(STATE._raceSetupCourse);
     if (!course) return;
+    const classes = STATE.shipClasses.filter(c => c.division === course.division);
     STATE._draftNpcs = STATE._draftNpcs || [];
     const room = course.lanes - (STATE._raceSetupShips || []).length - STATE._draftNpcs.length;
-    for (let i = 0; i < room; i++) STATE._draftNpcs.push({ name: rollShipName(), aggression: rollD(10) });
+    for (let i = 0; i < room; i++) {
+      const classId = classes.length ? classes[rollD(classes.length) - 1].id : null;
+      STATE._draftNpcs.push({ name: rollShipName(), aggression: rollD(10), classId });
+    }
     saveState(); render();
   },
   setRaceSetupCourse(id) {

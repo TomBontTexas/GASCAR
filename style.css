@@ -130,7 +130,7 @@ footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 2
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .row.spread { justify-content: space-between; }
 .formrow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.formrow label { min-width: 130px; color: var(--muted); }
+.formrow > label:first-child { width: 190px; flex: 0 0 auto; color: var(--muted); }
 
 input, select, button {
   background: #0d1526; color: var(--text); border: 1px solid var(--border);
@@ -215,14 +215,17 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
    Aggression, both rows' dice in the same column. */
 .npc-draft-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; margin-bottom: 8px; }
 .npc-draft-grid input[type="text"], .npc-draft-grid input:not([type]) { width: 100%; }
-/* A drafted NPC chip with its remove-X as a corner badge, cut out of the card background. */
-.npc-chip { position: relative; display: inline-block; background: #0d1526; border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; font-size: 0.78rem; color: var(--muted); margin: 8px 10px 0 0; }
+/* Race Setup: drafted NPCs stacked one per line (Name, Ship Class, Aggression),
+   each with its remove-X as a corner badge cut out of the card background. */
+.npc-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.npc-row { position: relative; background: #0d1526; border: 1px solid var(--border); border-radius: 8px; padding: 6px 28px 6px 10px; font-size: 0.85rem; }
 .npc-chip-x {
   position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; line-height: 16px;
   text-align: center; border-radius: 50%; background: var(--danger); color: #fff; font-size: 13px;
   text-decoration: none; border: 2px solid var(--panel);
 }
 .npc-chip-x:hover { background: #ff6b66; }
+.budget-note { font-size: 0.78rem; }
 /* Per-crewman condition checkboxes (Phase I) wrap within the table cell. */
 .condgrid { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .condgrid .chkline { margin-right: 0; }
