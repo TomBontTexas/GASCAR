@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-10 — Fix: a ship could end its turn stacked on another ship's hex
+- **Bug:** the "ends on an occupied hex -> drifts to an open hex beside it, or Fumbles if boxed in" correction only ran when a turn finished normally. A ship that successfully Control-checks past a live racer (landing on its hex mid-walk, same as always) and then immediately hard-stops one hex later -- on an asteroid, or a failed check against something else -- ended its turn exactly on that racer's hex with nothing to nudge it off, since a hard stop skipped the correction entirely. Three ships piled up this way across consecutive Legs of asteroid stops in one submitted race file. This is also the likely cause of an earlier-reported rare live-racer-vs-live-racer collision this same session that was left as an unexplained edge case at the time.
+- **Current value:** the "ends on an occupied hex" correction now runs regardless of how the turn ended, hard stop or not.
+- **Where:** `walkTurn()` in `app.js`.
+
 ### 2026-10-10 — NPC movement reworked: maximum-distance pathing, with Aggression only deciding genuine tradeoffs
 - **Earlier value:** an NPC always leaned toward the inside lane whenever a Slip would pay for itself over the laps remaining, regardless of what that Slip cost it in real movement this Leg -- sometimes trading away distance it didn't need to.
 - **Current value:** an NPC's hex-by-hex movement now works in layers:

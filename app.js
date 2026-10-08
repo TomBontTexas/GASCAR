@@ -1787,8 +1787,14 @@ function walkTurn(race, p) {
     applyEncounter(race, p, npcStepPick(race, p, car, stats, t, opts, huntTarget, legAgg), opts);
   }
   // A walk that ends on another ship's hex drifts to an open hex beside it
-  // (free), or rolls the Fumble Chart if every hex beside it is blocked.
-  if (!t.halt && !t.finished && occupantAt(race, t.cur.laneIdx0 + 1, t.cur.hexPos, p.id)) {
+  // (free), or rolls the Fumble Chart if every hex beside it is blocked. This
+  // must also run when the turn ended via a hard stop (t.halt), not just a
+  // normal finish -- a ship can successfully Control-check past a live racer
+  // (landing on its hex mid-walk, same as always), then immediately hard-stop
+  // one hex later on an asteroid or a failed check, leaving it stuck exactly
+  // on that racer's hex with nothing to nudge it off (see RULE_CHANGES.md
+  // 2026-10-10: two ships piled up this way after a Leg of asteroid stops).
+  if (!t.finished && occupantAt(race, t.cur.laneIdx0 + 1, t.cur.hexPos, p.id)) {
     const open = openHexBeside(race, geom, t.cur.laneIdx0, t.cur.hexPos, p.id);
     if (open) {
       t.log.push("Ends on an occupied hex: drifts to an open hex beside it (free).");
