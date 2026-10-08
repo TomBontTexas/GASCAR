@@ -637,6 +637,17 @@ function renderCircularTrackSvg(race, course) {
     const [p1, p2] = hexFrontEdge(geom, hex, next);
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
+  // Asteroids: rock shapes (no ring, unlike wrecks), spinning in place, that
+  // fade in/out as the Leg's TN changes their count (RULE_CHANGES.md 2026-10-08).
+  (race.asteroids || []).concat(race._asteroidsFadingOut || []).forEach(a => {
+    const hex = geom.laneHexLists[a.lane - 1][a.hexPos];
+    const { x, y } = hexToPixel(geom, hex.q, hex.r);
+    const pts = asteroidPoints(a.design, x, y, geom.hexSize / 11);
+    const fadeCls = a.isNew ? " asteroid-fade-in" : ((race._asteroidsFadingOut || []).includes(a) ? " asteroid-fade-out" : "");
+    svg += `<g class="asteroid${fadeCls}">
+      <polygon class="asteroid-rock" style="animation-duration:${a.spinDur.toFixed(2)}s;animation-direction:${a.spinDir}" points="${pts}"/>
+    </g>`;
+  });
   const turnOf = p => race.legState && race.legState.cars[p.id] ? race.legState.cars[p.id].turn : null;
   // Highlighted in green only while the Take Turn button is showing (no turn
   // started yet) -- not once it's walking the move or waiting on an attack.
@@ -943,8 +954,14 @@ function legNaturalTN(leg) {
    Gunner attack. Hex geometry is the same proven track engine as before
    (resolveSlipPath, circTrackGeometry, etc.). */
 function occupantAt(race, lane, hexPos, exceptId) {
-  return race.participants.find(x => x.id !== exceptId && x.lane === lane && x.hexPos === hexPos) || null;
+  const p = race.participants.find(x => x.id !== exceptId && x.lane === lane && x.hexPos === hexPos);
+  if (p) return p;
+  return (race.asteroids || []).find(a => a.id !== exceptId && a.lane === lane && a.hexPos === hexPos) || null;
 }
+// True for anything a ship can never pass through, Control check or not --
+// a wreck or an asteroid (see RULE_CHANGES.md 2026-10-08). A live racer can
+// still be overtaken with a successful Control check.
+function isHardObstacle(occ) { return !!occ && (occ.out || occ.kind === "asteroid"); }
 // Initiative: lowest effective Thrust acts first; equal Thrust ties are
 // broken by 1D20, lowest first, re-rolled until every tied car is separated.
 function initiativeOrder(list) {
@@ -992,10 +1009,25 @@ function wreckDriftOptions(race, p, geom, course, cur) {
   });
   return opts;
 }
-// Derelict wrecks drift forward 1-2 hexes every Leg, simulating loose
-// wreckage (see RULE_CHANGES.md 2026-10-08) -- one hex at a time, each hex a
-// random pick among the three hexes ahead of it, landing only on an open,
-// in-bounds hex. Boxed in on all three sides, it simply stays put. Each
+// Drifts `obj` (anything with a .id/.lane/.hexPos, 1-based lane) forward 1-2
+// hexes, one hex at a time, each hex a random pick among the three hexes
+// ahead of it, landing only on an open, in-bounds hex. Boxed in on all three
+// sides, it simply stays put. Shared by wrecks and asteroids (see
+// RULE_CHANGES.md 2026-10-08: asteroids drift the same way wrecks do).
+function driftOne(race, geom, course, obj) {
+  const dist = rollD(2); // 1 or 2 hexes
+  const path = [];
+  for (let i = 0; i < dist; i++) {
+    const opts = wreckDriftOptions(race, obj, geom, course, { laneIdx0: obj.lane - 1, hexPos: obj.hexPos });
+    if (!opts.length) break;
+    const dest = opts[rollD(opts.length) - 1];
+    obj.lane = dest.laneIdx0 + 1;
+    obj.hexPos = dest.hexPos;
+    path.push({ lane: obj.lane, hexPos: obj.hexPos });
+  }
+  return path;
+}
+// Derelict wrecks drift every Leg (see RULE_CHANGES.md 2026-10-08). Each
 // wreck's drift is recorded into its own history, in the same shape a live
 // turn uses, so Show Last Leg / Show Entire Race animate the drift too.
 function driftWrecks(race) {
@@ -1003,20 +1035,71 @@ function driftWrecks(race) {
   const geom = circTrackGeometry(course);
   race.participants.forEach(p => {
     if (!p.out) return;
-    const dist = rollD(2); // 1 or 2 hexes
-    const path = [];
-    for (let i = 0; i < dist; i++) {
-      const opts = wreckDriftOptions(race, p, geom, course, { laneIdx0: p.lane - 1, hexPos: p.hexPos });
-      if (!opts.length) break;
-      const dest = opts[rollD(opts.length) - 1];
-      p.lane = dest.laneIdx0 + 1;
-      p.hexPos = dest.hexPos;
-      path.push({ lane: p.lane, hexPos: p.hexPos });
-    }
+    const path = driftOne(race, geom, course, p);
     race.turnSeq = (race.turnSeq || 0) + 1;
     p.history = p.history || [];
     p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: path.length, path, lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: 0, gear: p.gear, drift: true });
   });
+}
+// Asteroids drift the same way wrecks do (see RULE_CHANGES.md 2026-10-08).
+// Unlike wrecks they don't lap or belong to a racer's log, so no history entry.
+function driftAsteroids(race) {
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  (race.asteroids || []).forEach(a => driftOne(race, geom, course, a));
+}
+const ASTEROID_DESIGNS = ["a", "b", "c", "d"];
+// Four distinct irregular-rock outlines (small point sets around a radius-11
+// origin), so asteroids read as rocks, not circles (per the user's request).
+const ASTEROID_SHAPES = {
+  a: [[0, -11], [8, -7], [11, 2], [5, 10], [-6, 9], [-11, 1], [-7, -8]],
+  b: [[1, -10], [7, -10], [12, -1], [7, 9], [-3, 12], [-11, 4], [-9, -6]],
+  c: [[-2, -12], [8, -8], [11, 3], [2, 10], [-9, 11], [-12, -2], [-5, -10]],
+  d: [[2, -11], [10, -4], [9, 7], [0, 11], [-10, 6], [-11, -5], [-2, -10]],
+};
+function asteroidPoints(design, cx, cy, scale) {
+  const shape = ASTEROID_SHAPES[design] || ASTEROID_SHAPES.a;
+  return shape.map(([dx, dy]) => `${(cx + dx * scale).toFixed(1)},${(cy + dy * scale).toFixed(1)}`).join(" ");
+}
+// At the start of each Leg, the number of active asteroids is set to match
+// the Leg's TN (see RULE_CHANGES.md 2026-10-08): extra ones fade out (kept
+// one Leg in `_asteroidsFadingOut` so the renderer can animate the fade),
+// and new ones fade in at random open hexes, marked `isNew` for the same reason.
+function manageAsteroids(race) {
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  // A race saved before this feature existed won't have this field yet.
+  race.asteroids = race.asteroids || [];
+  race.asteroids.forEach(a => { a.isNew = false; });
+  race._asteroidsFadingOut = [];
+  const target = race.legState.leg.finalTN;
+  let diff = target - race.asteroids.length;
+  if (diff < 0) {
+    const removed = [];
+    while (diff < 0 && race.asteroids.length) {
+      removed.push(race.asteroids.splice(rollD(race.asteroids.length) - 1, 1)[0]);
+      diff++;
+    }
+    race._asteroidsFadingOut = removed;
+  } else if (diff > 0) {
+    const open = [];
+    for (let lane0 = 0; lane0 < course.lanes; lane0++) {
+      const circ = geom.laneHexLists[lane0].length;
+      for (let hexPos = 0; hexPos < circ; hexPos++) {
+        if (!occupantAt(race, lane0 + 1, hexPos, null)) open.push({ lane: lane0 + 1, hexPos });
+      }
+    }
+    for (let i = 0; i < diff && open.length; i++) {
+      const spot = open.splice(rollD(open.length) - 1, 1)[0];
+      race.asteroids.push({
+        id: uid("ast"), kind: "asteroid", lane: spot.lane, hexPos: spot.hexPos,
+        design: ASTEROID_DESIGNS[rollD(ASTEROID_DESIGNS.length) - 1], isNew: true,
+        // Cosmetic only (spin speed/direction) -- Math.random() rather than
+        // rollD so it never shifts any dice-stubbed test's roll sequence.
+        spinDur: 2.5 + Math.random() * 2, spinDir: Math.random() < 0.5 ? "normal" : "reverse"
+      });
+    }
+  }
 }
 function initLegState(race) {
   const course = getCourse(race.courseId);
@@ -1040,6 +1123,8 @@ function initLegState(race) {
   race.legState = { leg, cars, complete: false, order };
   STATE._openDeclFor = null;
   driftWrecks(race);
+  driftAsteroids(race);
+  manageAsteroids(race);
 }
 function nextTurnParticipant(race) {
   const ls = race.legState;
@@ -1091,7 +1176,7 @@ function startRace(courseId, shipIds, npcs) {
     p.startLane = p.lane;
     p.startHexPos = p.hexPos;
   });
-  const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [] };
+  const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [], asteroids: [], _asteroidsFadingOut: [] };
   // Lanes and turn order both come from the same initiative order.
   race.initiative = startOrder.map(p => p.id);
   initLegState(race);
@@ -1331,8 +1416,11 @@ function moveWalkTo(t, dest, geom, course) {
 function encounterOptions(race, p, car, cur, R, geom, course) {
   const circ = geom.laneHexLists[cur.laneIdx0].length;
   const ahead = { laneIdx0: cur.laneIdx0, hexPos: (cur.hexPos + 1) % circ };
-  const aheadOccupied = !!occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-  const opts = [{ id: "straight", label: aheadOccupied ? "Straight ahead (Control check to pass)" : "Straight ahead", dest: ahead }];
+  const aheadOcc = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+  const aheadLabel = isHardObstacle(aheadOcc)
+    ? `Straight ahead (blocked by ${aheadOcc.kind === "asteroid" ? "an asteroid" : "a wreck"})`
+    : (aheadOcc ? "Straight ahead (Control check to pass)" : "Straight ahead");
+  const opts = [{ id: "straight", label: aheadLabel, dest: ahead }];
   const cost = car.slipsThisLeg + 1;
   if (cost > R) return opts;
   const sn = geom.slipNeighbors[cur.laneIdx0][cur.hexPos];
@@ -1356,12 +1444,12 @@ function applyEncounter(race, p, id, opts) {
   if (!opt) return;
   if (id === "straight") {
     const occ = occupantAt(race, opt.dest.laneIdx0 + 1, opt.dest.hexPos, p.id);
-    if (occ && occ.out) {
-      // A wreck can't be argued past with a Control check the way a live
-      // racer can be overtaken -- it's a dead stop, every time (see
-      // RULE_CHANGES.md 2026-10-08: other ships must navigate around a wreck).
+    if (isHardObstacle(occ)) {
+      // A wreck or an asteroid can't be argued past with a Control check the
+      // way a live racer can be overtaken -- it's a dead stop, every time (see
+      // RULE_CHANGES.md 2026-10-08: other ships must navigate around a wreck or asteroid).
       p.gear = Math.max(0, p.gear - 1);
-      t.log.push(`Stops short of the wreck; drops to Gear ${p.gear}.`);
+      t.log.push(`Stops short of the ${occ.kind === "asteroid" ? "asteroid field" : "wreck"}; drops to Gear ${p.gear}.`);
       t.halt = true;
       return;
     }
@@ -1459,7 +1547,7 @@ function walkTurn(race, p) {
       const circ = geom.laneHexLists[t.cur.laneIdx0].length;
       const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
       const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-      t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null };
+      t.choice = { options: opts.map(o => ({ id: o.id, label: o.label, cost: o.cost, dest: o.dest })), occupantId: occ ? occ.id : null, occupantHard: occ ? isHardObstacle(occ) : false };
       return "paused";
     }
     if (targets.length && rollD(20) <= (p.aggression || 5)) {
@@ -2157,7 +2245,7 @@ function renderMovePrompt(race, p, t) {
   const rollLine = `Move=[${t.rolled.join("+")}]+[T${t.thrustAtRoll}] = ${t.intended}`;
   const fumbleLine = t.log.filter(l => l.startsWith("Fumble chart")).join("; ");
   const stats = carStats(p);
-  const toPass = t.choice.occupantId
+  const toPass = (t.choice.occupantId && !t.choice.occupantHard)
     ? `<div class="hub-gap"></div>
     <div class="hub-line">To Pass</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${t.net ? netLabel(t.net) : ""} vs. TN (${t.tn})</div>
@@ -2261,10 +2349,11 @@ function renderInstructions() {
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
-      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. A wreck is a hard stop instead -- no check, no passing through it. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
+      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. A wreck or an asteroid is a hard stop instead -- no check, no passing through it. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
       <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
+    <p>The track also scatters drifting asteroids among the lanes, shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. At the start of every Leg the number of active asteroids is set to match that Leg's TN -- extras fade out, or more fade in at random open hexes -- and they drift 1-2 hexes forward the same way a wreck does. Like a wreck, an asteroid is a hard stop: no check, no passing through it.</p>
 
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 

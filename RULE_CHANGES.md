@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-08 — Asteroids
+- **New:** the Circular Track now scatters drifting asteroids among the lanes. At the start of the race, none sit on a ship's starting hex. At the start of every Leg, the number of active asteroids is set to match that Leg's TN -- if the new TN is lower, that many fade out at random; if it's higher, that many more fade in at random open hexes. They then drift 1-2 hexes (same rule as wrecks: random among the three hexes ahead -- straight, or a forward diagonal into the next lane in or out -- never past the track edge or onto an occupied hex).
+- **Current value:** an asteroid is a hard stop, exactly like a wreck -- no Control check, no passing through it, ever. On the track they render as spinning rock shapes with no ring around them (unlike the wreck's red ring).
+- **Where:** `manageAsteroids()` / `driftAsteroids()` / `driftOne()` / `isHardObstacle()`, called from `initLegState()`, in `app.js`; `.asteroid-rock` / `.asteroid-fade-in` / `.asteroid-fade-out` in `style.css`.
+
 ### 2026-10-08 — Fix: a wreck could be Control-checked through like a live racer
 - **Bug:** entering an occupied hex straight-on rolls a Control check to pass through -- correct for overtaking a live racer, but it was also letting a ship pass through (and briefly share a hex with) a wreck, contradicting "other ships must navigate around" it.
 - **Current value:** a wreck is a hard stop -- no roll, no passing through it, every time. Passing a live racer is unchanged.

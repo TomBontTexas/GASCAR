@@ -361,6 +361,17 @@ details summary { cursor: pointer; color: var(--gold); font-weight: 600; padding
 .circracer-ring { fill: none; stroke: #2fbf71; stroke-width: 2.5; }
 .circracer-ring.wreck-ring { stroke: var(--danger); }
 
+.asteroid-rock {
+  fill: #6b6a62; stroke: #39372f; stroke-width: 0.8;
+  transform-box: fill-box; transform-origin: center;
+  animation-name: asteroid-spin; animation-timing-function: linear; animation-iteration-count: infinite;
+}
+@keyframes asteroid-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.asteroid.asteroid-fade-in { animation: asteroid-fadein 1.2s ease-out; }
+.asteroid.asteroid-fade-out { animation: asteroid-fadeout 1.2s ease-in forwards; }
+@keyframes asteroid-fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes asteroid-fadeout { from { opacity: 1; } to { opacity: 0; } }
+
 .winner { border-color: var(--gold); box-shadow: 0 0 20px rgba(245,197,24,0.15); }
 .finallist { font-size: 1.05rem; line-height: 1.9; }
 
