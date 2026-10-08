@@ -17,6 +17,16 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-10 — NPC movement reworked: maximum-distance pathing, with Aggression only deciding genuine tradeoffs
+- **Earlier value:** an NPC always leaned toward the inside lane whenever a Slip would pay for itself over the laps remaining, regardless of what that Slip cost it in real movement this Leg -- sometimes trading away distance it didn't need to.
+- **Current value:** an NPC's hex-by-hex movement now works in layers:
+  1. **The free inward Slip.** The 1st Slip of a Leg costs exactly what a straight hex costs (1 movement point for 1 hex of forward progress either way) -- so it's not a tradeoff. An NPC takes it once per Leg, toward the inside lane, whenever it's available. A 2nd+ voluntary Slip in the same Leg would cost real distance and isn't taken unless forced.
+  2. **An asteroid ahead** is still an unconditional hard stop -- no check exists to gamble on, so the NPC always detours around it via Slip when a route exists.
+  3. **A wreck or live racer ahead** is a real gamble: a failed Control check halts the whole remaining Leg, not just that one hex, so the NPC weighs the check's actual success chance (computed from its real Control+Pilot vs. this Leg's TN and its current Advantage/Disadvantage) against the guaranteed distance a Slip detour offers. The break-even success chance is `1 − (detour cost − 1) / movement remaining` -- a detour that costs no more than going straight needs a guaranteed success to beat it; a pricier detour lowers the bar. Aggression biases that line: a reckless NPC (Aggression 10) accepts noticeably worse odds, a cautious one (Aggression 1) demands noticeably better.
+  4. **Choosing a detour direction** (when both inward and outward are open and a choice is needed) leans toward a hunt target's lane if one's active (see below), otherwise the same Leg-Aggression-scaled ratio the old pre-Circus-Astralis rules used: `margin / Leg Aggression ≥ 0.5` leans inward, otherwise outward.
+  5. **Hunting.** An NPC occasionally detours toward a rival instead of (or in addition to) the free inward Slip -- but only when it's both reckless AND comfortably placed: `HuntScore = round(Aggression × (racers − position) / (racers − 1))`, checked against a d10. This runs backwards from Leg Aggression on purpose -- a ship near the back is too busy closing the race gap itself to spare a detour, no matter how aggressive, while a comfortable leader with the personality for it will peel off to make trouble. The target is the nearest rival ahead of it in the standings.
+- **Where:** `controlCheckSuccessChance()`, `npcHuntTarget()`, `npcStepPick()`, called from `walkTurn()`, in `app.js`.
+
 ### 2026-10-09 — Fix: an asteroid could be placed right inside the starting formation
 - **Bug:** asteroid placement only avoided the exact hex a ship starts on. Since lanes are staggered only 1 hex apart (`STAGGER_PER_LANE`), a hex nobody was standing on could still land in the middle of the tightly-packed starting cluster, reading as "right there with the ships" even though it technically wasn't on top of one.
 - **Current value:** asteroid placement keeps clear of every lane's starting hex, plus a few extra hexes of buffer, across the whole track width -- not just hexes a ship happens to occupy.

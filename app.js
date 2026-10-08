@@ -844,6 +844,40 @@ function standingsPositions(race, course) {
 function legAggressionFor(p, positions) {
   return (p.aggression || 5) + ((positions[p.id] || 1) - 1);
 }
+// Chance a Control Task Check (score + net A/D vs tn) succeeds -- the exact
+// dice-pool math rollCheck() itself uses, computed up front instead of
+// rolled, so NPC pathing can weigh a gamble against a guaranteed detour (see
+// RULE_CHANGES.md 2026-10-10). `need` is the die result required; with
+// Advantage (net >= 0) the check keeps the BEST of (net+1) d20s, with
+// Disadvantage the WORST of (|net|+1).
+function controlCheckSuccessChance(score, net, tn) {
+  const need = tn - score;
+  if (need <= 1) return 1;
+  if (need >= 21) return 0;
+  const perDie = (21 - need) / 20;
+  const dice = Math.abs(net) + 1;
+  return net >= 0 ? 1 - Math.pow(1 - perDie, dice) : Math.pow(perDie, dice);
+}
+// Whether (and whom) an NPC hunts this Leg instead of just taking its free
+// inward lane shift (see RULE_CHANGES.md 2026-10-10). Needs both a reckless
+// personality AND a comfortable lead -- unlike Leg Aggression (which rises
+// the further BACK a car is), hunting runs backwards: a trailing car is too
+// busy closing the race gap itself to spare a detour, so HuntScore blends
+// Aggression with how far toward the front this car is, and a cautious
+// leader still won't bother without the Aggression to match.
+function npcHuntTarget(race, p, positions) {
+  const active = race.participants.filter(x => !x.out);
+  if (active.length < 2) return null;
+  const leadFactor = (active.length - positions[p.id]) / (active.length - 1);
+  const huntScore = Math.round((p.aggression || 5) * leadFactor);
+  if (rollD(10) > huntScore) return null;
+  // Target: the nearest rival ahead of it in the standings -- the one
+  // actually blocking its way forward.
+  const ahead = race.participants
+    .filter(x => x.id !== p.id && !x.out && positions[x.id] < positions[p.id])
+    .sort((a, b) => positions[b.id] - positions[a.id]);
+  return ahead[0] || null;
+}
 
 /* ============================== Icons ============================== */
 function shipIconPath(division, number, color) { return `${GDATA.SHIP_ICON_DIR}${division} ${number} ${color}.png`; }
@@ -1627,18 +1661,60 @@ function applySlip(race, p, opt) {
   moveWalkTo(t, opt.dest, geom, course);
 }
 
-// An NPC's step: slip around a racer ahead when it can (inward first). On an open
-// hex it slips inward only when the Slip costs fewer hexes than the lap distance
-// it saves over the laps left, so inner lanes are preferred at no cost to
-// the Leg's economy. Aggression doesn't change lane choice.
-function npcStepPick(geom, course, t, opts, blocked) {
+// An NPC's step at one hex (see RULE_CHANGES.md 2026-10-10):
+// - Open ahead: takes its one free inward Slip per Leg -- the 1st Slip of a
+//   Leg costs exactly what a straight hex does (1 movement point for 1 hex
+//   of forward progress either way), so it's not a tradeoff, just a standing
+//   lane-efficiency pick -- aimed at a hunt target's lane instead, when one's
+//   active this Leg.
+// - Blocked by an asteroid: always detours around it when a Slip is
+//   available -- no Control check exists to gamble on an asteroid.
+// - Blocked by a wreck or live racer: weighs the Control check's actual
+//   success chance against the real distance this Leg stands to lose if it
+//   fails (a failed check halts the WHOLE turn, not just this hex), biased
+//   by Aggression -- reckless cars accept worse odds, cautious ones demand
+//   better -- and only detours when the numbers favor it.
+// - Choosing between two viable detour directions leans toward a hunt
+//   target's lane when one's active, otherwise the same Leg-Aggression-
+//   scaled ratio the old pre-Circus-Astralis rules used for their Slip lean.
+function npcStepPick(race, p, car, stats, t, opts, huntTarget, legAgg) {
   const inward = opts.find(o => o.id === "left");
   const outward = opts.find(o => o.id === "right");
-  if (blocked) return (inward || outward || opts[0]).id;
-  if (!inward) return "straight";
-  const ringLen = lane => geom.laneHexLists[lane].length;
-  const saved = (ringLen(t.cur.laneIdx0) - ringLen(t.cur.laneIdx0 - 1)) * (course.laps - t.laps);
-  return inward.cost < saved ? "left" : "straight";
+  const ahead = opts.find(o => o.id === "straight").dest;
+  const occ = occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
+
+  const leanInward = () => {
+    if (huntTarget && huntTarget.lane !== p.lane) return huntTarget.lane < p.lane;
+    const roll = rollD(20);
+    return (legAgg - roll) / legAgg >= 0.5;
+  };
+
+  if (occ) {
+    const detour = inward && outward ? (leanInward() ? inward : outward) : (inward || outward);
+    if (isHardObstacle(occ)) return detour ? detour.id : "straight"; // an asteroid -- no check to gamble on
+    if (detour) {
+      const score = stats.control + stats.crewPilot;
+      const pSuccess = controlCheckSuccessChance(score, t.net, t.tn);
+      // Going straight risks the WHOLE remaining movement (a failed check
+      // halts the turn), while the detour guarantees (R - cost + 1) more
+      // hexes -- so the break-even success chance is 1 - (cost - 1) / R: a
+      // detour that costs no more than a straight hex (cost 1) needs a
+      // guaranteed success to beat it; a pricier detour lowers the bar.
+      const pureThreshold = Math.max(0, Math.min(1, 1 - (detour.cost - 1) / t.R));
+      const bias = ((p.aggression || 5) - 5.5) / 20; // reckless accepts worse odds, cautious demands better
+      const effectiveThreshold = Math.min(1, Math.max(0, pureThreshold - bias));
+      if (pSuccess < effectiveThreshold) return detour.id;
+    }
+    return "straight"; // the math favors the gamble, or there's nowhere else to go
+  }
+
+  if (car.slipsThisLeg === 0) {
+    let dir = null;
+    if (huntTarget && huntTarget.lane !== p.lane) dir = huntTarget.lane < p.lane ? inward : outward;
+    if (!dir) dir = inward;
+    if (dir) return dir.id;
+  }
+  return "straight";
 }
 // Whether the hero's remaining movement straight ahead passes no racer.
 function straightRunClear(race, p, t) {
@@ -1668,6 +1744,14 @@ function walkTurn(race, p) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
   const stats = carStats(p);
+  // An NPC's hunting target and Leg Aggression are fixed once for the whole
+  // turn, not re-rolled hex by hex (see RULE_CHANGES.md 2026-10-10).
+  let huntTarget = null, legAgg = 0;
+  if (p.type === "npc") {
+    const positions = standingsPositions(race, course);
+    legAgg = legAggressionFor(p, positions);
+    huntTarget = npcHuntTarget(race, p, positions);
+  }
   while (!t.finished && !t.halt) {
     // A car destroyed mid-turn (e.g. its own pre-movement Fumble) gets no
     // further movement or attack this turn -- it's a wreck, not a racer.
@@ -1700,10 +1784,7 @@ function walkTurn(race, p) {
     }
     if (t.R <= 0) break;
     const opts = encounterOptions(race, p, car, t.cur, t.R, geom, course);
-    const circ = geom.laneHexLists[t.cur.laneIdx0].length;
-    const ahead = { laneIdx0: t.cur.laneIdx0, hexPos: (t.cur.hexPos + 1) % circ };
-    const blocked = !!occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id);
-    applyEncounter(race, p, npcStepPick(geom, course, t, opts, blocked), opts);
+    applyEncounter(race, p, npcStepPick(race, p, car, stats, t, opts, huntTarget, legAgg), opts);
   }
   // A walk that ends on another ship's hex drifts to an open hex beside it
   // (free), or rolls the Fumble Chart if every hex beside it is blocked.
@@ -2179,7 +2260,7 @@ function renderRaceSetup() {
       <button class="ghost" onclick="App.addDraftNpc()">+ Add</button>
       <button class="ghost" ${room ? "" : "disabled"} onclick="App.fillRandomNpcs()">🎲 Fill to ${course.lanes}${room ? ` (+${room})` : ""}</button>
     </div>
-    <p class="muted" style="margin:0 0 6px">An NPC can be built from a specific Ship Class in this Division (its stats, not your sponsor adjustments), or left auto-built. Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated Maneuvers and Slip during the race.</p>
+    <p class="muted" style="margin:0 0 6px">An NPC can be built from a specific Ship Class in this Division (its stats, not your sponsor adjustments), or left auto-built. Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated gear changes, movement, and hunting other racers during the race.</p>
     <div id="npcList" class="npc-list">${draftNpcs.map((n, i) => { const cls = n.classId ? getShipClass(n.classId) : null; return `<div class="npc-row">
       <a href="#" class="npc-chip-x" title="Remove" onclick="App.removeDraftNpc(${i});return false;">×</a>
       <b>${esc(n.name)}</b> <span class="muted">${cls ? esc(cls.name) : "(auto-built)"}</span> <span class="muted">Aggr ${n.aggression}</span>
@@ -2229,7 +2310,7 @@ function renderStandings(race, center = "", below = "") {
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
-    const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated Maneuvers and Slip">Aggr ${p.aggression || 5}</span>` : "";
+    const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated gear changes, movement, and hunting">Aggr ${p.aggression || 5}</span>` : "";
     html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
