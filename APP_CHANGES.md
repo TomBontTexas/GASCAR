@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Fix: a race could start with more racers than lanes
+- Selecting 7+ ships and/or NPCs at Race Setup let the race start with more racers than the course has lanes (6). It now keeps the first lanes-worth: selected ships first, then drafted NPCs filling any lanes left, and drops the rest.
+- **Where:** `App.beginRace()` in `app.js`.
+
 ### 2026-10-08 — A race no longer requires a hero ship
 - Race Setup no longer blocks on "build a ship first" -- it's usable with zero Ships built, so an all-NPC race can be set up. Starting a race now only requires at least one racer total (a Ship or an NPC), not specifically a Ship.
 - Fixed a bug where a race with no hero ships would instantly mark itself finished (the "all heroes are out" shortcut fired immediately, since there were never any heroes to begin with). A hero-less race now only ends when a racer actually crosses the finish line, so a 1-NPC or 6-NPC race can be stepped through Leg by Leg via Start Leg N+1, same as a hero race.

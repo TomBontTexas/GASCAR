@@ -2454,11 +2454,18 @@ const App = {
     let courseId = STATE._raceSetupCourse;
     if (!courseId || !STATE.courses.some(c => c.id === courseId)) courseId = STATE.courses.length ? STATE.courses[0].id : null;
     if (!courseId) { alert("Create a racecourse first."); return; }
-    const division = getCourse(courseId).division;
-    const shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
-    const npcs = STATE._draftNpcs || [];
+    const course = getCourse(courseId);
+    const division = course.division;
+    let shipIds = (STATE._raceSetupShips || []).filter(sid => { const s = getShip(sid); return s && shipDivision(s) === division && getCrewman(s.crewmanId); });
+    let npcs = STATE._draftNpcs || [];
     // At least one racer total -- a hero isn't required, so an all-NPC race can be watched Leg by Leg.
     if (!shipIds.length && !npcs.length) { alert(`Select at least one ${division} Division ship, or add at least one NPC.`); return; }
+    // No more racers than the course has lanes: keep the first N selected
+    // ships, then fill any remaining lanes with the first drafted NPCs.
+    if (shipIds.length + npcs.length > course.lanes) {
+      shipIds = shipIds.slice(0, course.lanes);
+      npcs = npcs.slice(0, Math.max(0, course.lanes - shipIds.length));
+    }
     startRace(courseId, shipIds, npcs);
     STATE._draftNpcs = [];
     STATE._raceSetupShips = [];
