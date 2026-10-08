@@ -17,6 +17,12 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-08 — Engineer skill added; crew split points raised 5 -> 6
+- **New:** a Crewman now has a third skill, Engineer, alongside Pilot and Gunner, starting at 0 like the others. Engineer is added to a ship's Damage Control roll (1D6 + Damage Control + crew Engineer), the same way Pilot adds to Control checks and Gunner adds to Gunner checks.
+- **Earlier value:** a Crewman divided 5 points between Pilot and Gunner.
+- **Current value:** a Crewman divides 6 points among Pilot, Gunner, and Engineer (one point per increase, same as before). Skill order throughout the app is Pilot, Gunner, Engineer.
+- **Where:** `GDATA.CREWMAN_SKILLS` / `GDATA.CREWMAN_SPLIT_POINTS` in `data.js`; `freshCrewman()` / `crewmanSplitSpent()` / `carStats()` / `resolveTurn()`'s Damage Control step in `app.js`.
+
 ### 2026-10-08 — Asteroids
 - **New:** the Circular Track now scatters drifting asteroids among the lanes. At the start of the race, none sit on a ship's starting hex. At the start of every Leg, the number of active asteroids is set to match that Leg's TN -- if the new TN is lower, that many fade out at random; if it's higher, that many more fade in at random open hexes. They then drift 1-2 hexes (same rule as wrecks: random among the three hexes ahead -- straight, or a forward diagonal into the next lane in or out -- never past the track edge or onto an occupied hex).
 - **Current value:** an asteroid is a hard stop, exactly like a wreck -- no Control check, no passing through it, ever. On the track they render as spinning rock shapes with no ring around them (unlike the wreck's red ring).

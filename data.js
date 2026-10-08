@@ -60,13 +60,17 @@ GDATA.SHIP_STATS = ["thrust", "points", "control", "gunner", "damageControl", "d
 GDATA.STAT_BASE = { thrust: 1, points: 10, control: 5, gunner: 5, damageControl: 0, armor: 0, range: 1 }; // damage has no baseline NUMBER -- see GDATA.DAMAGE_BASE_DIE
 GDATA.DAMAGE_BASE_DIE = { n: 1, d: 6 };
 
-/* ---------- Crewmen (Circus Astralis, see RULE_CHANGES.md 2026-10-05) ----------
-   Each crewman starts at Pilot-5 and Gunner-5, then receives 5 points to
-   divide between the two skills, at one point per increase -- a one-time
-   build, no XP, no leveling after creation. A ship's crew shares one Pilot
-   and one Gunner value; any additional crew members are flavor only. */
+/* ---------- Crewmen (Circus Astralis, see RULE_CHANGES.md 2026-10-05, Engineer
+   skill added 2026-10-08) ----------
+   Each crewman starts at Pilot-0, Gunner-0, and Engineer-0, then receives 6
+   points to divide among the three skills, at one point per increase -- a
+   one-time build, no XP, no leveling after creation. A ship's crew shares
+   one Pilot, one Gunner, and one Engineer value; any additional crew
+   members are flavor only. Skill order throughout the app: Pilot, Gunner,
+   Engineer. */
 GDATA.CREWMAN_BASE = 0;
-GDATA.CREWMAN_SPLIT_POINTS = 5;
+GDATA.CREWMAN_SPLIT_POINTS = 6;
+GDATA.CREWMAN_SKILLS = ["pilot", "gunner", "engineer"];
 
 /* ---------- Gear table (Circus Astralis) ----------
    Each Leg a ship may shift gear by at most one level (0-5). Movement is the

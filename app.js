@@ -9,7 +9,7 @@
    prompt straight on or a Slip left/right around them (the nth Slip of the
    Leg costs n movement points); entering an occupied hex needs a Control
    check. A Gunner attack is optional along the way. Fumbles roll the 2D10 Fumble Chart. Ship classes,
-   crewmen (Pilot/Gunner), sponsors, and the hex-grid Circular Track engine
+   crewmen (Pilot/Gunner/Engineer), sponsors, and the hex-grid Circular Track engine
    (resolveSlipPath, circTrackGeometry, etc.) are shared by every rule set. */
 
 // App version (see APP_CHANGES.md): bump the middle number for a new feature
@@ -109,6 +109,9 @@ function loadState() {
 function migrateState(state) {
   (state.shipClasses || []).forEach(cls => { if (cls.range === undefined) cls.range = GDATA.STAT_BASE.range; });
   (state.shipClasses || []).forEach(cls => { if (cls.damageControl === undefined) cls.damageControl = GDATA.STAT_BASE.damageControl; });
+  // New Engineer skill (see RULE_CHANGES.md 2026-10-08): a Crewman saved
+  // before it existed just gets it at the same free baseline as Pilot/Gunner.
+  (state.crewmen || []).forEach(c => { if (c.engineer === undefined) c.engineer = GDATA.CREWMAN_BASE; });
   // Base-value change (see RULE_CHANGES.md 2026-10-06): Thrust 3->1, Gunner 5->3,
   // Armor 1->0, and crew Pilot/Gunner 5->0. Each saved stat keeps the levels it was
   // bought with, so the ship keeps its build cost and only its free baseline moves.
@@ -207,10 +210,10 @@ function shipDivision(ship) { const cls = ship && getShipClass(ship.classId); re
    RULE_CHANGES.md 2026-10-07), since Flash and Spark share Tier 1 but not a
    budget.
 
-   A car is six Ship Class stats (Thrust/Points/Control/Gunner/Damage/Armor)
-   plus a crewman's Pilot and Gunner -- see carStats() below, the one place that
-   reads both and (for NPCs, who have neither a Class nor a Crewman) its own
-   inline numbers instead. */
+   A car is eight Ship Class stats (Thrust/Points/Control/Gunner/Damage
+   Control/Damage/Armor/Range) plus a crewman's Pilot, Gunner, and Engineer
+   -- see carStats() below, the one place that reads both and (for NPCs, who
+   have neither a Class nor a Crewman) its own inline numbers instead. */
 const SHIP_STATS = GDATA.SHIP_STATS;
 function carTier(division) { return GDATA.DIVISION_TIER[division] || 1; }
 function tierCrewCount(tier) { return (GDATA.TIERS[tier] || GDATA.TIERS[1]).crew; }
@@ -257,10 +260,15 @@ function formatStatValue(cls, stat) {
   return `1D${GDATA.DAMAGE_BASE_DIE.d}${bonus ? (bonus < 0 ? "-" + -bonus : "+" + bonus) : ""}`;
 }
 // ---------- Crewman (Cantina) ----------
-// Each crewman starts at Pilot-5 and Gunner-5, then divides 5 split points
-// between the two, one point per increase (see GDATA.CREWMAN_SPLIT_POINTS).
-function freshCrewman(name) { return { id: uid("crew"), name, pilot: GDATA.CREWMAN_BASE, gunner: GDATA.CREWMAN_BASE }; }
-function crewmanSplitSpent(crewman) { return (crewman.pilot - GDATA.CREWMAN_BASE) + (crewman.gunner - GDATA.CREWMAN_BASE); }
+// Each crewman starts at Pilot/Gunner/Engineer-0, then divides the split
+// points among the three, one point per increase (see GDATA.CREWMAN_SKILLS,
+// GDATA.CREWMAN_SPLIT_POINTS).
+function freshCrewman(name) {
+  const c = { id: uid("crew"), name };
+  GDATA.CREWMAN_SKILLS.forEach(s => { c[s] = GDATA.CREWMAN_BASE; });
+  return c;
+}
+function crewmanSplitSpent(crewman) { return GDATA.CREWMAN_SKILLS.reduce((sum, s) => sum + (crewman[s] - GDATA.CREWMAN_BASE), 0); }
 function crewmanSplitRemaining(crewman) { return GDATA.CREWMAN_SPLIT_POINTS - crewmanSplitSpent(crewman); }
 // ---------- NPCs: auto-built, not hand-spent ----------
 // An NPC has no Ship Class/Crewman of its own -- its Division's
@@ -283,6 +291,7 @@ function freshNpcStats(division) {
   }
   out.crewPilot = GDATA.CREWMAN_BASE;
   out.crewGunner = GDATA.CREWMAN_BASE;
+  out.crewEngineer = GDATA.CREWMAN_BASE;
   return out;
 }
 // Sponsor (see RULE_CHANGES.md 2026-10-05, amounts updated 2026-10-07): up to
@@ -300,9 +309,9 @@ function sponsorOf(ship) {
 function sponsorBonusTotal(sponsor) { return Object.values(sponsor.bonus || {}).reduce((a, b) => a + (b || 0), 0); }
 function sponsorPenaltyTotal(sponsor) { return Object.values(sponsor.penalty || {}).reduce((a, b) => a + (b || 0), 0); }
 // Every stat a participant (Hero ship OR NPC) fights with this race --
-// unifies the two shapes (a Hero's 6 stats live on its Ship's Class plus any
-// sponsor adjustment, its Pilot/Gunner on its assigned Crewman; an NPC carries
-// them inline, see startRace()) so the rest of the engine never has to branch
+// unifies the two shapes (a Hero's Ship Class stats live on its Ship's Class
+// plus any sponsor adjustment, its Pilot/Gunner/Engineer on its assigned
+// Crewman; an NPC carries them inline, see startRace()) so the rest of the engine never has to branch
 // on p.type to read a stat.
 function carStats(p) {
   const out = {};
@@ -319,9 +328,10 @@ function carStats(p) {
     const crewman = ship && getCrewman(ship.crewmanId);
     out.crewPilot = crewman ? crewman.pilot : 0;
     out.crewGunner = crewman ? crewman.gunner : 0;
+    out.crewEngineer = crewman ? crewman.engineer : 0;
     return out;
   }
-  SHIP_STATS.concat(["crewPilot", "crewGunner"]).forEach(stat => { out[stat] = p[stat] || 0; });
+  SHIP_STATS.concat(["crewPilot", "crewGunner", "crewEngineer"]).forEach(stat => { out[stat] = p[stat] || 0; });
   return out;
 }
 // A participant's Division -- lives on its Ship's Class for a Hero, inline
@@ -722,7 +732,7 @@ function racerTipHtml(race, p) {
   const hero = p.type === "hero" ? getShip(p.shipId) : null;
   const crewman = hero ? STATE.crewmen.find(c => c.id === hero.crewmanId) : null;
   const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
-  const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage Control", cs.damageControl], ["Damage", cs.damage], ["Armor", cs.armor]];
+  const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage Control", `${cs.damageControl}/${cs.crewEngineer}`], ["Damage", cs.damage], ["Armor", cs.armor]];
   return `<div class="tvtip">
     <div class="tvtip-stripe"><span class="tvtip-pos">P${pos}</span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
     <div class="tvtip-body">
@@ -848,6 +858,7 @@ function npcStatsFromClass(cls) {
   SHIP_STATS.forEach(s => { out[s] = cls[s] || 0; });
   out.crewPilot = GDATA.CREWMAN_BASE;
   out.crewGunner = GDATA.CREWMAN_BASE;
+  out.crewEngineer = GDATA.CREWMAN_BASE;
   return out;
 }
 // An NPC icon no class or ship in the Division uses, and no other racer in
@@ -1375,8 +1386,9 @@ function resolveTurn(race, p, choices) {
   if (choices.damageControl) {
     car.attackedThisLeg = true;
     const dcRoll = rollD(GDATA.DIE_SIDES);
-    const dcSign = stats.damageControl < 0 ? `- ${-stats.damageControl}` : `+ ${stats.damageControl}`;
-    const healed = Math.max(0, dcRoll + stats.damageControl);
+    const dcBonus = stats.damageControl + stats.crewEngineer;
+    const dcSign = dcBonus < 0 ? `- ${-dcBonus}` : `+ ${dcBonus}`;
+    const healed = Math.max(0, dcRoll + dcBonus);
     p.hp = Math.min(p.maxHp, p.hp + healed);
     log.push(`Dmg Ctrl: 1d6 ${dcSign} = ${dcRoll} ${dcSign} = ${healed} HP repaired. ${p.hp}/${p.maxHp}`);
   }
@@ -1835,15 +1847,16 @@ function renderClassIconPicker(cls) {
   return `<div class="row"><b>Icon</b></div><div class="iconpicker">${swatches}</div>`;
 }
 
-/* ---------- Cantina: build Crewmen (Pilot and Gunner) ----------
-   See RULE_CHANGES.md 2026-10-05. Each crewman starts at Pilot-5 and Gunner-5
-   and divides 5 points between the two, one point per increase. Built once --
-   no XP, no leveling after creation. */
+/* ---------- Cantina: build Crewmen (Pilot, Gunner, Engineer) ----------
+   See RULE_CHANGES.md 2026-10-05 (Pilot/Gunner), 2026-10-08 (Engineer added).
+   Each crewman starts at Pilot-0, Gunner-0, Engineer-0 and divides 6 points
+   among the three, one point per increase. Built once -- no XP, no leveling
+   after creation. */
 function renderCantina() {
   let html = `<section class="card"><h2>Crewmen</h2>
     <div class="row"><button onclick="App.addCrewman()">+ Add Crewman</button></div>
-    <p class="muted">Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner. A ship's crew shares one Pilot and one Gunner value.</p>`;
-  if (!STATE.crewmen.length) html += `<p class="muted">No Crewmen yet. A ship races with the Pilot and Gunner values of the crewman assigned to it (Hangar Bay) -- add one here first.</p>`;
+    <p class="muted">Each crewman starts at Pilot-0, Gunner-0, and Engineer-0, then divides 6 points among Pilot, Gunner, and Engineer. A ship's crew shares one Pilot, one Gunner, and one Engineer value.</p>`;
+  if (!STATE.crewmen.length) html += `<p class="muted">No Crewmen yet. A ship races with the Pilot, Gunner, and Engineer values of the crewman assigned to it (Hangar Bay) -- add one here first.</p>`;
   STATE.crewmen.forEach(crewman => { html += renderCrewmanCard(crewman); });
   html += `</section>`;
   return html;
@@ -1859,9 +1872,10 @@ function renderCrewmanCard(crewman) {
       <span class="muted">${assignedTo.length ? `Piloting: ${assignedTo.map(n => esc(n)).join(", ")}` : "Unassigned"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteCrewman('${crewman.id}')">Delete</button>
     </div>
-    <table class="mktable shiptable"><tr><th>Pilot</th><th>Gunner</th></tr><tr>
+    <table class="mktable shiptable"><tr><th>Pilot</th><th>Gunner</th><th>Engineer</th></tr><tr>
       <td>${numStepper(`<input type="number" style="width:48px" min="${GDATA.CREWMAN_BASE}" value="${crewman.pilot}" onchange="App.updateCrewmanSkill('${crewman.id}','pilot',this.value)">`)}</td>
       <td>${numStepper(`<input type="number" style="width:48px" min="${GDATA.CREWMAN_BASE}" value="${crewman.gunner}" onchange="App.updateCrewmanSkill('${crewman.id}','gunner',this.value)">`)}</td>
+      <td>${numStepper(`<input type="number" style="width:48px" min="${GDATA.CREWMAN_BASE}" value="${crewman.engineer}" onchange="App.updateCrewmanSkill('${crewman.id}','engineer',this.value)">`)}</td>
     </tr></table>
   </div>`;
 }
@@ -1901,8 +1915,8 @@ function renderHangarBay() {
 function renderShipStatsTable(ship, cls, crewman, eff) {
   const sponsor = sponsorOf(ship);
   const bonusTotal = sponsorBonusTotal(sponsor), penaltyTotal = sponsorPenaltyTotal(sponsor);
-  const crewCells = `<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td>`;
-  const blankCrew = `<td></td><td></td>`;
+  const crewCells = `<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td><td>${crewman ? crewman.engineer : "—"}</td>`;
+  const blankCrew = `<td></td><td></td><td></td>`;
   const sponsorCell = (kind, s) => {
     const other = kind === "bonus" ? "penalty" : "bonus";
     const blocked = !!sponsor[other][s];
@@ -1911,7 +1925,7 @@ function renderShipStatsTable(ship, cls, crewman, eff) {
   };
   return `<p class="muted" style="margin:4px 0">Spread up to ${SPONSOR_BONUS_MAX} bonus and ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like. Only one of bonus or penalty per stat.</p>
     <table class="mktable shiptable">
-      <tr><th></th><th>Pilot skill</th><th>Gunner skill</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+      <tr><th></th><th>Pilot skill</th><th>Gunner skill</th><th>Engineer skill</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
       <tr><th>Class</th>${crewCells}${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}</tr>
       <tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("bonus", s)).join("")}</tr>
       <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("penalty", s)).join("")}</tr>
@@ -1944,10 +1958,10 @@ function renderShipCard(ship) {
         <select onchange="App.updateShip('${ship.id}','classId',this.value)">
           ${STATE.shipClasses.map(c => `<option value="${c.id}" ${c.id === ship.classId ? "selected" : ""}>${esc(c.name)} (${c.division})</option>`).join("")}
         </select></label>
-      <label>Crew (Pilot skill / Gunner skill)
+      <label>Crew (Pilot skill / Gunner skill / Engineer skill)
         <select onchange="App.updateShip('${ship.id}','crewmanId',this.value)">
           <option value="">-- none --</option>
-          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (Pilot skill ${c.pilot}, Gunner skill ${c.gunner})</option>`).join("")}
+          ${STATE.crewmen.map(c => `<option value="${c.id}" ${c.id === ship.crewmanId ? "selected" : ""}>${esc(c.name)} (Pilot skill ${c.pilot}, Gunner skill ${c.gunner}, Engineer skill ${c.engineer})</option>`).join("")}
         </select></label>
       <span class="tag ${crewman ? "" : "danger"}" title="${crewman ? "All set -- race-legal" : "A Ship needs an assigned crewman to race"}">${crewman ? "Ready to race" : "🔒 Needs a crewman"}</span>
       <button class="danger" style="margin-left:auto" onclick="App.deleteShip('${ship.id}')">Delete</button>
@@ -2261,7 +2275,7 @@ function renderHeroTurnForm(race, p) {
       </select>
       <button onclick="App.takeTurn('${p.id}')">Take turn</button>
     </div>
-    ${p.hp < p.maxHp ? `<label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6${stats.damageControl < 0 ? "-" + -stats.damageControl : "+" + stats.damageControl} (HP ${p.hp}/${p.maxHp})</label>` : ""}
+    ${p.hp < p.maxHp ? (() => { const dc = stats.damageControl + stats.crewEngineer; return `<label class="hub-line muted"><input type="checkbox" ${car.damageControl ? "checked" : ""} onchange="App.setTurn('${p.id}','damageControl',this.checked)"> Dmg Ctrl: 1d6${dc < 0 ? "-" + -dc : "+" + dc} (HP ${p.hp}/${p.maxHp})</label>`; })() : ""}
     <div class="hub-line muted">Gear ${newGear}: ${dice ? `${dice}D6 + ${stats.thrust}` : "no movement"}</div>
     <div class="hub-line muted">Control-${stats.control + stats.crewPilot}${mod} vs. TN (${tn})</div>
     <div class="hub-line muted">Gunner-${stats.gunner + stats.crewGunner}${mod} vs. TN (${tn})</div>
@@ -2365,16 +2379,16 @@ function renderInstructions() {
     <p>A Ship Class is a reusable hull: a Division (sets its construction-point budget -- see the Divisions table below), a White icon, and eight stats -- Thrust, Hit Points, Control, Gunner, Damage Control (1D6 plus a bonus), Damage (1D6 plus a bonus), Armor, and Range -- bought up from base values (Thrust 1, Hit Points 10, Control 5, Gunner 5, Damage Control 1D6, Armor 0, Range 1, Damage 1D6). Raising a stat costs 1 construction point for the first point, 2 more for the second, 3 more for the third, and so on. The Shipyard shows how many points you've used against the budget.</p>
 
     <h3>2. Cantina — build Crewmen</h3>
-    <p>Each crewman starts at Pilot-5 and Gunner-5, then divides 5 points between Pilot and Gunner, one point per increase. A ship's crew shares one Pilot and one Gunner value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks.</p>
+    <p>Each crewman starts at Pilot-0, Gunner-0, and Engineer-0, then divides 6 points among Pilot, Gunner, and Engineer, one point per increase. A ship's crew shares one Pilot, one Gunner, and one Engineer value. Pilot is added to a ship's Control for its Control checks; Gunner is added to its Gunner stat for attacks; Engineer is added to its Damage Control roll.</p>
 
     <h3>3. Hangar Bay — assemble ships</h3>
-    <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot and Gunner values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to ${SPONSOR_BONUS_MAX} bonus points spread over up to ${SPONSOR_BONUS_MAX} stats, in exchange for a -${SPONSOR_PENALTY_MAX} penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
+    <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot, Gunner, and Engineer values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to ${SPONSOR_BONUS_MAX} bonus points spread over up to ${SPONSOR_BONUS_MAX} stats, in exchange for a -${SPONSOR_PENALTY_MAX} penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
 
     <h3>4. Racecourse &amp; Race — run it</h3>
     <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
     <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). The lowest Thrust starts in the outermost lane. On a ship's turn:</p>
     <ol>
-      <li><b>Damage Control</b> — offered at the start of the Leg, before Gear. If taken, roll 1D6 + Damage Control and repair that much HP (never above max HP), but the ship cannot attack this Leg.</li>
+      <li><b>Damage Control</b> — offered at the start of the Leg, before Gear. If taken, roll 1D6 + Damage Control + crew Engineer and repair that much HP (never above max HP), but the ship cannot attack this Leg.</li>
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
