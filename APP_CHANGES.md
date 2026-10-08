@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Fix: a car destroyed by its own pre-movement Fumble could still move and attack
+- A Fumble Chart result that dealt enough HP damage to destroy the acting car itself (e.g. "Tier × N HP" on the movement-over-TN Control check, before the walk even starts) correctly marked it `out`, but the rest of that turn kept running anyway -- it could still be offered (hero) or auto-resolve (NPC) an attack against another racer. A wreck now gets no further movement or attack for the rest of that turn.
+- **Where:** `walkTurn()` in `app.js`.
+
 ### 2026-10-08 — Fix: a race could start with more racers than lanes
 - Selecting 7+ ships and/or NPCs at Race Setup let the race start with more racers than the course has lanes (6). It now keeps the first lanes-worth: selected ships first, then drafted NPCs filling any lanes left, and drops the rest.
 - **Where:** `App.beginRace()` in `app.js`.

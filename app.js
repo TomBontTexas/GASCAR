@@ -1362,6 +1362,9 @@ function walkTurn(race, p) {
   const geom = circTrackGeometry(course);
   const stats = carStats(p);
   while (!t.finished && !t.halt) {
+    // A car destroyed mid-turn (e.g. its own pre-movement Fumble) gets no
+    // further movement or attack this turn -- it's a wreck, not a racer.
+    if (p.out) break;
     // One attack per Leg. While the shooter can still attack, every racer in range is offered.
     const targets = !car.attackedThisLeg ? attackTargetsFrom(race, p, geom, t.cur) : [];
     if (p.type === "hero") {
