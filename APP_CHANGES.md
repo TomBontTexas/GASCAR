@@ -15,6 +15,10 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-09 — Hangar Bay: a Crew row and a true grand Total on the ship stats table
+- The ship stats table showed the crewman's Pilot/Gunner/Engineer as three standalone columns next to the ship's own stats, and its Total row never actually added them in -- Control, Gunner, and Damage Control looked like just the Ship Class + sponsor total, not what the ship really fights with. The Pilot/Gunner/Engineer columns are gone; there's now a Crew row aligned under the matching stat (Control/Gunner/Damage Control -- the rest show "—"), and the Total row is the real grand total, crew included.
+- **Where:** `renderShipStatsTable()` in `app.js`.
+
 ### 2026-10-09 — Asteroid drift is tracked for replay
 - A drifting asteroid's movement each Leg (and any ship it pushes along the way) is now recorded into its own history, the same shape a wreck's drift is, so Show Last Leg / Show Entire Race animate the asteroid field moving instead of jumping straight to its final spot.
 - **Where:** `driftAsteroids()` / `App.playRaceReplay()` in `app.js`.

@@ -2018,21 +2018,26 @@ function renderHangarBay() {
 function renderShipStatsTable(ship, cls, crewman, eff) {
   const sponsor = sponsorOf(ship);
   const bonusTotal = sponsorBonusTotal(sponsor), penaltyTotal = sponsorPenaltyTotal(sponsor);
-  const crewCells = `<td>${crewman ? crewman.pilot : "—"}</td><td>${crewman ? crewman.gunner : "—"}</td><td>${crewman ? crewman.engineer : "—"}</td>`;
-  const blankCrew = `<td></td><td></td><td></td>`;
   const sponsorCell = (kind, s) => {
     const other = kind === "bonus" ? "penalty" : "bonus";
     const blocked = !!sponsor[other][s];
     const max = kind === "bonus" ? SPONSOR_BONUS_MAX : SPONSOR_PENALTY_MAX;
     return `<td>${numStepper(`<input type="number" style="width:48px" min="0" max="${max}" value="${sponsor[kind][s] || 0}" ${blocked ? `disabled title="This stat already has a ${other}"` : ""} onchange="App.setSponsor('${ship.id}','${kind}','${s}',this.value)">`)}</td>`;
   };
+  // The crewman's Pilot/Gunner/Engineer land on the matching ship stat
+  // (Control/Gunner/Damage Control); the rest of the stats get no crew
+  // contribution at all.
+  const crewAdd = { control: eff.crewPilot, gunner: eff.crewGunner, damageControl: eff.crewEngineer };
+  const crewCell = s => crewAdd[s] !== undefined ? `<td>${crewAdd[s]}</td>` : `<td class="muted">—</td>`;
+  const grand = { ...eff, control: eff.control + eff.crewPilot, gunner: eff.gunner + eff.crewGunner, damageControl: eff.damageControl + eff.crewEngineer };
   return `<p class="muted" style="margin:4px 0">Spread up to ${SPONSOR_BONUS_MAX} bonus and ${SPONSOR_PENALTY_MAX} penalty points across any stats, as you like. Only one of bonus or penalty per stat.</p>
     <table class="mktable shiptable">
-      <tr><th></th><th>Pilot skill</th><th>Gunner skill</th><th>Engineer skill</th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
-      <tr><th>Class</th>${crewCells}${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}</tr>
-      <tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("bonus", s)).join("")}</tr>
-      <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${blankCrew}${SHIP_STATS.map(s => sponsorCell("penalty", s)).join("")}</tr>
-      <tr class="totals"><th>Total</th>${crewCells}${SHIP_STATS.map(s => `<td><b>${formatStatValue(eff, s)}</b></td>`).join("")}</tr>
+      <tr><th></th>${SHIP_STATS.map(s => `<th>${STAT_LABEL[s]}</th>`).join("")}</tr>
+      <tr><th>Class</th>${SHIP_STATS.map(s => `<td>${formatStatValue(cls, s)}</td>`).join("")}</tr>
+      <tr><th>Bonus (${bonusTotal}/${SPONSOR_BONUS_MAX})</th>${SHIP_STATS.map(s => sponsorCell("bonus", s)).join("")}</tr>
+      <tr><th>Penalty (${penaltyTotal}/${SPONSOR_PENALTY_MAX})</th>${SHIP_STATS.map(s => sponsorCell("penalty", s)).join("")}</tr>
+      <tr><th>Crew</th>${SHIP_STATS.map(s => crewCell(s)).join("")}</tr>
+      <tr class="totals"><th>Total</th>${SHIP_STATS.map(s => `<td><b>${formatStatValue(grand, s)}</b></td>`).join("")}</tr>
     </table>`;
 }
 function renderShipCard(ship) {
