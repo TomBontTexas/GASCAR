@@ -1356,6 +1356,15 @@ function applyEncounter(race, p, id, opts) {
   if (!opt) return;
   if (id === "straight") {
     const occ = occupantAt(race, opt.dest.laneIdx0 + 1, opt.dest.hexPos, p.id);
+    if (occ && occ.out) {
+      // A wreck can't be argued past with a Control check the way a live
+      // racer can be overtaken -- it's a dead stop, every time (see
+      // RULE_CHANGES.md 2026-10-08: other ships must navigate around a wreck).
+      p.gear = Math.max(0, p.gear - 1);
+      t.log.push(`Stops short of the wreck; drops to Gear ${p.gear}.`);
+      t.halt = true;
+      return;
+    }
     if (occ) {
       const ob = rollCheck(stats.control + stats.crewPilot, t.net, t.tn);
       t.log.push(...controlCheckLine(`Obstacle check (${participantLabel(occ)})`, ob, stats, t.checkSources));
@@ -2252,7 +2261,7 @@ function renderInstructions() {
       <li><b>Gear</b> — shift one level up or down (or hold). Gear 0 doesn't move; Gear 1-5 roll 1-5 D6 and add Thrust.</li>
       <li><b>Move</b> — the Movement counter shows the points left. Click the highlighted hex your ship moves into: straight ahead, or Slip left or right. The nth Slip of the Leg costs n movement points; the sideways shift is free. A Slip you can't afford isn't offered. Each hex you leave gets a dot until the turn ends.</li>
       <li><b>Control check</b> — made only when your movement roll exceeds the Leg TN (before you move) or when you enter an occupied hex. Roll 1D20 + Control + Pilot against the Leg's TN. Failure moves half the intended distance before the walk, or stops you where the check failed when it comes up during the walk.</li>
-      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
+      <li><b>Walk</b> — the ship moves hex by hex, counting its movement points. Entering an occupied hex (straight on) forces a Control check: on success the ship passes through, on failure it stops short. A wreck is a hard stop instead -- no check, no passing through it. Landing on another ship's hex drifts to an open hex beside it (free), or rolls the Fumble Chart if every hex beside it is blocked.</li>
       <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>

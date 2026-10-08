@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-08 — Fix: a wreck could be Control-checked through like a live racer
+- **Bug:** entering an occupied hex straight-on rolls a Control check to pass through -- correct for overtaking a live racer, but it was also letting a ship pass through (and briefly share a hex with) a wreck, contradicting "other ships must navigate around" it.
+- **Current value:** a wreck is a hard stop -- no roll, no passing through it, every time. Passing a live racer is unchanged.
+- **Where:** `applyEncounter()` in `app.js`.
+
 ### 2026-10-08 — Wrecks drift
 - **Earlier value:** a destroyed car's wreck stayed exactly where it died for the rest of the race.
 - **Current value:** at the start of every Leg, each wreck drifts 1-2 hexes (random) in the direction of travel -- one hex at a time, each hex a random pick among the three hexes ahead of it (straight, or a forward diagonal into the next lane in or out), simulating loose debris. It can't drift past the edge of the track or onto an occupied hex; boxed in on all three sides, it just stays put. On the track, a wreck now shows a red ring (the same ring style used to highlight the hero ready to act, in red instead of green).
