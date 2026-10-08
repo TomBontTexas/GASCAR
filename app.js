@@ -112,6 +112,10 @@ function migrateState(state) {
   // New Engineer skill (see RULE_CHANGES.md 2026-10-08): a Crewman saved
   // before it existed just gets it at the same free baseline as Pilot/Gunner.
   (state.crewmen || []).forEach(c => { if (c.engineer === undefined) c.engineer = GDATA.CREWMAN_BASE; });
+  // Asteroids reworked into a course-level choice (see RULE_CHANGES.md
+  // 2026-10-09): a course saved before that defaults to none, same as a
+  // Racemaster who leaves the field at its default.
+  (state.courses || []).forEach(c => { if (c.asteroidCount === undefined) c.asteroidCount = 0; });
   // Base-value change (see RULE_CHANGES.md 2026-10-06): Thrust 3->1, Gunner 5->3,
   // Armor 1->0, and crew Pilot/Gunner 5->0. Each saved stat keeps the levels it was
   // bought with, so the ship keeps its build cost and only its free baseline moves.
@@ -628,6 +632,47 @@ function circRacerTransform(geom, p, prevRotDeg) {
   if (prevRotDeg != null) rotDeg += Math.round((prevRotDeg - rotDeg) / 360) * 360;
   return { laneIdx0, transform: `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${rotDeg.toFixed(1)})` };
 }
+// An asteroid's placement -- translate only, no facing rotation (it spins on
+// its own via CSS, independent of its position).
+function asteroidTransform(geom, lane, hexPos) {
+  const laneIdx0 = Math.min(Math.max(lane - 1, 0), geom.laneHexLists.length - 1);
+  const ring = geom.laneHexLists[laneIdx0];
+  const hex = ring[((hexPos % ring.length) + ring.length) % ring.length];
+  const { x, y } = hexToPixel(geom, hex.q, hex.r);
+  return `translate(${x.toFixed(1)},${y.toFixed(1)})`;
+}
+// Replays this Leg's asteroid drift (and any ship it shoved) right after the
+// board renders at its already-computed final positions (see
+// RULE_CHANGES.md 2026-10-09): each moved element is walked back to where it
+// started, then stepped forward hex by hex, purely a visual flourish -- the
+// actual positions/damage were already applied in driftAsteroids(). Consumes
+// race._legStartEvents.
+function playLegStartAnimation(race) {
+  const events = race._legStartEvents || [];
+  race._legStartEvents = [];
+  if (!events.length) return;
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const hexStepDelay = 200;
+  events.forEach(ev => {
+    const el = document.getElementById(ev.kind === "asteroid" ? `asteroid-${ev.id}` : `circracer-${ev.id}`);
+    if (!el) return;
+    const steps = [ev.from, ...ev.path];
+    let i = 0, prevRotDeg = null;
+    function tick() {
+      if (STATE.race !== race) return;
+      if (ev.kind === "asteroid") el.setAttribute("transform", asteroidTransform(geom, steps[i].lane, steps[i].hexPos));
+      else {
+        const m = /rotate\(([-\d.]+)\)/.exec(el.getAttribute("transform") || "");
+        if (m) prevRotDeg = parseFloat(m[1]);
+        el.setAttribute("transform", circRacerTransform(geom, steps[i], prevRotDeg).transform);
+      }
+      i++;
+      if (i < steps.length) setTimeout(tick, hexStepDelay);
+    }
+    tick();
+  });
+}
 function renderCircularTrackSvg(race, course) {
   const geom = circTrackGeometry(course);
   const { vbW, vbH, iconSize } = geom;
@@ -647,16 +692,14 @@ function renderCircularTrackSvg(race, course) {
     const [p1, p2] = hexFrontEdge(geom, hex, next);
     svg += `<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" class="circfinish"/>`;
   });
-  // Asteroids: rock shapes (no ring, unlike wrecks), spinning in place, that
-  // fade in/out as the Leg's TN changes their count (RULE_CHANGES.md 2026-10-08).
-  (race.asteroids || []).concat(race._asteroidsFadingOut || []).forEach(a => {
-    const hex = geom.laneHexLists[a.lane - 1][a.hexPos];
-    const { x, y } = hexToPixel(geom, hex.q, hex.r);
+  // Asteroids: rock shapes (no ring, unlike wrecks), spinning in place.
+  // Positioned via a transform (not baked into the facet points) so the
+  // Leg-start animation can retarget it, the same way a racer's <g> moves.
+  (race.asteroids || []).forEach(a => {
     // Scaled well inside the hex's own inscribed circle so it never pokes
     // past the hex edge at any point in its continuous spin.
-    const rock = asteroidFacets(a.design, x, y, geom.hexSize / 18);
-    const fadeCls = a.isNew ? " asteroid-fade-in" : ((race._asteroidsFadingOut || []).includes(a) ? " asteroid-fade-out" : "");
-    svg += `<g class="asteroid${fadeCls}">
+    const rock = asteroidFacets(a.design, 0, 0, geom.hexSize / 18);
+    svg += `<g class="asteroid" id="asteroid-${a.id}" transform="${asteroidTransform(geom, a.lane, a.hexPos)}">
       <g class="asteroid-rock" style="animation-duration:${a.spinDur.toFixed(2)}s;animation-direction:${a.spinDir}">${rock}</g>
     </g>`;
   });
@@ -1002,25 +1045,30 @@ function breakInitiativeTie(group) {
   }
   return out;
 }
-// The open drift destinations from `cur`: forward (straight), or a forward
+// The up to 3 hexes "ahead" of `cur`: forward (straight), or a forward
 // diagonal into the next lane in or out -- the same three hexes a live car's
-// own move choice offers, minus the cost/obstacle-check machinery a wreck
-// doesn't need. Only an open, in-bounds hex counts.
-function wreckDriftOptions(race, p, geom, course, cur) {
+// own move choice offers. Only real, in-bounds hexes are included (fewer at
+// the inner/outermost lane); does NOT filter by occupancy -- callers decide
+// what counts as open. Shared by wreck/asteroid drift and the asteroid push
+// mechanic (see RULE_CHANGES.md 2026-10-09).
+function threeForwardHexes(geom, course, cur) {
   const circ = geom.laneHexLists[cur.laneIdx0].length;
   const ahead = { laneIdx0: cur.laneIdx0, hexPos: (cur.hexPos + 1) % circ };
-  const opts = [];
-  if (!occupantAt(race, ahead.laneIdx0 + 1, ahead.hexPos, p.id)) opts.push(ahead);
+  const out = [ahead];
   const sn = geom.slipNeighbors[cur.laneIdx0][cur.hexPos];
   const aheadHex = geom.laneHexLists[ahead.laneIdx0][ahead.hexPos];
   [-1, 1].forEach(dir => {
     const lane0 = cur.laneIdx0 + dir;
-    if (lane0 < 0 || lane0 >= course.lanes) return; // can't drift past the edge of the track
+    if (lane0 < 0 || lane0 >= course.lanes) return; // the track edge -- no lane out here
     const cands = (dir < 0 ? sn.inward : sn.outward).filter(h => hexDistance(geom.laneHexLists[lane0][h], aheadHex) === 1);
-    const hexPos = cands.find(h => !occupantAt(race, lane0 + 1, h, p.id));
-    if (hexPos !== undefined) opts.push({ laneIdx0: lane0, hexPos });
+    if (cands.length) out.push({ laneIdx0: lane0, hexPos: cands[0] });
   });
-  return opts;
+  return out;
+}
+// The open drift destinations from `cur` -- threeForwardHexes() filtered to
+// only an open, in-bounds hex.
+function wreckDriftOptions(race, p, geom, course, cur) {
+  return threeForwardHexes(geom, course, cur).filter(h => !occupantAt(race, h.laneIdx0 + 1, h.hexPos, p.id));
 }
 // Drifts `obj` (anything with a .id/.lane/.hexPos, 1-based lane) forward 1-2
 // hexes, one hex at a time, each hex a random pick among the three hexes
@@ -1054,12 +1102,77 @@ function driftWrecks(race) {
     p.history.push({ seq: race.turnSeq, leg: race.legIndex + 1, movement: path.length, path, lane: p.lane, laps: p.laps, hexPos: p.hexPos, slipHexes: 0, gear: p.gear, drift: true });
   });
 }
-// Asteroids drift the same way wrecks do (see RULE_CHANGES.md 2026-10-08).
-// Unlike wrecks they don't lap or belong to a racer's log, so no history entry.
+// Asteroids drift 1-2 hexes every Leg but, unlike wrecks, stay in their own
+// lane -- never a forward diagonal into another lane (see RULE_CHANGES.md
+// 2026-10-09). If the next hex holds an active (non-wrecked) ship, the
+// asteroid shoves it forward instead of stopping: pushShip() moves the ship
+// and the asteroid takes the ship's old hex. A wreck or another asteroid in
+// the way simply blocks the rest of this Leg's drift, same as before. Each
+// asteroid's (and any pushed ship's) movement is recorded into
+// race._legStartEvents so the Leg-start animation can show it happening.
 function driftAsteroids(race) {
   const course = getCourse(race.courseId);
   const geom = circTrackGeometry(course);
-  (race.asteroids || []).forEach(a => driftOne(race, geom, course, a));
+  const lines = [];
+  (race.asteroids || []).forEach(a => {
+    const dist = rollD(2); // 1 or 2 hexes
+    const from = { lane: a.lane, hexPos: a.hexPos };
+    const path = [];
+    for (let i = 0; i < dist; i++) {
+      const circ = geom.laneHexLists[a.lane - 1].length;
+      const nextHexPos = (a.hexPos + 1) % circ;
+      const occ = occupantAt(race, a.lane, nextHexPos, a.id);
+      if (occ && (occ.kind === "asteroid" || occ.out)) break; // a wreck or another asteroid -- blocked
+      if (occ) pushShip(race, occ, a, geom, course, lines);
+      a.hexPos = nextHexPos;
+      path.push({ lane: a.lane, hexPos: a.hexPos });
+    }
+    if (path.length) race._legStartEvents.push({ kind: "asteroid", id: a.id, from, path });
+  });
+  if (lines.length) race.log.push({ legIndex: race.legIndex, name: "Asteroid Field", lines });
+}
+// A drifting asteroid shoving an active ship out of its hex (see
+// RULE_CHANGES.md 2026-10-09): the ship moves to a random open hex among the
+// three ahead of IT (straight, or a forward diagonal), or -- if all of those
+// are occupied -- swaps places with the asteroid outright. Either way the
+// ship takes 1 HP of damage, ignoring Armor (same convention as being forced
+// off the track).
+function pushShip(race, ship, asteroid, geom, course, lines) {
+  const from = { lane: ship.lane, hexPos: ship.hexPos };
+  const candidates = threeForwardHexes(geom, course, { laneIdx0: ship.lane - 1, hexPos: ship.hexPos });
+  const open = candidates.filter(h => !occupantAt(race, h.laneIdx0 + 1, h.hexPos, ship.id));
+  const dest = open.length ? open[rollD(open.length) - 1] : null;
+  const to = dest ? { lane: dest.laneIdx0 + 1, hexPos: dest.hexPos } : { lane: asteroid.lane, hexPos: asteroid.hexPos };
+  ship.lane = to.lane; ship.hexPos = to.hexPos;
+  lines.push(dest
+    ? `${participantLabel(ship)} is shoved by a drifting asteroid.`
+    : `${participantLabel(ship)} is boxed in -- swaps places with a drifting asteroid.`);
+  applyDamage(race, ship, 1, lines);
+  race._legStartEvents.push({ kind: "ship", id: ship.id, from, path: [to] });
+}
+// Scatters `count` asteroids around the track at random, avoiding any hex a
+// ship already occupies (see RULE_CHANGES.md 2026-10-09). Placement itself
+// isn't lane-restricted -- only their later drift is.
+function placeAsteroids(race, count) {
+  const course = getCourse(race.courseId);
+  const geom = circTrackGeometry(course);
+  const open = [];
+  for (let lane0 = 0; lane0 < course.lanes; lane0++) {
+    const circ = geom.laneHexLists[lane0].length;
+    for (let hexPos = 0; hexPos < circ; hexPos++) {
+      if (!occupantAt(race, lane0 + 1, hexPos, null)) open.push({ lane: lane0 + 1, hexPos });
+    }
+  }
+  for (let i = 0; i < count && open.length; i++) {
+    const spot = open.splice(rollD(open.length) - 1, 1)[0];
+    race.asteroids.push({
+      id: uid("ast"), kind: "asteroid", lane: spot.lane, hexPos: spot.hexPos,
+      design: ASTEROID_DESIGNS[rollD(ASTEROID_DESIGNS.length) - 1],
+      // Cosmetic only (spin speed/direction) -- Math.random() rather than
+      // rollD so it never shifts any dice-stubbed test's roll sequence.
+      spinDur: 2.5 + Math.random() * 2, spinDir: Math.random() < 0.5 ? "normal" : "reverse"
+    });
+  }
 }
 const ASTEROID_DESIGNS = ["a", "b", "c", "d"];
 // Builds a jagged N-point rock outline (radii alternating far/near, plus a
@@ -1101,46 +1214,6 @@ function asteroidFacets(design, cx, cy, scale) {
   const outline = shape.map(toPt).join(" ");
   return `${facets}<polygon class="asteroid-outline" points="${outline}"/>`;
 }
-// At the start of each Leg, the number of active asteroids is set to match
-// the Leg's TN (see RULE_CHANGES.md 2026-10-08): extra ones fade out (kept
-// one Leg in `_asteroidsFadingOut` so the renderer can animate the fade),
-// and new ones fade in at random open hexes, marked `isNew` for the same reason.
-function manageAsteroids(race) {
-  const course = getCourse(race.courseId);
-  const geom = circTrackGeometry(course);
-  // A race saved before this feature existed won't have this field yet.
-  race.asteroids = race.asteroids || [];
-  race.asteroids.forEach(a => { a.isNew = false; });
-  race._asteroidsFadingOut = [];
-  const target = race.legState.leg.finalTN;
-  let diff = target - race.asteroids.length;
-  if (diff < 0) {
-    const removed = [];
-    while (diff < 0 && race.asteroids.length) {
-      removed.push(race.asteroids.splice(rollD(race.asteroids.length) - 1, 1)[0]);
-      diff++;
-    }
-    race._asteroidsFadingOut = removed;
-  } else if (diff > 0) {
-    const open = [];
-    for (let lane0 = 0; lane0 < course.lanes; lane0++) {
-      const circ = geom.laneHexLists[lane0].length;
-      for (let hexPos = 0; hexPos < circ; hexPos++) {
-        if (!occupantAt(race, lane0 + 1, hexPos, null)) open.push({ lane: lane0 + 1, hexPos });
-      }
-    }
-    for (let i = 0; i < diff && open.length; i++) {
-      const spot = open.splice(rollD(open.length) - 1, 1)[0];
-      race.asteroids.push({
-        id: uid("ast"), kind: "asteroid", lane: spot.lane, hexPos: spot.hexPos,
-        design: ASTEROID_DESIGNS[rollD(ASTEROID_DESIGNS.length) - 1], isNew: true,
-        // Cosmetic only (spin speed/direction) -- Math.random() rather than
-        // rollD so it never shifts any dice-stubbed test's roll sequence.
-        spinDur: 2.5 + Math.random() * 2, spinDir: Math.random() < 0.5 ? "normal" : "reverse"
-      });
-    }
-  }
-}
 function initLegState(race) {
   const course = getCourse(race.courseId);
   const leg = rollCircularLeg(course);
@@ -1162,9 +1235,11 @@ function initLegState(race) {
   const order = race.initiative.filter(id => { const p = race.participants.find(x => x.id === id); return p && !p.out; });
   race.legState = { leg, cars, complete: false, order };
   STATE._openDeclFor = null;
+  // A race saved before this feature existed won't have these fields yet.
+  race.asteroids = race.asteroids || [];
+  race._legStartEvents = [];
   driftWrecks(race);
   driftAsteroids(race);
-  manageAsteroids(race);
 }
 function nextTurnParticipant(race) {
   const ls = race.legState;
@@ -1216,9 +1291,12 @@ function startRace(courseId, shipIds, npcs) {
     p.startLane = p.lane;
     p.startHexPos = p.hexPos;
   });
-  const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [], asteroids: [], _asteroidsFadingOut: [] };
+  const race = { courseId, legIndex: 0, participants, finished: false, started: false, winnerId: "", log: [], asteroids: [], _legStartEvents: [] };
   // Lanes and turn order both come from the same initiative order.
   race.initiative = startOrder.map(p => p.id);
+  // Asteroids are placed once, up front, avoiding the ships' starting hexes
+  // (already set above) -- see RULE_CHANGES.md 2026-10-09.
+  placeAsteroids(race, course.asteroidCount || 0);
   initLegState(race);
   STATE.race = race;
   saveState();
@@ -2011,6 +2089,8 @@ function renderCourse() {
     <div class="formrow"><label>Damage</label><label class="chkline"><input id="cFlatDamage" type="checkbox"> Flat 4 instead of rolling 1D6 (Racemaster option, faster game)</label></div>
     <div class="formrow"><label>Apply Leg Modifier To</label>
       <select id="cMode"><option value="tier">Tier (TN = (Tier+Mod)×3)</option><option value="tn">TN (TN = Tier×3 + Mod)</option><option value="none">Ignore modifier</option></select></div>
+    <div class="formrow"><label>Asteroids</label>${numStepper(`<input id="cAsteroids" type="number" min="0" value="0">`)}
+      <button class="ghost" title="Random (2D10)" onclick="App.rollAsteroidCount()">🎲</button></div>
     <table class="mktable"><tr><th>Lane</th>${Array.from({ length: 6 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>
       <tr><td>Hexes/Lap</td>${laneHexesArray({ lanes: 6, innerHexes: 50 }).map((h, i) => `<td id="laneHexCol${i}">${h}</td>`).join("")}</tr></table>
     <button onclick="App.generateCourse()">Generate Racecourse</button>
@@ -2022,6 +2102,7 @@ function renderCourse() {
     html += `<div class="subcard">
       <div class="row"><b>${esc(c.name)}</b> <span class="tag">${c.division}</span>
         <span class="tag">${c.lanes} lanes, inner ~${c.innerHexes} hexes</span> <span class="tag">${c.laps} laps</span>
+        <span class="tag">${c.asteroidCount || 0} asteroids</span>
         <span class="muted">Legs are rolled fresh each race</span>
         <button class="danger" onclick="App.deleteCourse('${c.id}')">Delete</button></div>
     </div>`;
@@ -2385,7 +2466,7 @@ function renderInstructions() {
     <p>A Ship is a name, a Ship Class, a crewman (who provides the Pilot, Gunner, and Engineer values), a Red/Green/Blue color for the Class's icon, and optional sponsor bonuses. A sponsor grants up to ${SPONSOR_BONUS_MAX} bonus points spread over up to ${SPONSOR_BONUS_MAX} stats, in exchange for a -${SPONSOR_PENALTY_MAX} penalty to one stat. A Ship needs a crewman assigned to race. Extra crew names are flavor only.</p>
 
     <h3>4. Racecourse &amp; Race — run it</h3>
-    <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, and the laps to finish. Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
+    <p>Every course is a Circular Track: a hex-grid, 6 lanes. Set the Division, the inner-lane hex count, the laps to finish, and how many asteroids to scatter on the track (type a number or roll 2D10). Race Setup lists race-legal ships in the course's Division; NPC racers are added automatically from the same construction-point budget. The first ship across the finish line wins.</p>
     <p>Each Leg, ships take turns one at a time in <b>Thrust order</b> (lowest first; ties are broken with 1D20, lowest first). The lowest Thrust starts in the outermost lane. On a ship's turn:</p>
     <ol>
       <li><b>Damage Control</b> — offered at the start of the Leg, before Gear. If taken, roll 1D6 + Damage Control + crew Engineer and repair that much HP (never above max HP), but the ship cannot attack this Leg.</li>
@@ -2396,7 +2477,7 @@ function renderInstructions() {
       <li><b>Attack</b> — if you pass within your Range (weapon range, 1 hex by default) of another racer, the turn pauses and asks whether to attack. You may attack once per Leg: roll 1D20 + Gunner + crew Gunner against the TN. On a hit, roll 1D6 plus the attacker's Damage bonus, minus the target's Armor. The target then carries one Disadvantage into its next Control check. No attacks are allowed on the first Leg.</li>
     </ol>
     <p>A ship that drops to 0 HP is destroyed and leaves a wreck that other ships must navigate around. At the start of every Leg the wreck drifts 1-2 hexes forward (one hex at a time, a random pick among the three hexes ahead of it), never past the edge of the track or onto an occupied hex. A ship forced off the track loses 3 HP (ignoring Armor), starts the next Leg in Gear-1, and its turn ends.</p>
-    <p>The track also scatters drifting asteroids among the lanes, shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. At the start of every Leg the number of active asteroids is set to match that Leg's TN -- extras fade out, or more fade in at random open hexes -- and they drift 1-2 hexes forward the same way a wreck does. Like a wreck, an asteroid is a hard stop: no check, no passing through it.</p>
+    <p>A Racecourse can also scatter a fixed number of asteroids among the lanes (chosen when the course is built), shown as spinning rock shapes with no ring around them. None start on a ship's starting hex. Each Leg, every asteroid drifts 1-2 hexes forward, staying in its own lane. A ship's own deliberate movement into an asteroid's hex is a hard stop, same as a wreck: no check, no passing through it. But if a drifting asteroid moves into an active ship's hex, it shoves that ship into one of the three hexes ahead of it (or swaps places with it if all three are blocked) and deals 1 HP of damage, ignoring Armor. Starting a Leg plays a short animation of that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.</p>
 
     <p><b>Show Last Leg</b>/<b>Show Entire Race</b> (above Standings) replay each ship's movement at half speed, dropping a small colored dot at the center of every hex it passes through. Click anywhere to clear the trail.</p>
 
@@ -2626,6 +2707,7 @@ const App = {
 
   /* Course */
   rollDraftName() { document.getElementById("cName").value = rollRaceName(); },
+  rollAsteroidCount() { document.getElementById("cAsteroids").value = rollD(10) + rollD(10); },
   previewLaneHexes(val) {
     const inner = clampInt(val, 1, 999, 50);
     laneHexesArray({ lanes: 6, innerHexes: inner }).forEach((h, i) => {
@@ -2640,7 +2722,8 @@ const App = {
     const innerHexes = clampInt(document.getElementById("cInnerHexes").value, 1, 999, 50);
     const laps = clampInt(document.getElementById("cLaps").value, 1, 999, 3);
     const flatDamage = !!document.getElementById("cFlatDamage").checked;
-    STATE.courses.push({ id: uid("course"), name, division, lanes: 6, innerHexes, laps, legMode: mode, flatDamage });
+    const asteroidCount = clampInt(document.getElementById("cAsteroids").value, 0, 999, 0);
+    STATE.courses.push({ id: uid("course"), name, division, lanes: 6, innerHexes, laps, legMode: mode, flatDamage, asteroidCount });
     saveState(); render();
   },
   deleteCourse(id) {
@@ -2754,6 +2837,7 @@ const App = {
     race.started = true;
     runAutomaticTurns(race);
     saveState(); render();
+    playLegStartAnimation(race);
   },
   startNextLeg() {
     const race = STATE.race;
@@ -2762,6 +2846,7 @@ const App = {
     initLegState(race);
     runAutomaticTurns(race);
     saveState(); render();
+    playLegStartAnimation(race);
   },
   takeTurn(pid) {
     const race = STATE.race;

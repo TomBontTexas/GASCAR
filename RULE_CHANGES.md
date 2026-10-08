@@ -17,6 +17,11 @@ applicable), the current value in use, and where it lives in the code.
 
 ---
 
+### 2026-10-09 — Asteroids reworked: a fixed count chosen per course, lane-locked drift, and a push-and-damage collision
+- **Earlier value:** the number of active asteroids was recalculated every Leg to match that Leg's TN, fading in/out as it changed; drift could carry an asteroid into a neighboring lane (same three-hex choice as a wreck); an asteroid was always a hard stop for anything that ran into it.
+- **Current value:** a Racecourse now sets a fixed Asteroid count once (type a number or roll 2D10) when the course is designed; that many are scattered at race start, avoiding every ship's starting hex, and the count never changes for the rest of the race. Each Leg, every asteroid drifts 1-2 hexes but **stays in its own lane** -- no more lane-changing drift. If an asteroid drifts into a hex an active (non-wrecked) ship occupies, it shoves that ship into one of the three hexes ahead of the ship (straight, or a forward diagonal); if all three are blocked, the ship and the asteroid swap hexes instead. Either way the ship takes 1 HP of damage, ignoring Armor. A wreck or another asteroid in an asteroid's path still just blocks it, same as before -- a ship's own deliberate movement into an asteroid's hex is also unchanged (still a hard stop, no Control check). Starting a Leg (Start Race / Start Leg N) now visibly animates that Leg's asteroid drift and any ship it shoved, before play moves to the first ship's turn.
+- **Where:** `course.asteroidCount` (set in the Racecourse builder) in `app.js`; `placeAsteroids()` / `driftAsteroids()` / `pushShip()` / `threeForwardHexes()` / `playLegStartAnimation()`, called from `startRace()` / `initLegState()` / `App.startRaceNow()` / `App.startNextLeg()`, in `app.js`.
+
 ### 2026-10-08 — Engineer skill added; crew split points raised 5 -> 6
 - **New:** a Crewman now has a third skill, Engineer, alongside Pilot and Gunner, starting at 0 like the others. Engineer is added to a ship's Damage Control roll (1D6 + Damage Control + crew Engineer), the same way Pilot adds to Control checks and Gunner adds to Gunner checks.
 - **Earlier value:** a Crewman divided 5 points between Pilot and Gunner.
