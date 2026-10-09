@@ -757,6 +757,16 @@ function renderCircularTrackSvg(race, course) {
   svg += `</g></svg>`;
   return svg;
 }
+function ordinal(n) {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return n + "th";
+  switch (n % 10) {
+    case 1: return n + "st";
+    case 2: return n + "nd";
+    case 3: return n + "rd";
+    default: return n + "th";
+  }
+}
 // The hover card for a racer on the track: a broadcast-style lower third.
 function racerTipHtml(race, p) {
   const course = getCourse(race.courseId);
@@ -777,7 +787,7 @@ function racerTipHtml(race, p) {
   const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
   const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage Control", `${cs.damageControl}/${cs.crewEngineer}`], ["Damage", cs.damage], ["Armor", cs.armor]];
   return `<div class="tvtip">
-    <div class="tvtip-stripe"><span class="tvtip-pos">P${pos}</span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
+    <div class="tvtip-stripe"><span class="tvtip-pos"><b>${ordinal(pos)}</b><small>Place</small></span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
     <div class="tvtip-body">
       ${img ? `<img class="tvtip-img" src="${img}" alt="">` : ""}
       <div class="tvtip-name">${esc(label)}</div>

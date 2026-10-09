@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+check("ordinal(1) = '1st'", ordinal(1) === "1st");
+check("ordinal(2) = '2nd'", ordinal(2) === "2nd");
+check("ordinal(3) = '3rd'", ordinal(3) === "3rd");
+check("ordinal(4) = '4th'", ordinal(4) === "4th");
+check("ordinal(11) = '11th' (not 11st)", ordinal(11) === "11th");
+check("ordinal(12) = '12th' (not 12nd)", ordinal(12) === "12th");
+check("ordinal(13) = '13th' (not 13rd)", ordinal(13) === "13th");
+check("ordinal(21) = '21st'", ordinal(21) === "21st");
+check("ordinal(22) = '22nd'", ordinal(22) === "22nd");
+check("ordinal(23) = '23rd'", ordinal(23) === "23rd");
+check("ordinal(111) = '111th'", ordinal(111) === "111th");
+
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+App.addCrewman(); const c1 = STATE.crewmen[0]; c1.pilot = 7; c1.gunner = 5;
+App.addShip(); const sh1 = STATE.ships[0]; App.updateShip(sh1.id, "classId", cls.id); App.updateShip(sh1.id, "crewmanId", c1.id);
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh1.id]; STATE._draftNpcs = [{ name: "Rival A" }, { name: "Rival B" }];
+App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+const race = STATE.race;
+const hero = race.participants.find(p => p.type === "hero");
+const tipHtml = racerTipHtml(race, hero);
+check("hover card shows an ordinal place", /tvtip-pos"><b>\d+(st|nd|rd|th)<\/b>/.test(tipHtml));
+check("hover card labels it 'Place'", tipHtml.indexOf("<small>Place</small>") !== -1);
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

@@ -15,6 +15,12 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-09 — Track hover card: shows race position; fixed wrapping stat headers
+- **Bug:** the hover card already computed the racer's position but only showed it as a terse "P3" badge, which read as something other than a place to a real user. Separately, the two-word stat headers ("Hit Points", "Damage Control") in the card's bottom grid wrapped onto two lines while every other header stayed on one, making that row visibly taller and uneven.
+- **Current value:** the badge now reads as a stacked ordinal + "Place" label (e.g. "2nd / PLACE"), unambiguous at a glance. The stat grid's headers are sized to fit on one line (smaller font, tighter letter-spacing, `white-space: nowrap`), and the card itself is a bit wider (240px -> 280px) to give them room.
+- **Testing:** new `tests/hover_place_test.html` (13 checks: `ordinal()` across 1st/2nd/3rd/4th/11th-13th-exception/21st-23rd/111th, plus the hover card's actual markup) — verified headless via Playwright, plus the full 38-file suite re-run clean. Also screenshot-checked in a live rendered race to confirm no header wraps and the card reads cleanly.
+- **Where:** `ordinal()` / `racerTipHtml()` in `app.js`; `.tvtip-pos` / `.tvtip-stats small` / `#trackTip` in `style.css`.
+
 ### 2026-10-08 — Standings board: added an HP tag
 - Each racer's row in the Standings board (Race tab) now shows an `HP 8/11`-style tag alongside the existing Lane/Lap/Gear/Init tags, so current vs. max Hit Points are visible without opening the turn hub. Styled red (danger) under the same rule as the turn hub's own HP tag: out-of-commission, or below half max HP.
 - **Testing:** new `tests/hp_tag_test.html` (5 checks: full-HP tag text/class, damaged-ship tag text/class, OOC ship stays red even at full HP) — verified headless via Playwright, plus the full 37-file suite re-run clean.
