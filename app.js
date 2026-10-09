@@ -291,9 +291,9 @@ function randomNpcCrewSkills() {
     [parts[i], parts[j]] = [parts[j], parts[i]];
   }
   return {
-    pilot: GDATA.CREWMAN_BASE + parts[0],
-    gunner: GDATA.CREWMAN_BASE + parts[1],
-    engineer: GDATA.CREWMAN_BASE + parts[2],
+    crewPilot: GDATA.CREWMAN_BASE + parts[0],
+    crewGunner: GDATA.CREWMAN_BASE + parts[1],
+    crewEngineer: GDATA.CREWMAN_BASE + parts[2],
   };
 }
 // ---------- NPCs: auto-built, not hand-spent ----------
@@ -314,10 +314,7 @@ function freshNpcStats(division) {
     out[stat] += 1;
     budget -= cost;
   }
-  const crew = randomNpcCrewSkills();
-  out.crewPilot = crew.pilot;
-  out.crewGunner = crew.gunner;
-  out.crewEngineer = crew.engineer;
+  Object.assign(out, randomNpcCrewSkills());
   return out;
 }
 // Sponsor (see RULE_CHANGES.md 2026-10-05, amounts updated 2026-10-07): up to
@@ -806,7 +803,7 @@ function racerTipHtml(race, p) {
   const cs = carStats(p);
   const hero = p.type === "hero" ? getShip(p.shipId) : null;
   const crewman = hero ? STATE.crewmen.find(c => c.id === hero.crewmanId) : null;
-  const crewName = p.type === "npc" ? "NPC" : crewman ? crewman.name : "None";
+  const crewName = p.type === "npc" ? (p.crewName || "NPC") : crewman ? crewman.name : "None";
   const tipStats = [["Range", cs.range], ["Thrust", cs.thrust], ["Hit Points", cs.points], ["Control", `${cs.control}/${cs.crewPilot}`], ["Gunner", `${cs.gunner}/${cs.crewGunner}`], ["Damage Control", `${cs.damageControl}/${cs.crewEngineer}`], ["Damage", cs.damage], ["Armor", cs.armor]];
   return `<div class="tvtip">
     <div class="tvtip-stripe"><span class="tvtip-pos"><b>${ordinal(pos)}</b><small>Place</small></span>${info ? `<span class="tvtip-num">${esc(info.number)}</span>` : ""}</div>
@@ -826,31 +823,41 @@ function initTrackTip() {
   const tip = document.createElement("div");
   tip.id = "trackTip";
   document.body.appendChild(tip);
-  let lastX = null, lastY = null, shownId = null;
+  let lastX = null, lastY = null, shownId = null, pinnedId = null;
   const place = () => {
+    if (lastX == null) return;
     const pad = 18, w = tip.offsetWidth, h = tip.offsetHeight;
     const x = Math.min(lastX + pad, window.innerWidth - w - 8);
     const y = Math.min(lastY + pad, window.innerHeight - h - 8);
     tip.style.left = Math.max(8, x) + "px";
     tip.style.top = Math.max(8, y) + "px";
   };
+  const showFor = p => {
+    shownId = p.id;
+    tip.innerHTML = racerTipHtml(STATE.race, p);
+    tip.style.display = "block";
+    place();
+  };
+  const hide = () => { tip.style.display = "none"; shownId = null; };
   // Re-resolves the hovered racer from the current cursor position every time, rather than
   // trusting a stale event target - race playback re-renders the track and swaps the SVG
   // racer nodes out from under the cursor, which used to make the card vanish mid-hover.
   const refresh = () => {
+    const race = STATE.race;
+    // A tap-pinned card (see the click listener below -- how a touch device, which has no
+    // real hover, keeps the card open) stays up and keeps refreshing its own content
+    // regardless of where the cursor is, until explicitly unpinned.
+    if (pinnedId != null) {
+      const p = race ? race.participants.find(x => x.id === pinnedId) : null;
+      if (!p) { pinnedId = null; hide(); } else showFor(p);
+      return;
+    }
     if (lastX == null) return;
     const el = document.elementFromPoint(lastX, lastY);
     const racerEl = el && el.closest && el.closest("[data-racer]");
-    const race = STATE.race;
     const p = racerEl && race ? race.participants.find(x => x.id === racerEl.dataset.racer) : null;
-    if (!p) {
-      if (shownId !== null) { tip.style.display = "none"; shownId = null; }
-      return;
-    }
-    shownId = p.id;
-    tip.innerHTML = racerTipHtml(race, p);
-    tip.style.display = "block";
-    place();
+    if (!p) { if (shownId !== null) hide(); return; }
+    showFor(p);
   };
   const onMove = e => { lastX = e.clientX; lastY = e.clientY; refresh(); };
   document.addEventListener("mouseover", onMove);
@@ -859,7 +866,19 @@ function initTrackTip() {
   // unlike mouseout, it isn't fooled by a re-render removing the hovered node (relatedTarget
   // is null in that case too, which used to hide the card mid-hover with no way back).
   document.documentElement.addEventListener("mouseleave", () => {
-    lastX = lastY = null; tip.style.display = "none"; shownId = null;
+    if (pinnedId != null) return;
+    lastX = lastY = null; hide();
+  });
+  // Touch devices have no real hover at all -- a tap fires a brief mouseover/mouseout pair
+  // and the card vanishes right after. Tapping a racer instead pins its card open; tapping
+  // it again, or tapping anywhere else, unpins it. Works the same as a click on desktop.
+  document.addEventListener("click", e => {
+    const racerEl = e.target.closest && e.target.closest("[data-racer]");
+    const race = STATE.race;
+    const p = racerEl && race ? race.participants.find(x => x.id === racerEl.dataset.racer) : null;
+    lastX = e.clientX; lastY = e.clientY;
+    if (p && pinnedId !== p.id) { pinnedId = p.id; showFor(p); }
+    else { pinnedId = null; hide(); }
   });
   setInterval(refresh, 200);
 }
@@ -980,10 +999,7 @@ function npcStatsFromDivision(division) {
 function npcStatsFromClass(cls) {
   const out = {};
   SHIP_STATS.forEach(s => { out[s] = cls[s] || 0; });
-  const crew = randomNpcCrewSkills();
-  out.crewPilot = crew.pilot;
-  out.crewGunner = crew.gunner;
-  out.crewEngineer = crew.engineer;
+  Object.assign(out, randomNpcCrewSkills());
   return out;
 }
 // An NPC icon no class or ship in the Division uses, and no other racer in
@@ -1384,8 +1400,12 @@ function startRace(courseId, shipIds, npcs) {
     if (pick) usedIcons.add(`${pick.color}|${pick.number}`);
     const npcClass = n.classId ? getShipClass(n.classId) : null;
     const stats = n.stats || (npcClass ? npcStatsFromClass(npcClass) : npcStatsFromDivision(course.division));
+    // The draft already rolled this NPC's crew (see App.addDraftNpc()/fillRandomNpcs()) so the
+    // roster shown during Race Setup matches what actually races -- use it instead of whatever
+    // npcStatsFromClass()/npcStatsFromDivision() rolled fresh just now.
+    if (n.crewPilot != null) { stats.crewPilot = n.crewPilot; stats.crewGunner = n.crewGunner; stats.crewEngineer = n.crewEngineer; }
     participants.push({
-      id: uid("npc"), type: "npc", name: n.name, aggression: clampInt(n.aggression, 1, 10, 5),
+      id: uid("npc"), type: "npc", name: n.name, crewName: n.crewName || rollHeroName(), aggression: clampInt(n.aggression, 1, 10, 5),
       division: course.division, ...stats,
       cumulative: 0, history: [], iconDivision: course.division, iconColor: pick ? pick.color : "", iconNumber: pick ? pick.number : "",
       out: false, gear: 0, maxHp: stats.points, hp: stats.points
@@ -2321,9 +2341,15 @@ function renderRaceSetup() {
       <button class="ghost" ${room ? "" : "disabled"} onclick="App.fillRandomNpcs()">🎲 Fill to ${course.lanes}${room ? ` (+${room})` : ""}</button>
     </div>
     <p class="muted" style="margin:0 0 6px">An NPC can be built from a specific Ship Class in this Division (its stats, not your sponsor adjustments), or left auto-built. Each NPC gets its own icon that no ship or class in the Division uses. Aggression (1-10, public knowledge) drives its automated gear changes, movement, and hunting other racers during the race.</p>
-    <div id="npcList" class="npc-list">${draftNpcs.map((n, i) => { const cls = n.classId ? getShipClass(n.classId) : null; return `<div class="npc-row">
+    <div id="npcList" class="npc-list">${draftNpcs.map((n, i) => {
+      const cls = n.classId ? getShipClass(n.classId) : null;
+      // Drafts saved by an older version may not have a rolled crew yet -- fill one in now.
+      if (n.crewPilot == null) Object.assign(n, randomNpcCrewSkills());
+      if (!n.crewName) n.crewName = rollHeroName();
+      return `<div class="npc-row">
       <a href="#" class="npc-chip-x" title="Remove" onclick="App.removeDraftNpc(${i});return false;">×</a>
       <b>${esc(n.name)}</b> <span class="muted">${cls ? esc(cls.name) : "(auto-built)"}</span> <span class="muted">Aggr ${n.aggression}</span>
+      <span class="muted">Crew ${esc(n.crewName)}: Pilot ${n.crewPilot} / Gunner ${n.crewGunner} / Engineer ${n.crewEngineer}</span>
     </div>`; }).join("")}</div>
   </div></div>`;
   html += `<button onclick="App.beginRace()">Start Race</button></section>`;
@@ -2374,7 +2400,11 @@ function renderStandings(race, center = "", below = "") {
     const hpTag = ` <span class="tag${p.out || hp < maxHp / 2 ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}${hpTag}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated gear changes, movement, and hunting">Aggr ${p.aggression || 5}</span>` : "";
-    const crewTag = p.type === "npc" ? ` <span class="tag" title="This NPC's randomly-rolled crew">Crew ${esc(p.name)}: Pilot ${p.crewPilot || 0} / Gunner ${p.crewGunner || 0} / Engineer ${p.crewEngineer || 0}</span>` : "";
+    const heroShip = p.type === "hero" ? getShip(p.shipId) : null;
+    const heroCrewman = heroShip ? getCrewman(heroShip.crewmanId) : null;
+    const crewTag = p.type === "npc"
+      ? ` <span class="tag" title="This NPC's randomly-rolled crew">Crew ${esc(p.crewName || p.name)}: Pilot ${p.crewPilot || 0} / Gunner ${p.crewGunner || 0} / Engineer ${p.crewEngineer || 0}</span>`
+      : heroCrewman ? ` <span class="tag" title="This ship's assigned Crewman">Crew ${esc(heroCrewman.name)}: Pilot ${heroCrewman.pilot} / Gunner ${heroCrewman.gunner} / Engineer ${heroCrewman.engineer}</span>` : "";
     html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}${crewTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
@@ -2922,7 +2952,9 @@ const App = {
     const aggression = clampInt(document.getElementById("npcAggression").value, 1, 10, 5);
     const classId = document.getElementById("npcClass").value || null;
     STATE._draftNpcs = STATE._draftNpcs || [];
-    STATE._draftNpcs.push({ name: v, aggression, classId });
+    // crewName + crewPilot/crewGunner/crewEngineer are rolled once here, not re-rolled at
+    // race start, so the roster the player sees during Setup matches the race (see startRace()).
+    STATE._draftNpcs.push({ name: v, aggression, classId, crewName: rollHeroName(), ...randomNpcCrewSkills() });
     STATE._draftNpcAggression = aggression;
     input.value = "";
     render();
@@ -2940,7 +2972,7 @@ const App = {
     const room = course.lanes - (STATE._raceSetupShips || []).length - STATE._draftNpcs.length;
     for (let i = 0; i < room; i++) {
       const classId = classes.length ? classes[rollD(classes.length) - 1].id : null;
-      STATE._draftNpcs.push({ name: rollShipName(), aggression: rollD(10), classId });
+      STATE._draftNpcs.push({ name: rollShipName(), aggression: rollD(10), classId, crewName: rollHeroName(), ...randomNpcCrewSkills() });
     }
     saveState(); render();
   },

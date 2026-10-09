@@ -16,11 +16,11 @@ rollD = s => 1 + Math.floor(Math.random() * s);
 let sawNonZeroTotal = false, sawVariety = new Set();
 for (let i = 0; i < 500; i++) {
   const c = randomNpcCrewSkills();
-  const total = c.pilot + c.gunner + c.engineer;
+  const total = c.crewPilot + c.crewGunner + c.crewEngineer;
   check(`trial ${i}: total within budget`, total >= 0 && total <= GDATA.CREWMAN_SPLIT_POINTS);
-  check(`trial ${i}: no negative skill`, c.pilot >= 0 && c.gunner >= 0 && c.engineer >= 0);
+  check(`trial ${i}: no negative skill`, c.crewPilot >= 0 && c.crewGunner >= 0 && c.crewEngineer >= 0);
   if (total > 0) sawNonZeroTotal = true;
-  sawVariety.add(`${c.pilot},${c.gunner},${c.engineer}`);
+  sawVariety.add(`${c.crewPilot},${c.crewGunner},${c.crewEngineer}`);
 }
 check("random rolls aren't all identical", sawVariety.size > 5);
 check("random rolls sometimes produce a nonzero total", sawNonZeroTotal);
@@ -43,27 +43,58 @@ for (let i = 0; i < 100; i++) {
 check("freshNpcStats sometimes rolls a nonzero crew", sawAnyFreshNonZero);
 check("npcStatsFromClass sometimes rolls a nonzero crew", sawAnyClassNonZero);
 
-// End-to-end: a real NPC participant carries a rolled crew, and the pre-race
-// Standings roster lists it.
+// Drafting an NPC (App.addDraftNpc()) rolls a crewman name + skills right away, and the
+// Race Setup list shows it.
+document.body.insertAdjacentHTML("beforeend", '<input id="npcName"><input id="npcAggression" value="5"><select id="npcClass"><option value="">(auto-built, no specific Class)</option></select>');
 STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
-STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [];
-STATE._draftNpcs = [{ name: "Rival A", aggression: 5, classId: cls.id }, { name: "Rival B", aggression: 7 }];
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = []; STATE._draftNpcs = [];
+document.getElementById("npcName").value = "Rival A";
+App.addDraftNpc();
+const draftA = STATE._draftNpcs[0];
+check("addDraftNpc rolls a crewName", !!draftA.crewName);
+check("addDraftNpc rolls crew skills within budget", (draftA.crewPilot + draftA.crewGunner + draftA.crewEngineer) <= GDATA.CREWMAN_SPLIT_POINTS);
+App.fillRandomNpcs();
+const draftB = STATE._draftNpcs[1];
+check("fillRandomNpcs also rolls a crewName", draftB && !!draftB.crewName);
+const setupHtml = renderRaceSetup();
+check("Race Setup list shows the drafted NPC's crew name", setupHtml.indexOf(`Crew ${esc(draftA.crewName)}`) !== -1);
+check("Race Setup list shows the drafted NPC's Pilot points", setupHtml.indexOf(`Pilot ${draftA.crewPilot}`) !== -1);
+
+// End-to-end: a real NPC participant carries the SAME rolled crew the draft list showed
+// (not re-rolled at race start), and the pre-race Standings roster lists it by crew name.
 App.beginRace();
 const race = STATE.race;
 const npcs = race.participants.filter(p => p.type === "npc");
-check("race has 2 NPC participants", npcs.length === 2);
+check("race has NPC participants (1 drafted + fillRandomNpcs up to the lane count)", npcs.length >= 2);
 npcs.forEach((p, i) => {
+  check(`NPC ${i} (${p.name}) carries a crewName`, !!p.crewName);
   const total = p.crewPilot + p.crewGunner + p.crewEngineer;
-  check(`NPC ${i} (${p.name}) carries crew fields`, p.crewPilot != null && p.crewGunner != null && p.crewEngineer != null);
   check(`NPC ${i} (${p.name}) crew within 6-point budget`, total <= 6);
 });
+check("the NPC's race crew matches what Race Setup showed (not re-rolled)", npcs[0].crewName === draftA.crewName && npcs[0].crewPilot === draftA.crewPilot && npcs[0].crewGunner === draftA.crewGunner && npcs[0].crewEngineer === draftA.crewEngineer);
 const standingsHtml = renderStandings(race);
 npcs.forEach((p, i) => {
-  check(`Standings lists NPC ${i}'s crew name`, standingsHtml.indexOf(`Crew ${p.name}`) !== -1);
+  check(`Standings lists NPC ${i} by crew NAME, not ship name`, standingsHtml.indexOf(`Crew ${esc(p.crewName)}`) !== -1);
   check(`Standings lists NPC ${i}'s Pilot points`, standingsHtml.indexOf(`Pilot ${p.crewPilot}`) !== -1);
   check(`Standings lists NPC ${i}'s Gunner points`, standingsHtml.indexOf(`Gunner ${p.crewGunner}`) !== -1);
   check(`Standings lists NPC ${i}'s Engineer points`, standingsHtml.indexOf(`Engineer ${p.crewEngineer}`) !== -1);
 });
+
+// Hero ships: the Standings roster also lists the assigned Crewman's name + skills.
+STATE.ships = []; STATE.crewmen = []; STATE.race = null;
+App.addCrewman();
+const crewman = STATE.crewmen[0];
+crewman.name = "Dusty Vance"; crewman.pilot = 4; crewman.gunner = 1; crewman.engineer = 1;
+App.addShip();
+const ship = STATE.ships[0];
+App.updateShip(ship.id, "classId", cls.id);
+App.updateShip(ship.id, "crewmanId", crewman.id);
+STATE._raceSetupShips = [ship.id]; STATE._draftNpcs = [];
+App.beginRace();
+const heroStandings = renderStandings(STATE.race);
+check("Standings lists the Hero's crewman name", heroStandings.indexOf("Crew Dusty Vance") !== -1);
+check("Standings lists the Hero's crewman Pilot points", heroStandings.indexOf("Pilot 4") !== -1);
+check("Standings lists the Hero's crewman Gunner points", heroStandings.indexOf("Gunner 1") !== -1);
 
 document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
 } catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }

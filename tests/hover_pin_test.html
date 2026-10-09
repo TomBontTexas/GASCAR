@@ -1,0 +1,63 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+// initTrackTip() (which creates #trackTip) only runs on DOMContentLoaded, which hasn't
+// fired yet while this inline script is still being parsed -- wait for it, same as the
+// real app does.
+document.addEventListener("DOMContentLoaded", runTest);
+function runTest() {
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+App.addCrewman(); const c1 = STATE.crewmen[0]; c1.pilot = 7; c1.gunner = 5;
+App.addShip(); const sh1 = STATE.ships[0]; App.updateShip(sh1.id, "classId", cls.id); App.updateShip(sh1.id, "crewmanId", c1.id);
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh1.id]; STATE._draftNpcs = [{ name: "Rival A" }];
+App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+setTab("race");
+
+const racerEl = document.querySelector("[data-racer]");
+const tip = document.getElementById("trackTip");
+
+// Simulate the real event sequence a touch tap produces on a real device (there's no actual
+// hover state, so a tap fires a brief mouseover/mousemove, then a mouseout almost immediately
+// after -- that used to hide the card right away; a real tap's "click" is what should pin it).
+const rect = racerEl.getBoundingClientRect();
+const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+const fire = (type, extra) => racerEl.dispatchEvent(new MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, clientX: cx, clientY: cy }, extra)));
+fire("mouseover");
+fire("mousemove");
+fire("mouseout", { relatedTarget: null });
+fire("click");
+
+check("after a simulated tap (mouseover/mousemove/mouseout/click), card is up", tip.style.display === "block");
+
+// Even with no further input at all (no mousemove, nothing), a tap-pinned card stays up --
+// unlike a hover-only card, it doesn't depend on continuing to sit under a cursor.
+check("card still shows the right racer's content", tip.innerHTML.indexOf("tvtip-pos") !== -1);
+
+// A second tap on the SAME racer un-pins it.
+fire("click");
+check("tapping the same racer again un-pins and hides the card", tip.style.display === "none");
+
+// Re-pin, then tap elsewhere on the page to dismiss.
+fire("mouseover"); fire("click");
+check("re-tapped: card is up again", tip.style.display === "block");
+document.body.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: 2, clientY: 2 }));
+check("tapping elsewhere on the page dismisses the pinned card", tip.style.display === "none");
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+}
+</script>
+</body></html>
