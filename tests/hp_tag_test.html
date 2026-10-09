@@ -1,0 +1,47 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0]; cls.thrust = 3;
+App.addCrewman(); const c1 = STATE.crewmen[0]; c1.pilot = 7; c1.gunner = 5;
+App.addCrewman(); const c2 = STATE.crewmen[1]; c2.pilot = 6; c2.gunner = 5;
+App.addShip(); const sh1 = STATE.ships[0]; App.updateShip(sh1.id, "classId", cls.id); App.updateShip(sh1.id, "crewmanId", c1.id);
+App.addShip(); const sh2 = STATE.ships[1]; App.updateShip(sh2.id, "classId", cls.id); App.updateShip(sh2.id, "crewmanId", c2.id);
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [sh1.id, sh2.id]; STATE._draftNpcs = [];
+App.beginRace(); App.startRaceNow(); if (STATE.race) STATE.race.asteroids = [];
+const race = STATE.race;
+const healthy = race.participants[0];
+const hurt = race.participants[1];
+healthy.hp = healthy.maxHp; // full health -- expect no danger class
+hurt.hp = Math.max(1, Math.floor(hurt.maxHp / 2) - 1); // just under half -- expect danger class
+CURRENT_TAB = "race";
+render();
+const html = document.getElementById("view").innerHTML;
+
+check("full-HP ship shows 'HP <max>/<max>'", html.indexOf(`HP ${healthy.maxHp}/${healthy.maxHp}`) !== -1);
+check("damaged ship shows 'HP <hp>/<max>'", html.indexOf(`HP ${hurt.hp}/${hurt.maxHp}`) !== -1);
+check("damaged ship's HP tag carries the danger class", new RegExp(`tag danger">HP ${hurt.hp}/${hurt.maxHp}<`).test(html));
+check("full-HP ship's HP tag is plain (no danger class)", new RegExp(`tag">HP ${healthy.maxHp}/${healthy.maxHp}<`).test(html));
+
+// An out-of-commission ship should show the danger HP tag even above half HP.
+hurt.hp = hurt.maxHp; hurt.out = true;
+render();
+const html2 = document.getElementById("view").innerHTML;
+check("OOC ship's HP tag carries the danger class even at full HP", new RegExp(`tag danger">HP ${hurt.maxHp}/${hurt.maxHp}<`).test(html2));
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

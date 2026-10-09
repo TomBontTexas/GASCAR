@@ -15,6 +15,11 @@ Newest entries at the top.
 
 ---
 
+### 2026-10-08 — Standings board: added an HP tag
+- Each racer's row in the Standings board (Race tab) now shows an `HP 8/11`-style tag alongside the existing Lane/Lap/Gear/Init tags, so current vs. max Hit Points are visible without opening the turn hub. Styled red (danger) under the same rule as the turn hub's own HP tag: out-of-commission, or below half max HP.
+- **Testing:** new `tests/hp_tag_test.html` (5 checks: full-HP tag text/class, damaged-ship tag text/class, OOC ship stays red even at full HP) — verified headless via Playwright, plus the full 37-file suite re-run clean.
+- **Where:** `renderStandings()` in `app.js`.
+
 ### 2026-10-09 — Hangar Bay: a Crew row and a true grand Total on the ship stats table
 - The ship stats table showed the crewman's Pilot/Gunner/Engineer as three standalone columns next to the ship's own stats, and its Total row never actually added them in -- Control, Gunner, and Damage Control looked like just the Ship Class + sponsor total, not what the ship really fights with. The Pilot/Gunner/Engineer columns are gone; there's now a Crew row aligned under the matching stat (Control/Gunner/Damage Control -- the rest show "—"), and the Total row is the real grand total, crew included.
 - **Where:** `renderShipStatsTable()` in `app.js`.

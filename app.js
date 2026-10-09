@@ -2321,7 +2321,10 @@ function renderStandings(race, center = "", below = "") {
       ? `<img class="boardicon" id="boardicon-${p.id}" src="${esc(shipIconPath(info.division, info.number, info.color))}" style="left:${pct}%" title="${esc(label)}">`
       : "";
     const outTag = p.out ? ` <span class="tag danger">${p.type === "hero" ? "OOC" : "out"}</span>` : "";
-    const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}`;
+    const maxHp = p.maxHp != null ? p.maxHp : 0;
+    const hp = p.hp != null ? p.hp : maxHp;
+    const hpTag = ` <span class="tag${p.out || hp < maxHp / 2 ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
+    const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}${hpTag}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated gear changes, movement, and hunting">Aggr ${p.aggression || 5}</span>` : "";
     html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
       <div class="boardtrack">
