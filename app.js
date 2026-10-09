@@ -804,27 +804,39 @@ function initTrackTip() {
   const tip = document.createElement("div");
   tip.id = "trackTip";
   document.body.appendChild(tip);
-  const place = e => {
+  let lastX = null, lastY = null, shownId = null;
+  const place = () => {
     const pad = 18, w = tip.offsetWidth, h = tip.offsetHeight;
-    const x = Math.min(e.clientX + pad, window.innerWidth - w - 8);
-    const y = Math.min(e.clientY + pad, window.innerHeight - h - 8);
+    const x = Math.min(lastX + pad, window.innerWidth - w - 8);
+    const y = Math.min(lastY + pad, window.innerHeight - h - 8);
     tip.style.left = Math.max(8, x) + "px";
     tip.style.top = Math.max(8, y) + "px";
   };
-  document.addEventListener("mouseover", e => {
-    const el = e.target.closest && e.target.closest("[data-racer]");
+  // Re-resolves the hovered racer from the current cursor position every time, rather than
+  // trusting a stale event target - race playback re-renders the track and swaps the SVG
+  // racer nodes out from under the cursor, which used to make the card vanish mid-hover.
+  const refresh = () => {
+    if (lastX == null) return;
+    const el = document.elementFromPoint(lastX, lastY);
+    const racerEl = el && el.closest && el.closest("[data-racer]");
     const race = STATE.race;
-    const p = el && race ? race.participants.find(x => x.id === el.dataset.racer) : null;
-    if (!p) { tip.style.display = "none"; return; }
+    const p = racerEl && race ? race.participants.find(x => x.id === racerEl.dataset.racer) : null;
+    if (!p) {
+      if (shownId !== null) { tip.style.display = "none"; shownId = null; }
+      return;
+    }
+    shownId = p.id;
     tip.innerHTML = racerTipHtml(race, p);
     tip.style.display = "block";
-    place(e);
-  });
-  document.addEventListener("mousemove", e => { if (tip.style.display === "block") place(e); });
+    place();
+  };
+  const onMove = e => { lastX = e.clientX; lastY = e.clientY; refresh(); };
+  document.addEventListener("mouseover", onMove);
+  document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseout", e => {
-    const el = e.target.closest && e.target.closest("[data-racer]");
-    if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) tip.style.display = "none";
+    if (!e.relatedTarget) { lastX = lastY = null; tip.style.display = "none"; shownId = null; }
   });
+  setInterval(refresh, 200);
 }
 document.addEventListener("DOMContentLoaded", initTrackTip);
 // Real track position: laps completed plus a lane-length-normalized

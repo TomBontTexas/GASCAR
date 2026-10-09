@@ -13,6 +13,12 @@ here.
 
 Newest entries at the top.
 
+### 2026-10-09 — Track hover card: stays up while the mouse is over a ship
+- **Bug:** during race playback (ships animating hex-by-hex, turns auto-advancing), the track re-renders and swaps in new SVG racer nodes under the cursor. The hover card was tracking the old DOM node, so a stray browser `mouseout` would hide it mid-hover even though the mouse never actually left the ship — and since the mouse hadn't moved, no new `mouseover` ever fired to bring it back, so it stayed hidden until the player nudged the mouse off and on again.
+- **Current value:** the card now re-resolves the hovered racer from the live cursor position (`elementFromPoint`) on every mouse move and on a short poll, instead of trusting the specific DOM node a `mouseover`/`mouseout` pair fired on. It survives the track re-rendering out from under it and only hides once the cursor genuinely isn't over a racer anymore.
+- **Testing:** verified headless via Playwright — hovered a racer, triggered a mid-hover re-render with no mouse movement, confirmed the card stayed visible and its content refreshed, then moved the mouse off the ship and confirmed it hid correctly. Full 38-file test suite re-run clean.
+- **Where:** `initTrackTip()` in `app.js`.
+
 ---
 
 ### 2026-10-09 — Track hover card: shows race position; fixed wrapping stat headers
