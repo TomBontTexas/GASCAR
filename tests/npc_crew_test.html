@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<div id="view"></div>
+<pre id="testresult">pending</pre>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/version.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/data.js"></script>
+<script src="file:///D:/Dropbox/Home/Games/GASCAR/webapp/app.js"></script>
+<script>
+try {
+const lines = []; function check(n, c) { lines.push((c ? "PASS" : "FAIL") + " - " + n); }
+window.alert = () => {}; window.confirm = () => true;
+rollD = s => 1 + Math.floor(Math.random() * s);
+
+// randomNpcCrewSkills(): total never exceeds the split budget, never negative.
+let sawNonZeroTotal = false, sawVariety = new Set();
+for (let i = 0; i < 500; i++) {
+  const c = randomNpcCrewSkills();
+  const total = c.pilot + c.gunner + c.engineer;
+  check(`trial ${i}: total within budget`, total >= 0 && total <= GDATA.CREWMAN_SPLIT_POINTS);
+  check(`trial ${i}: no negative skill`, c.pilot >= 0 && c.gunner >= 0 && c.engineer >= 0);
+  if (total > 0) sawNonZeroTotal = true;
+  sawVariety.add(`${c.pilot},${c.gunner},${c.engineer}`);
+}
+check("random rolls aren't all identical", sawVariety.size > 5);
+check("random rolls sometimes produce a nonzero total", sawNonZeroTotal);
+
+// freshNpcStats() and npcStatsFromClass() carry a rolled (not flat-zero) crew.
+STATE.shipClasses = []; STATE.crewmen = []; STATE.ships = []; STATE.courses = []; STATE.race = null;
+App.setShipyardAddDivision("Comet");
+App.addShipClass();
+const cls = STATE.shipClasses[0]; cls.thrust = 3;
+
+let sawAnyFreshNonZero = false, sawAnyClassNonZero = false;
+for (let i = 0; i < 100; i++) {
+  const s1 = freshNpcStats("Comet");
+  if ((s1.crewPilot + s1.crewGunner + s1.crewEngineer) > 0) sawAnyFreshNonZero = true;
+  check(`freshNpcStats trial ${i}: crew within budget`, (s1.crewPilot + s1.crewGunner + s1.crewEngineer) <= GDATA.CREWMAN_SPLIT_POINTS);
+  const s2 = npcStatsFromClass(cls);
+  if ((s2.crewPilot + s2.crewGunner + s2.crewEngineer) > 0) sawAnyClassNonZero = true;
+  check(`npcStatsFromClass trial ${i}: crew within budget`, (s2.crewPilot + s2.crewGunner + s2.crewEngineer) <= GDATA.CREWMAN_SPLIT_POINTS);
+}
+check("freshNpcStats sometimes rolls a nonzero crew", sawAnyFreshNonZero);
+check("npcStatsFromClass sometimes rolls a nonzero crew", sawAnyClassNonZero);
+
+// End-to-end: a real NPC participant carries a rolled crew, and the pre-race
+// Standings roster lists it.
+STATE.courses.push({ id: "c1", name: "T", division: "Comet", lanes: 6, innerHexes: 50, laps: 9, legMode: "tier", flatDamage: false });
+STATE._raceSetupCourse = "c1"; STATE._raceSetupShips = [];
+STATE._draftNpcs = [{ name: "Rival A", aggression: 5, classId: cls.id }, { name: "Rival B", aggression: 7 }];
+App.beginRace();
+const race = STATE.race;
+const npcs = race.participants.filter(p => p.type === "npc");
+check("race has 2 NPC participants", npcs.length === 2);
+npcs.forEach((p, i) => {
+  const total = p.crewPilot + p.crewGunner + p.crewEngineer;
+  check(`NPC ${i} (${p.name}) carries crew fields`, p.crewPilot != null && p.crewGunner != null && p.crewEngineer != null);
+  check(`NPC ${i} (${p.name}) crew within 6-point budget`, total <= 6);
+});
+const standingsHtml = renderStandings(race);
+npcs.forEach((p, i) => {
+  check(`Standings lists NPC ${i}'s crew name`, standingsHtml.indexOf(`Crew ${p.name}`) !== -1);
+  check(`Standings lists NPC ${i}'s Pilot points`, standingsHtml.indexOf(`Pilot ${p.crewPilot}`) !== -1);
+  check(`Standings lists NPC ${i}'s Gunner points`, standingsHtml.indexOf(`Gunner ${p.crewGunner}`) !== -1);
+  check(`Standings lists NPC ${i}'s Engineer points`, standingsHtml.indexOf(`Engineer ${p.crewEngineer}`) !== -1);
+});
+
+document.getElementById("testresult").textContent = lines.join("\n") + "\n\n" + (lines.every(l => l.startsWith("PASS")) ? "ALL PASS" : "SOME FAILED");
+} catch (e) { document.getElementById("testresult").textContent = "THREW: " + e.message + "\n" + e.stack; }
+</script>
+</body></html>

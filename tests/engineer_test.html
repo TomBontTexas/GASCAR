@@ -63,11 +63,11 @@ check("the split pool is 6 points", GDATA.CREWMAN_SPLIT_POINTS === 6);
   reset();
   App.setShipyardAddDivision("Comet"); App.addShipClass(); const cls = STATE.shipClasses[0];
   const fromClass = npcStatsFromClass(cls);
-  check("npcStatsFromClass: crewEngineer at baseline", fromClass.crewEngineer === GDATA.CREWMAN_BASE);
+  check("npcStatsFromClass: crewEngineer is a number within the split budget", typeof fromClass.crewEngineer === "number" && fromClass.crewEngineer >= GDATA.CREWMAN_BASE && (fromClass.crewPilot + fromClass.crewGunner + fromClass.crewEngineer) <= GDATA.CREWMAN_SPLIT_POINTS);
   const fromDivision = npcStatsFromDivision("Comet");
   check("npcStatsFromDivision: crewEngineer is a number (baseline or copied from a ship)", typeof fromDivision.crewEngineer === "number");
   const fresh = freshNpcStats("Comet");
-  check("freshNpcStats: crewEngineer at baseline", fresh.crewEngineer === GDATA.CREWMAN_BASE);
+  check("freshNpcStats: crewEngineer is a number within the split budget", typeof fresh.crewEngineer === "number" && fresh.crewEngineer >= GDATA.CREWMAN_BASE && (fresh.crewPilot + fresh.crewGunner + fresh.crewEngineer) <= GDATA.CREWMAN_SPLIT_POINTS);
 }
 
 // Damage Control heals 1D6 + ship Damage Control + crew Engineer.

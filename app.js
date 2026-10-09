@@ -274,13 +274,34 @@ function freshCrewman(name) {
 }
 function crewmanSplitSpent(crewman) { return GDATA.CREWMAN_SKILLS.reduce((sum, s) => sum + (crewman[s] - GDATA.CREWMAN_BASE), 0); }
 function crewmanSplitRemaining(crewman) { return GDATA.CREWMAN_SPLIT_POINTS - crewmanSplitSpent(crewman); }
+// An NPC's Pilot/Gunner/Engineer: it has no hand-built Crewman of its own, so
+// its skills are rolled at random, split across the same 6 points a real
+// Crewman divides (see RULE_CHANGES.md 2026-10-09), instead of sitting at the
+// free baseline for every skill. Two random cut points over [0, total] split
+// that many points into three non-negative shares (shuffled so the largest
+// share isn't always the same skill).
+function randomNpcCrewSkills() {
+  const total = Math.floor(Math.random() * (GDATA.CREWMAN_SPLIT_POINTS + 1));
+  const c1 = Math.floor(Math.random() * (total + 1));
+  const c2 = Math.floor(Math.random() * (total + 1));
+  const lo = Math.min(c1, c2), hi = Math.max(c1, c2);
+  const parts = [lo, hi - lo, total - hi];
+  for (let i = parts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [parts[i], parts[j]] = [parts[j], parts[i]];
+  }
+  return {
+    pilot: GDATA.CREWMAN_BASE + parts[0],
+    gunner: GDATA.CREWMAN_BASE + parts[1],
+    engineer: GDATA.CREWMAN_BASE + parts[2],
+  };
+}
 // ---------- NPCs: auto-built, not hand-spent ----------
 // An NPC has no Ship Class/Crewman of its own -- its Division's
 // construction-point budget is spent automatically, as evenly as the
 // triangular cost curve allows (repeatedly bump whichever of the 6 Ship
 // stats has the fewest points spent ABOVE ITS OWN baseline so far), and its
-// Skill is left at the same free baseline every Crewman starts at (NPCs
-// don't earn or spend XP).
+// Pilot/Gunner/Engineer are randomly rolled (see randomNpcCrewSkills()).
 function freshNpcStats(division) {
   let budget = divisionBuildPoints(division);
   const out = freshClassStats();
@@ -293,9 +314,10 @@ function freshNpcStats(division) {
     out[stat] += 1;
     budget -= cost;
   }
-  out.crewPilot = GDATA.CREWMAN_BASE;
-  out.crewGunner = GDATA.CREWMAN_BASE;
-  out.crewEngineer = GDATA.CREWMAN_BASE;
+  const crew = randomNpcCrewSkills();
+  out.crewPilot = crew.pilot;
+  out.crewGunner = crew.gunner;
+  out.crewEngineer = crew.engineer;
   return out;
 }
 // Sponsor (see RULE_CHANGES.md 2026-10-05, amounts updated 2026-10-07): up to
@@ -833,8 +855,11 @@ function initTrackTip() {
   const onMove = e => { lastX = e.clientX; lastY = e.clientY; refresh(); };
   document.addEventListener("mouseover", onMove);
   document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseout", e => {
-    if (!e.relatedTarget) { lastX = lastY = null; tip.style.display = "none"; shownId = null; }
+  // mouseleave on the document root only fires when the cursor truly exits the page -
+  // unlike mouseout, it isn't fooled by a re-render removing the hovered node (relatedTarget
+  // is null in that case too, which used to hide the card mid-hover with no way back).
+  document.documentElement.addEventListener("mouseleave", () => {
+    lastX = lastY = null; tip.style.display = "none"; shownId = null;
   });
   setInterval(refresh, 200);
 }
@@ -950,14 +975,15 @@ function npcStatsFromDivision(division) {
   return { ...carStats({ type: "hero", shipId: pick.id }) };
 }
 // An NPC drafted from a specific Ship Class (Race Setup's NPC Class picker):
-// the Class's own stats directly, no sponsor adjustment, Pilot/Gunner at the
-// crew baseline (an NPC has no assigned crewman).
+// the Class's own stats directly, no sponsor adjustment, Pilot/Gunner/Engineer
+// randomly rolled (an NPC has no assigned crewman -- see randomNpcCrewSkills()).
 function npcStatsFromClass(cls) {
   const out = {};
   SHIP_STATS.forEach(s => { out[s] = cls[s] || 0; });
-  out.crewPilot = GDATA.CREWMAN_BASE;
-  out.crewGunner = GDATA.CREWMAN_BASE;
-  out.crewEngineer = GDATA.CREWMAN_BASE;
+  const crew = randomNpcCrewSkills();
+  out.crewPilot = crew.pilot;
+  out.crewGunner = crew.gunner;
+  out.crewEngineer = crew.engineer;
   return out;
 }
 // An NPC icon no class or ship in the Division uses, and no other racer in
@@ -2348,7 +2374,8 @@ function renderStandings(race, center = "", below = "") {
     const hpTag = ` <span class="tag${p.out || hp < maxHp / 2 ? " danger" : ""}">HP ${hp}/${maxHp}</span>`;
     const circTag = ` <span class="tag">Lane ${p.lane}</span> <span class="tag">Lap ${Math.min(p.laps || 0, course.laps)}/${course.laps}</span> <span class="tag">Gear ${p.gear || 0}</span>${p.initiative != null ? ` <span class="tag">Init ${p.initiative}</span>` : ""}${hpTag}`;
     const aggrTag = p.type === "npc" ? ` <span class="tag" title="Aggression -- drives this NPC's automated gear changes, movement, and hunting">Aggr ${p.aggression || 5}</span>` : "";
-    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}</span></span></span>
+    const crewTag = p.type === "npc" ? ` <span class="tag" title="This NPC's randomly-rolled crew">Crew ${esc(p.name)}: Pilot ${p.crewPilot || 0} / Gunner ${p.crewGunner || 0} / Engineer ${p.crewEngineer || 0}</span>` : "";
+    html += `<div class="boardrow"><span class="boardname"><span class="boardname-inner"><span class="boardlabel">${esc(label)}${outTag}${circTag}${aggrTag}${crewTag}</span></span></span>
       <div class="boardtrack">
         <div class="boardtrack-inner">
           <div class="boardbar"><div class="boardfill${p.out ? " dead" : ""}" id="boardfill-${p.id}" style="width:${pct}%"></div></div>
